@@ -16,15 +16,20 @@ class _StructSamplingParams:
         temperature: float = 1.0,
         seed: int | None = None,
         stop: str | list[str] | None = None,
+        detokenize: bool = False,
         include_stop_str_in_output: bool = False,
     ) -> None:
         self.temperature = temperature
         self.seed = seed
         self.stop = stop
+        self.detokenize = detokenize
         self.include_stop_str_in_output = include_stop_str_in_output
 
 
 class RuntimeDoctorTests(unittest.TestCase):
+    def test_action_stop_probe_checks_runtime_sampling_constructor(self) -> None:
+        self.assertTrue(runtime_doctor._action_stop_roundtrip(_StructSamplingParams))
+
     def test_sampling_fields_support_msgspec_structs(self) -> None:
         fields = runtime_doctor._sampling_param_fields(_StructSamplingParams)
 

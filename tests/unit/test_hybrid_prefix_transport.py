@@ -8,7 +8,10 @@ from infoskill.integrations.verl.hybrid_prefix import (
     clone_sampling_params_with_seeds,
     temporary_sampling_overrides,
 )
-from infoskill.integrations.verl.hybrid_rollout import _HybridInferenceEngine
+from infoskill.integrations.verl.hybrid_rollout import (
+    _HybridInferenceEngine,
+    vllm_action_stop_settings,
+)
 
 
 class _FakeTensor:
@@ -62,6 +65,14 @@ class _Engine:
 
 
 class HybridPrefixTransportTests(unittest.TestCase):
+    def test_action_stop_uses_native_string_and_enables_detokenization(self) -> None:
+        settings = vllm_action_stop_settings("</action>")
+
+        self.assertEqual(settings["stop"], "</action>")
+        self.assertIsInstance(settings["stop"], str)
+        self.assertTrue(settings["detokenize"])
+        self.assertTrue(settings["include_stop_str_in_output"])
+
     def test_prefix_rows_become_explicit_leading_placeholder_positions(self) -> None:
         prefix = _FakeTensor(rows=5, width=3584)
 

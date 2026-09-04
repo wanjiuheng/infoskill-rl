@@ -14,6 +14,7 @@ from infoskill.rollout import GenerationRequest, GenerationResult
 
 from .codec import VerlBatchCodec
 from .compatibility import require_vllm_084_cachetools_compatibility
+from .hybrid_rollout import vllm_action_stop_settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,8 +259,8 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.rollout.seed = settings.master_seed
     with open_dict(actor_ref.rollout):
         actor_ref.rollout.infoskill_hybrid_prefix = settings.require_hybrid_prefix
-        actor_ref.rollout.stop = ["</action>"]
-        actor_ref.rollout.include_stop_str_in_output = True
+        for name, value in vllm_action_stop_settings("</action>").items():
+            setattr(actor_ref.rollout, name, value)
     actor_ref.ref.log_prob_micro_batch_size_per_gpu = 4
     actor_ref.ref.log_prob_use_dynamic_bsz = True
     actor_ref.ref.log_prob_max_token_len_per_gpu = settings.max_tokens_per_gpu

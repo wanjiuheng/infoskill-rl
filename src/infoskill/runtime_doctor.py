@@ -130,6 +130,8 @@ def _vllm_api_report() -> dict[str, object]:
         if "seed" in fields:
             seed_probe = SamplingParams(seed=31_415_926)
             result["seed_roundtrip"] = getattr(seed_probe, "seed", None) == 31_415_926
+        if result["has_stop_string_fields"]:
+            result["action_stop_roundtrip"] = _action_stop_roundtrip(SamplingParams)
     except Exception as error:
         result["field_error"] = f"{type(error).__name__}: {error}"
     try:
@@ -172,6 +174,18 @@ def _sampling_param_fields(sampling_params_type: object) -> tuple[str, ...]:
     except (TypeError, ValueError):
         pass
     return tuple(sorted(fields))
+
+
+def _action_stop_roundtrip(sampling_params_type: object) -> bool:
+    from infoskill.integrations.verl.hybrid_rollout import vllm_action_stop_settings
+
+    probe = sampling_params_type(**vllm_action_stop_settings("</action>"))  # type: ignore[operator]
+    stop = getattr(probe, "stop", None)
+    return bool(
+        (stop == "</action>" or stop == ["</action>"])
+        and getattr(probe, "detokenize", None) is True
+        and getattr(probe, "include_stop_str_in_output", None) is True
+    )
 
 
 def _has_hybrid_prefix_api(api_version: object, token_fields: object) -> bool:

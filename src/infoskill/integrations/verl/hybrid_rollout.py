@@ -8,6 +8,20 @@ from .hybrid_prefix import (
 )
 
 
+def vllm_action_stop_settings(action_end_text: str) -> dict[str, object]:
+    """Return vLLM 0.8.4-compatible settings for a textual action stop."""
+    if not action_end_text:
+        raise ValueError("action stop text cannot be empty")
+    return {
+        # A Python list assigned to DictConfig becomes OmegaConf ListConfig,
+        # which vLLM 0.8.4 rejects via an exact isinstance(..., list) check.
+        # A scalar string remains native and SamplingParams converts it itself.
+        "stop": action_end_text,
+        "detokenize": True,
+        "include_stop_str_in_output": True,
+    }
+
+
 class _HybridInferenceEngine:
     def __init__(
         self,
