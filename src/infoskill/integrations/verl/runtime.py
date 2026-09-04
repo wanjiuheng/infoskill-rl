@@ -8,6 +8,7 @@ from typing import Mapping
 
 import ray
 
+from infoskill.distributed import pad_batch_to_divisor
 from infoskill.episode import TrajectoryGroup
 from infoskill.learning import summarize_logprob_alignment
 from infoskill.rollout import GenerationRequest, GenerationResult
@@ -131,14 +132,21 @@ class VerlRuntime:
         global_update: int,
     ) -> Mapping[str, float]:
         data = self.codec.training_dataproto(groups, advantages)
+        real_sample_count = len(data)
+        data, padding_count = pad_batch_to_divisor(
+            data,
+            self.worker_group.world_size,
+        )
         old = self.worker_group.compute_log_prob(data)
         alignment_metrics: dict[str, float] = {}
         if global_update == 0:
-            response_width = int(data.batch["responses"].shape[-1])
-            response_mask = data.batch["attention_mask"][:, -response_width:].bool()
+            real_data = data[:real_sample_count]
+            real_old = old[:real_sample_count]
+            response_width = int(real_data.batch["responses"].shape[-1])
+            response_mask = real_data.batch["attention_mask"][:, -response_width:].bool()
             alignment = summarize_logprob_alignment(
-                rollout=data.batch["rollout_log_probs"].tolist(),
-                recomputed=old.batch["old_log_probs"].tolist(),
+                rollout=real_data.batch["rollout_log_probs"].tolist(),
+                recomputed=real_old.batch["old_log_probs"].tolist(),
                 mask=response_mask.tolist(),
             )
             alignment_metrics = {
@@ -151,6 +159,13 @@ class VerlRuntime:
         result = self.worker_group.update_actor(data)
         self._completed_updates = global_update + 1
         metrics = _reduce_metrics(result.meta_info.get("metrics", {}))
+        metrics.update(
+            {
+                "runtime/training_sample_count": float(real_sample_count),
+                "runtime/training_padding_count": float(padding_count),
+                "runtime/training_padded_sample_count": float(len(data)),
+            }
+        )
         metrics.update(alignment_metrics)
         return metrics
 

@@ -192,6 +192,10 @@ _Avoid_: FSDP2-by-config-only、different sharding implementations across M0/M1�
 启动脚本通过单一 `--gpus` 参数接受物理 GPU 列表并自动派生 `CUDA_VISIBLE_DEVICES`、FSDP world size 和 TP=1 rollout replica 数，例如 `--gpus 0,1,2,3` 或 `--gpus 0,1`。两卡模式保持 G、全局任务组 batch 和算法配置不变，必要时自动调整 micro-batch/梯度累积，只降低并行吞吐。checkpoint 必须同时提供可跨 world-size 重分片的训练状态和 rank-0 可移植 LoRA/INFO-SKILL 权重，允许 4 卡与 2 卡之间恢复。
 _Avoid_: hard-coded world size、manual YAML edits for GPU count、world-size-locked checkpoints
 
+**Distributed Action-Batch Padding**:
+每条轨迹实际终止步数可变，因此展平后的动作训练样本数 `N` 不保证能被 FSDP world size `W` 整除。进入 VERL actor/reference/update 分发前，适配层按固定顺序复制开头 `P=(-N) mod W` 条动作样本，使三个分布式调用共享同一个可整除 batch；`P` 最多为 `W-1`。复制只属于运行时训练 padding，不得写入轨迹、任务计数或评测分母；`runtime/training_sample_count`、`runtime/training_padding_count` 与 `runtime/training_padded_sample_count` 必须逐 update 落盘。所有主对比模式使用相同规则，开发 smoke 中允许较高的 `P/N` 只作为基础设施测试，论文结果必须披露该确定性重复采样规则。
+_Avoid_: non-divisible DataProto dispatch、silent sample duplication、padding rows in trajectory counts
+
 **Environment Parallelism Profile**:
 参考服务器的 112 个 CPU 核中，Ray 默认声明 96 核并为系统、driver、日志和数据加载预留 16 核；设置 `OMP_NUM_THREADS=1`、`MKL_NUM_THREADS=1`，数据加载 worker 默认为 8。正式 rollout batch 含 8 个任务组，每组 G=8，共 64 个独立 ALFWorld 环境且每个声明 1 个逻辑 CPU；冒烟/联调分别用 1/4 个任务组。若监控证明 GPU 持续等待环境，可显式扩展到 12 组/96 环境，但不作为默认主配置。两卡正式模式仍保留全局 8 组，仅降低吞吐。
 _Avoid_: 0.1-CPU default workers、nested CPU oversubscription、world-size-dependent global group batch

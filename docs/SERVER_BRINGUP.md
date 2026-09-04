@@ -198,6 +198,7 @@ GPUS=0,1,2,3 PROFILE=smoke RUN_NAME=m0-smoke-u2 \
 
 - `console.log` 和 `metrics.jsonl` 中所有 loss、KL、gradient norm 均为有限值；
 - `rollout_recompute/ratio_mean` 接近 1，并保留 mean/max log-prob 偏差用于决定后续门限；
+- `runtime/training_sample_count + runtime/training_padding_count = runtime/training_padded_sample_count`，且 padded 数能被当前 GPU 数整除；
 - `traces/train-update-*.jsonl.zst` 存在，包含该 update 的全部任务组和全部环境步骤；
 - `checkpoints/step-*/checkpoint.complete.json` 存在，目录才可用于恢复；
 - 第 2 个 update 使用不同于第 1 个 update 的任务，证明游标实际前进。
