@@ -8,12 +8,14 @@ from pathlib import Path
 import torch
 import torch.distributed as dist
 import numpy as np
-from peft import PeftModel, set_peft_model_state_dict
+from peft import PeftModel
 from safetensors.torch import load_file, save_file
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.fsdp_utils import layered_summon_lora_params
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
+
+from infoskill.fsdp_checkpoint import load_peft_adapter_under_full_fsdp_state
 
 
 class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
@@ -88,16 +90,13 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             raise RuntimeError(f"portable actor checkpoint is incomplete: {source}")
 
         adapter_state = load_file(str(source / "adapter_model.safetensors"), device="cpu")
-        with FSDP.summon_full_params(
-            self.actor_module_fsdp,
-            recurse=True,
-            writeback=True,
-            rank0_only=False,
-            offload_to_cpu=False,
-        ):
-            result = set_peft_model_state_dict(self.actor_module, adapter_state, adapter_name="default")
-            if getattr(result, "unexpected_keys", None):
-                raise RuntimeError(f"unexpected LoRA keys: {result.unexpected_keys}")
+        result = load_peft_adapter_under_full_fsdp_state(
+            fsdp_model=self.actor_module_fsdp,
+            peft_model=self.actor_module,
+            adapter_state=adapter_state,
+        )
+        if getattr(result, "unexpected_keys", None):
+            raise RuntimeError(f"unexpected LoRA keys: {result.unexpected_keys}")
         full_optimizer = (
             torch.load(source / "lora_optimizer_full.pt", map_location="cpu", weights_only=False)
             if dist.get_rank() == 0
