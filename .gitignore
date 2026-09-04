@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+build/
+dist/
+*.egg-info/
+third_party/patches/vllm-0.8.4/_work/
+
+# Runtime outputs and experiment artifacts
+runs/
+checkpoints/
+outputs/
+artifacts/
+wandb/
+ray_results/
+*.log
+runtime-doctor*.json
+hybrid-prefix-parity*.json
+
+# Local scratch directories
+tmp/
+tmp*/
+
+# Model weights must live outside this source repository
+*.safetensors
+*.ckpt
+*.bin
+*.pth
+*.pt

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "runtime_id": "vllm-0.8.4+infoskill-hybrid-prefix.1",
+  "upstream_repository": "https://github.com/vllm-project/vllm.git",
+  "upstream_version": "0.8.4",
+  "upstream_commit": "dc1b4a6f1300003ae27f033afbdff5e2683721ce",
+  "patches": [
+    "0001-infoskill-hybrid-prefix.patch"
+  ],
+  "patch_sha256": {
+    "0001-infoskill-hybrid-prefix.patch": "e850df9755303cc6acdaba6462afbb7be47672c5b3055eff7a273b733ac23922"
+  },
+  "upstream_file_sha256": {
+    "vllm/inputs/data.py": "2a9a7f611cb79a709636403cdc1f48b20758c8c4dc3caa295adfa943e83bc237",
+    "vllm/inputs/preprocess.py": "bb641af55998be3e7605be3f52a188aaa064f46281f09cbc8a53e7edb386579c",
+    "vllm/v1/core/sched/output.py": "ff2cb4d166c41d94fe968d94068d364f194466c33d4610d483bd3e8b662f8360",
+    "vllm/v1/engine/__init__.py": "0fde43fd2a34b70313774cff3b5fc030b614a00d31680b634eb8b94c3fac8cf1",
+    "vllm/v1/engine/processor.py": "8735f130183f9f5edffbdb77f4075f7941330407789e3079deca2180b4e95e1a",
+    "vllm/v1/request.py": "a17e3c9b23f81335bab03f2aeecd3e14c83e19973141d3dc2922bfb805d95580",
+    "vllm/v1/worker/gpu_input_batch.py": "302d3fc06a7abbd31d8a42a4bcc534953231f90686a1459ffaeba66c4bba06a2",
+    "vllm/v1/worker/gpu_model_runner.py": "f5ce81a24d0ebcb4f3fa6e00a79a5e4d04595aff366e97f5b92d051d2844b297"
+  },
+  "constraints": {
+    "engine": "v1",
+    "prefix_caching": false,
+    "enforce_eager": true,
+    "prompt_adapter_supported": false,
+    "transport_device": "cpu"
+  }
+}

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infoskill"
+version = "0.1.0"
+description = "State-conditioned skill compression for interactive agent reinforcement learning"
+requires-python = ">=3.10,<3.13"
+
+[project.scripts]
+infoskill = "infoskill.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

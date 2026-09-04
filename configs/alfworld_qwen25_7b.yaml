@@ -1,0 +1,27 @@
+paths:
+  # All paths are local paths on the Linux GPU server. Change only this block first.
+  policy_model: /root/autodl-tmp/wjh/models/Alfworld-7B-SFT/checkpoint-140
+  policy_adapter: null
+  semantic_model: /root/autodl-tmp/wjh/models/Qwen/Qwen3-Embedding-0.6B
+  skillrl_source: /root/autodl-tmp/wjh/alfworld_eval/SkillRL
+  alfworld_source: /root/autodl-tmp/wjh/alfworld_eval/alfworld-master
+  alfworld_data: /root/autodl-tmp/wjh/data/alfworld/alfworld
+  alfworld_config: /root/autodl-tmp/wjh/alfworld_eval/alfworld-master/configs/base_config.yaml
+  skill_bank: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/memory_data/alfworld/claude_style_skills.json
+  output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
+  # Required only for mode=infoskill. Point at the exported inference .pt file.
+  infoskill_checkpoint: null
+
+max_steps: 30
+history_length: 2
+max_prompt_tokens: 4096
+max_response_tokens: 256
+
+# Main setting is embedding. Change to template only for the explicit ablation.
+retrieval_mode: embedding
+general_top_k: 6
+task_top_k: 6
+mistake_count: 5
+
+master_seed: 0
+eval_batch_size: 8

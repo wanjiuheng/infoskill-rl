@@ -1,0 +1,9 @@
+# Mirrors vLLM 0.8.4 pyproject.toml build requirements except torch,
+# which is already pinned in requirements-server.txt.
+cmake>=3.26
+ninja
+packaging
+setuptools>=61
+setuptools-scm>=8.0
+wheel
+jinja2

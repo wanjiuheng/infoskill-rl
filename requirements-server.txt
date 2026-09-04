@@ -1,0 +1,29 @@
+# Install the pinned local repositories separately; see README.md.
+torch==2.6.0
+transformers==4.51.1
+# vLLM 0.8.4 calls cachetools.LRUCache._LRUCache__update; cachetools 6 removed it.
+cachetools==5.5.2
+# SkillRL's CUDA DataParallelPPOActor imports this module unconditionally.
+# This is the upstream binary selected by SkillRL's vLLM-0.8/Torch-2.6 image.
+flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1%2Bcu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl
+accelerate>=1.2,<2
+codetiming>=1.4,<2
+datasets>=3.2,<4
+hydra-core>=1.3,<2
+peft>=0.14,<1
+pybind11>=2.13,<3
+pylatexenc>=2.10,<3
+qwen-vl-utils[decord]>=0.0.8,<0.1
+sentence-transformers>=3.4,<5
+vllm==0.8.4
+ray[default]>=2.40,<3
+tensordict>=0.8,<0.9
+torchdata>=0.10,<0.12
+numpy>=1.26,<3
+PyYAML>=6.0,<7
+tqdm>=4.66,<5
+zstandard>=0.23,<1
+pandas>=2.2,<3
+pyarrow>=19,<20
+tensorboard>=2.18,<3
+wandb>=0.18,<1

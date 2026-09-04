@@ -1,0 +1,8 @@
+{
+  "task_type": "pick_and_place_simple",
+  "turk_annotations": {
+    "anns": [
+      {"task_desc": "Put an apple in the fridge."}
+    ]
+  }
+}

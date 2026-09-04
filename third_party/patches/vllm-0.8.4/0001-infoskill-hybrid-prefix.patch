@@ -1,0 +1,344 @@
+diff --git a/vllm/inputs/data.py b/vllm/inputs/data.py
+index 138a8f6..760ceaa 100644
+--- a/vllm/inputs/data.py
++++ b/vllm/inputs/data.py
+@@ -14,6 +14,9 @@ if TYPE_CHECKING:
+     from vllm.multimodal.inputs import MultiModalInputs
+ 
+ 
++INFOSKILL_HYBRID_PREFIX_API = 1
++
++
+ class TextPrompt(TypedDict):
+     """Schema for a text prompt."""
+ 
+@@ -41,6 +44,12 @@ class TokensPrompt(TypedDict):
+     prompt_token_ids: list[int]
+     """A list of token IDs to pass to the model."""
+ 
++    infoskill_prefix_embeds: NotRequired[torch.Tensor]
++    """INFO-SKILL soft-prefix rows used at positions selected by the mask."""
++
++    infoskill_prefix_mask: NotRequired[list[bool]]
++    """Full-prompt mask selecting token embeddings replaced by soft-prefix rows."""
++
+     token_type_ids: NotRequired[list[int]]
+     """A list of token type IDs to pass to the cross encoder model."""
+ 
+@@ -139,6 +148,12 @@ class TokenInputs(TypedDict):
+     prompt_token_ids: list[int]
+     """The token IDs of the prompt."""
+ 
++    infoskill_prefix_embeds: NotRequired[torch.Tensor]
++    """INFO-SKILL soft-prefix rows used at positions selected by the mask."""
++
++    infoskill_prefix_mask: NotRequired[list[bool]]
++    """Full-prompt mask selecting token embeddings replaced by soft-prefix rows."""
++
+     token_type_ids: NotRequired[list[int]]
+     """The token type IDs of the prompt."""
+ 
+@@ -180,6 +195,8 @@ class TokenInputs(TypedDict):
+ 
+ def token_inputs(
+     prompt_token_ids: list[int],
++    infoskill_prefix_embeds: Optional[torch.Tensor] = None,
++    infoskill_prefix_mask: Optional[list[bool]] = None,
+     token_type_ids: Optional[list[int]] = None,
+     prompt: Optional[str] = None,
+     multi_modal_data: Optional["MultiModalDataDict"] = None,
+@@ -191,6 +208,10 @@ def token_inputs(
+     """Construct :class:`TokenInputs` from optional values."""
+     inputs = TokenInputs(type="token", prompt_token_ids=prompt_token_ids)
+ 
++    if infoskill_prefix_embeds is not None:
++        inputs["infoskill_prefix_embeds"] = infoskill_prefix_embeds
++    if infoskill_prefix_mask is not None:
++        inputs["infoskill_prefix_mask"] = infoskill_prefix_mask
+     if prompt is not None:
+         inputs["prompt"] = prompt
+     if token_type_ids is not None:
+diff --git a/vllm/inputs/preprocess.py b/vllm/inputs/preprocess.py
+index 669fb96..2313de2 100644
+--- a/vllm/inputs/preprocess.py
++++ b/vllm/inputs/preprocess.py
+@@ -339,6 +339,9 @@ class InputPreprocessor:
+             tokens_content = parsed["content"]
+ 
+             prompt_token_ids = tokens_content["prompt_token_ids"]
++            infoskill_prefix_embeds = tokens_content.get(
++                "infoskill_prefix_embeds")
++            infoskill_prefix_mask = tokens_content.get("infoskill_prefix_mask")
+             token_type_ids = tokens_content.get("token_type_ids")
+             multi_modal_data = tokens_content.get("multi_modal_data")
+             mm_processor_kwargs = tokens_content.get("mm_processor_kwargs")
+@@ -354,6 +357,8 @@ class InputPreprocessor:
+ 
+             return token_inputs(
+                 prompt_token_ids=prompt_token_ids,
++                infoskill_prefix_embeds=infoskill_prefix_embeds,
++                infoskill_prefix_mask=infoskill_prefix_mask,
+                 token_type_ids=token_type_ids,
+                 multi_modal_data=multi_modal_data,
+                 mm_processor_kwargs=mm_processor_kwargs,
+diff --git a/vllm/v1/core/sched/output.py b/vllm/v1/core/sched/output.py
+index dc0d2d5..bd0c00c 100644
+--- a/vllm/v1/core/sched/output.py
++++ b/vllm/v1/core/sched/output.py
+@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional
+ if TYPE_CHECKING:
+     import numpy as np
+     import numpy.typing as npt
++    import torch
+ 
+     from vllm.lora.request import LoRARequest
+     from vllm.multimodal.inputs import MultiModalKwargs, PlaceholderRange
+@@ -28,6 +29,8 @@ class NewRequestData:
+     block_ids: list[int]
+     num_computed_tokens: int
+     lora_request: Optional[LoRARequest]
++    infoskill_prefix_embeds: Optional[torch.Tensor] = None
++    infoskill_prefix_mask: Optional[list[bool]] = None
+ 
+     @classmethod
+     def from_request(
+@@ -39,6 +42,8 @@ class NewRequestData:
+             req_id=request.request_id,
+             prompt_token_ids=request.prompt_token_ids,
+             prompt=request.prompt,
++            infoskill_prefix_embeds=request.infoskill_prefix_embeds,
++            infoskill_prefix_mask=request.infoskill_prefix_mask,
+             mm_inputs=request.mm_inputs,
+             mm_hashes=request.mm_hashes,
+             mm_positions=request.mm_positions,
+diff --git a/vllm/v1/engine/__init__.py b/vllm/v1/engine/__init__.py
+index 1264e43..262b27c 100644
+--- a/vllm/v1/engine/__init__.py
++++ b/vllm/v1/engine/__init__.py
+@@ -6,6 +6,7 @@ from collections.abc import Sequence
+ from typing import Any, Optional, Union
+ 
+ import msgspec
++import torch
+ 
+ from vllm.lora.request import LoRARequest
+ from vllm.multimodal import MultiModalKwargs
+@@ -60,6 +61,8 @@ class EngineCoreRequest(
+     eos_token_id: Optional[int]
+     arrival_time: float
+     lora_request: Optional[LoRARequest]
++    infoskill_prefix_embeds: Optional[torch.Tensor] = None
++    infoskill_prefix_mask: Optional[list[bool]] = None
+ 
+ 
+ class EngineCoreEventType(enum.IntEnum):
+diff --git a/vllm/v1/engine/processor.py b/vllm/v1/engine/processor.py
+index 6d3290f..af3fb5f 100644
+--- a/vllm/v1/engine/processor.py
++++ b/vllm/v1/engine/processor.py
+@@ -4,6 +4,8 @@ import time
+ from collections.abc import Mapping, Sequence
+ from typing import Literal, Optional, Union
+ 
++import torch
++
+ from vllm.config import VllmConfig
+ from vllm.inputs import ProcessorInputs, PromptType, SingletonInputs
+ from vllm.inputs.parse import split_enc_dec_inputs
+@@ -242,6 +244,45 @@ class Processor:
+             raise NotImplementedError
+ 
+         assert isinstance(params, SamplingParams)
++        infoskill_prefix_embeds = decoder_inputs.get(
++            "infoskill_prefix_embeds")
++        infoskill_prefix_mask = decoder_inputs.get("infoskill_prefix_mask")
++        if (infoskill_prefix_embeds is None) != (infoskill_prefix_mask is None):
++            raise ValueError(
++                "infoskill_prefix_embeds and infoskill_prefix_mask must be supplied together"
++            )
++        if infoskill_prefix_embeds is not None:
++            if self.cache_config.enable_prefix_caching:
++                raise ValueError(
++                    "INFO-SKILL hybrid prefix is incompatible with prefix caching"
++                )
++            if prompt_adapter_request is not None:
++                raise ValueError(
++                    "INFO-SKILL hybrid prefix cannot be combined with prompt adapters"
++                )
++            if not isinstance(infoskill_prefix_embeds, torch.Tensor):
++                raise TypeError("infoskill_prefix_embeds must be a torch.Tensor")
++            if infoskill_prefix_embeds.ndim != 2:
++                raise ValueError(
++                    "infoskill_prefix_embeds must have shape [prefix_length, hidden_size]"
++                )
++            if len(infoskill_prefix_mask) != len(
++                    decoder_inputs["prompt_token_ids"]):
++                raise ValueError(
++                    "infoskill_prefix_mask must match prompt_token_ids length")
++            if sum(infoskill_prefix_mask) != infoskill_prefix_embeds.shape[0]:
++                raise ValueError(
++                    "infoskill_prefix_mask true count must match prefix rows")
++            prefix_length = infoskill_prefix_embeds.shape[0]
++            if (not all(infoskill_prefix_mask[:prefix_length])
++                    or any(infoskill_prefix_mask[prefix_length:])):
++                raise ValueError(
++                    "INFO-SKILL prefix mask must select contiguous leading positions"
++                )
++            if not infoskill_prefix_embeds.dtype.is_floating_point:
++                raise TypeError("infoskill_prefix_embeds must have a floating dtype")
++            if infoskill_prefix_embeds.device.type != "cpu":
++                raise ValueError("infoskill_prefix_embeds must be transported on CPU")
+         # TODO: can we avoid cloning here in multiproc case?
+         sampling_params = params.clone()
+         # If unset max tokens, then generate up to the max_model_len.
+@@ -306,6 +347,8 @@ class Processor:
+             request_id=request_id,
+             prompt=decoder_inputs.get("prompt"),
+             prompt_token_ids=decoder_inputs["prompt_token_ids"],
++            infoskill_prefix_embeds=infoskill_prefix_embeds,
++            infoskill_prefix_mask=infoskill_prefix_mask,
+             mm_inputs=sorted_mm_inputs,
+             mm_hashes=sorted_mm_hashes,
+             mm_placeholders=sorted_mm_positions,
+diff --git a/vllm/v1/request.py b/vllm/v1/request.py
+index 6be7243..aef4bd3 100644
+--- a/vllm/v1/request.py
++++ b/vllm/v1/request.py
+@@ -3,6 +3,8 @@
+ import enum
+ from typing import TYPE_CHECKING, Optional, Union
+ 
++import torch
++
+ from vllm.multimodal.inputs import MultiModalKwargs, PlaceholderRange
+ from vllm.sampling_params import SamplingParams
+ from vllm.utils import is_list_of
+@@ -30,6 +32,8 @@ class Request:
+         arrival_time: float,
+         lora_request: Optional["LoRARequest"] = None,
+         structured_output_request: Optional["StructuredOutputRequest"] = None,
++        infoskill_prefix_embeds: Optional[torch.Tensor] = None,
++        infoskill_prefix_mask: Optional[list[bool]] = None,
+     ) -> None:
+         self.request_id = request_id
+         self.sampling_params = sampling_params
+@@ -48,6 +52,8 @@ class Request:
+ 
+         self.prompt = prompt
+         self.prompt_token_ids = prompt_token_ids
++        self.infoskill_prefix_embeds = infoskill_prefix_embeds
++        self.infoskill_prefix_mask = infoskill_prefix_mask
+         self.num_prompt_tokens = len(self.prompt_token_ids)
+         self._output_token_ids: list[int] = []
+         self._all_token_ids: list[int] = self.prompt_token_ids.copy()
+@@ -83,6 +89,8 @@ class Request:
+             request_id=request.request_id,
+             prompt=request.prompt,
+             prompt_token_ids=request.prompt_token_ids,
++            infoskill_prefix_embeds=request.infoskill_prefix_embeds,
++            infoskill_prefix_mask=request.infoskill_prefix_mask,
+             multi_modal_inputs=request.mm_inputs,
+             multi_modal_hashes=request.mm_hashes,
+             multi_modal_placeholders=request.mm_placeholders,
+diff --git a/vllm/v1/worker/gpu_input_batch.py b/vllm/v1/worker/gpu_input_batch.py
+index a64cb97..695dd6a 100644
+--- a/vllm/v1/worker/gpu_input_batch.py
++++ b/vllm/v1/worker/gpu_input_batch.py
+@@ -38,6 +38,8 @@ class CachedRequestState:
+     mrope_position_delta: Optional[int] = None
+ 
+     lora_request: Optional[LoRARequest] = None
++    infoskill_prefix_embeds: Optional[torch.Tensor] = None
++    infoskill_prefix_mask: Optional[list[bool]] = None
+ 
+     def __post_init__(self):
+         self.num_prompt_tokens = len(self.prompt_token_ids)
+diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
+index 70e8bd7..e034481 100644
+--- a/vllm/v1/worker/gpu_model_runner.py
++++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -328,6 +328,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         for new_req_data in scheduler_output.scheduled_new_reqs:
+             req_id = new_req_data.req_id
+             sampling_params = new_req_data.sampling_params
++            prefix = new_req_data.infoskill_prefix_embeds
++            if prefix is not None and prefix.shape[1] != self.hidden_size:
++                raise ValueError(
++                    "INFO-SKILL prefix hidden size does not match the policy model"
++                )
+             if sampling_params.sampling_type == SamplingType.RANDOM_SEED:
+                 generator = torch.Generator(device=self.device)
+                 generator.manual_seed(sampling_params.seed)
+@@ -338,6 +343,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+                 req_id=req_id,
+                 prompt_token_ids=new_req_data.prompt_token_ids,
+                 prompt=new_req_data.prompt,
++                infoskill_prefix_embeds=new_req_data.infoskill_prefix_embeds,
++                infoskill_prefix_mask=new_req_data.infoskill_prefix_mask,
+                 mm_inputs=new_req_data.mm_inputs,
+                 mm_positions=new_req_data.mm_positions,
+                 sampling_params=sampling_params,
+@@ -617,6 +624,35 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+ 
+         return attn_metadata, logits_indices, spec_decode_metadata
+ 
++    def _apply_infoskill_prefix(
++        self,
++        token_embeddings: torch.Tensor,
++        scheduler_output: "SchedulerOutput",
++    ) -> None:
++        """Replace embeddings selected by per-request masks in this chunk."""
++        flat_offset = 0
++        for req_id in self.input_batch.req_ids:
++            req_state = self.requests[req_id]
++            num_scheduled = scheduler_output.num_scheduled_tokens[req_id]
++            start = req_state.num_computed_tokens
++            end = start + num_scheduled
++            prefix = req_state.infoskill_prefix_embeds
++            mask = req_state.infoskill_prefix_mask
++            if prefix is not None and mask is not None:
++                prefix_row = sum(mask[:start])
++                for prompt_position in range(start, min(end, len(mask))):
++                    if mask[prompt_position]:
++                        target = flat_offset + prompt_position - start
++                        token_embeddings[target].copy_(
++                            prefix[prefix_row].to(
++                                device=self.device,
++                                dtype=token_embeddings.dtype,
++                                non_blocking=True,
++                            )
++                        )
++                        prefix_row += 1
++            flat_offset += num_scheduled
++
+     def _compute_cascade_attn_prefix_len(
+         self,
+         num_scheduled_tokens: np.ndarray,
+@@ -997,6 +1033,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # Return empty ModelRunnerOutput if there's no work to do.
+             return EMPTY_MODEL_RUNNER_OUTPUT
+ 
++        has_infoskill_prefix = any(
++            self.requests[req_id].infoskill_prefix_embeds is not None
++            for req_id in self.input_batch.req_ids
++        )
++        if has_infoskill_prefix and self.use_cuda_graph:
++            raise RuntimeError(
++                "INFO-SKILL hybrid prefix requires enforce_eager=True in vLLM 0.8.4"
++            )
++
+         if self.is_multimodal_model:
+             # Run the multimodal encoder if any.
+             self._execute_mm_encoder(scheduler_output)
+@@ -1033,6 +1078,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             self.inputs_embeds[:num_scheduled_tokens].copy_(inputs_embeds)
+             inputs_embeds = self.inputs_embeds[:num_input_tokens]
+             input_ids = None
++        elif has_infoskill_prefix:
++            input_ids = self.input_ids[:num_scheduled_tokens]
++            inputs_embeds = self.model.get_input_embeddings(input_ids)
++            self._apply_infoskill_prefix(inputs_embeds, scheduler_output)
++            input_ids = None
+         else:
+             # For text-only models, we use token ids as input.
+             # While it is possible to use embeddings as input just like the

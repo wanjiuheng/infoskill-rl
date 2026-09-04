@@ -1,0 +1,18 @@
+{
+  "general_skills": [
+    {"skill_id": "gen_a", "title": "General A", "principle": "alpha", "when_to_apply": "always"},
+    {"skill_id": "gen_b", "title": "General B", "principle": "beta", "when_to_apply": "sometimes"}
+  ],
+  "task_specific_skills": {
+    "clean": [
+      {"skill_id": "clean_a", "title": "Clean A", "principle": "wash", "when_to_apply": "dirty"}
+    ],
+    "heat": [
+      {"skill_id": "heat_a", "title": "Heat A", "principle": "warm", "when_to_apply": "cold"}
+    ]
+  },
+  "common_mistakes": [
+    {"mistake_id": "err_a", "description": "Loop", "why_it_happens": "forget", "how_to_avoid": "remember"}
+  ],
+  "metadata": {"total_memories_analyzed": 223}
+}
