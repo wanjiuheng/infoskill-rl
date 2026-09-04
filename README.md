@@ -108,19 +108,22 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 RUN_NAME=m0-smoke \
 个 update 只评固定 train monitor，`formal` 每 25 个 update 评完整 140 条
 `valid_seen`。
 
-断点恢复直接指向某个带 `checkpoint.complete.json` 的 `step-*` 目录；不再填写
-`RUN_NAME`，卡数可以由 4 改为 2：
+断点恢复直接指向某个带 `checkpoint.complete.json` 的 `step-*` 目录。若保持原
+GPU 数，可不填写 `RUN_NAME` 并在源运行中继续；若把卡数从 4 改为 2，必须填写
+新的 `RUN_NAME`，从源 checkpoint 分叉到新运行目录：
 
 ```bash
 GPUS=0,1 PROFILE=smoke MAX_UPDATES=2 \
-RESUME=/absolute/output/run/checkpoints/step-000001 \
+  RUN_NAME=m0-smoke-4to2 \
+  RESUME=/absolute/output/run/checkpoints/step-000001 \
   bash scripts/run_alfworld.sh train no_skill
 ```
 
 恢复会校验原始 resolved config、任务顺序和游标，并恢复 LoRA、完整 AdamW
 状态和 scheduler；不匹配时直接停止，绝不会静默重置优化器。这里原运行本身必须
 预先按 `MAX_UPDATES=2` 启动并在 step 1 后中断；不能把一个预算为 1 的已完成运行
-事后扩展为 2，也不能在同一运行目录里覆盖已经存在的后续 checkpoint。
+事后扩展为 2。命名分叉不会复制冻结基座，也不会修改或覆盖源运行；除 GPU 数外，
+所有 resolved config 必须严格一致。
 
 也可以把模型换为 SFT 或 RL 权重，只修改 `policy_model`/`policy_adapter`，评测状态机、动作规则和 140 条分母保持不变。
 

@@ -3,10 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import math
-import re
 import sys
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -35,12 +33,12 @@ from infoskill.persistence import (
 from infoskill.rollout import GenerationParameters
 
 from .plan import TrainingPlan, TrainingProfile
+from .run_directory import resolve_training_run_directory, validate_resume_config
 from .schedule import TaskSchedule
 from .trainer import InfoSkillTrainer, UpdateMetrics
 
 
 EXPECTED_TRAIN_TASKS = 3_553
-_RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def run_m0_training(
@@ -86,9 +84,9 @@ def run_m0_training(
             f"formal task schedule resolves to {available_updates} updates instead of 445"
         )
 
-    run_directory, checkpoint_to_load = _resolve_run_directory(
+    run_directory, checkpoint_to_load, forked_resume = resolve_training_run_directory(
         output_root=config.paths.output_root,
-        profile=plan.profile,
+        profile_name=plan.profile.value,
         run_name=run_name,
         resume=resume,
     )
@@ -100,13 +98,18 @@ def run_m0_training(
         "app_config": config.as_dict(),
         "training_plan": _plan_payload(plan),
     }
-    if checkpoint_to_load is None:
+    resume_source_num_gpus: int | None = None
+    if checkpoint_to_load is not None:
+        resume_source_num_gpus = validate_resume_config(
+            checkpoint_to_load,
+            resolved,
+            allow_gpu_change=forked_resume,
+        )
+    if checkpoint_to_load is None or forked_resume:
         _write_json(run_directory / "resolved_config.json", resolved)
         write_train_monitor_manifest(
             run_directory / "train_monitor_manifest.json", monitor
         )
-    else:
-        _validate_resume_config(run_directory, resolved)
 
     schedule = TaskSchedule(
         scheduled_tasks,
@@ -133,6 +136,14 @@ def run_m0_training(
         "train_task_manifest_sha256": monitor.source_manifest_sha256,
         "skillrl_expected_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
     }
+    if checkpoint_to_load is not None:
+        provenance.update(
+            {
+                "resume_source_checkpoint": str(checkpoint_to_load),
+                "resume_source_num_gpus": resume_source_num_gpus,
+                "resume_forked": forked_resume,
+            }
+        )
     _write_json(run_directory / "provenance.json", provenance)
 
     from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
@@ -495,42 +506,6 @@ def _load_valid_scores(run_directory: Path) -> list[EvaluationCheckpointScore]:
         seen_steps.add(score.step)
         scores.append(score)
     return scores
-
-
-def _resolve_run_directory(
-    *,
-    output_root: str,
-    profile: TrainingProfile,
-    run_name: str | None,
-    resume: str | None,
-) -> tuple[Path, Path | None]:
-    if resume is not None:
-        checkpoint = Path(resume).expanduser().resolve()
-        if checkpoint.parent.name != "checkpoints":
-            raise ValueError("resume path must be a run checkpoints/step-* directory")
-        return checkpoint.parent.parent, checkpoint
-    name = run_name or f"m0-{profile.value}"
-    if not _RUN_NAME.fullmatch(name):
-        raise ValueError("run_name must contain only letters, digits, '.', '_' or '-'")
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    directory = Path(output_root).expanduser().resolve() / f"{stamp}-{name}"
-    directory.mkdir(parents=True, exist_ok=False)
-    return directory, None
-
-
-def _validate_resume_config(
-    run_directory: Path, current: Mapping[str, object]
-) -> None:
-    path = run_directory / "resolved_config.json"
-    if not path.is_file():
-        raise RuntimeError(f"resume run has no resolved config: {path}")
-    previous = json.loads(path.read_text(encoding="utf-8"))
-    previous_without_gpus = dict(previous)
-    current_without_gpus = dict(current)
-    previous_without_gpus.pop("num_gpus", None)
-    current_without_gpus.pop("num_gpus", None)
-    if previous_without_gpus != current_without_gpus:
-        raise RuntimeError("resume configuration differs from the original run")
 
 
 def _require_finite_metrics(values: Mapping[str, float]) -> None:

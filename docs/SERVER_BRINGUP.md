@@ -217,17 +217,21 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=2 \
   bash scripts/run_alfworld.sh train no_skill
 ```
 
-验证跨拓扑恢复时只改 `GPUS`；权威 checkpoint 不依赖保存时的 world size。这个
-测试应使用另一个只存在 step 1 的中断运行，避免覆盖原拓扑恢复已经生成的 step 2：
+验证跨拓扑恢复时只改 `GPUS`，并提供新的 `RUN_NAME`。这会从权威 checkpoint
+分叉出一个新运行目录，因此不会覆盖源运行已经生成的 step 2：
 
 ```bash
 GPUS=0,1 PROFILE=smoke MAX_UPDATES=2 \
+  RUN_NAME=m0-smoke-4to2 \
   RESUME=/absolute/path/to/m0-smoke-u2/checkpoints/step-000001 \
   bash scripts/run_alfworld.sh train no_skill
 ```
 
-`RESUME` 必须直接指向 `checkpoints/step-*`。恢复时不能同时设置 `RUN_NAME`；
-除 GPU 数外，训练档位、预算、模型、数据及其他 resolved config 必须与原运行一致。
+`RESUME` 必须直接指向 `checkpoints/step-*`。不设置 `RUN_NAME` 表示在源运行中原地
+恢复，此时 GPU 数也必须保持一致；同时设置新的 `RUN_NAME` 表示分叉恢复，只允许
+GPU 数变化。训练档位、预算、模型、数据及其他 resolved config 在两种方式下都
+必须与源 checkpoint 一致。分叉运行的 `provenance.json` 会记录源 checkpoint、
+源 GPU 数和 `resume_forked=true`。
 完成 smoke 与两种恢复检查后，再依次运行：
 
 ```bash

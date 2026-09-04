@@ -75,8 +75,6 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         )
     if args.num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
-    if args.resume and args.run_name:
-        raise ValueError("run_name cannot be changed while resuming a training run")
     _validate_paths(
         config,
         mode=mode,
@@ -99,6 +97,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "evaluation_kind": plan.evaluation_kind,
                     "num_gpus": args.num_gpus,
                     "resume": args.resume,
+                    "resume_forked": bool(args.resume and args.run_name),
                     "dry_run": True,
                 },
                 ensure_ascii=False,

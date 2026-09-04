@@ -58,6 +58,27 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
+    def test_named_resume_dry_run_reports_checkpoint_fork(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + [
+            "--resume",
+            "/runs/source/checkpoints/step-000001",
+            "--run-name",
+            "m0-smoke-4to2",
+        ]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            payload["resume"],
+            "/runs/source/checkpoints/step-000001",
+        )
+        self.assertTrue(payload["resume_forked"])
+
 
 if __name__ == "__main__":
     unittest.main()
