@@ -10,6 +10,9 @@ venv/
 .env
 .env.*
 !.env.example
+
+# Per-machine path configuration; copy from the tracked baseline YAML.
+configs/*.local.yaml
 build/
 dist/
 *.egg-info/

@@ -65,7 +65,16 @@ SKILLRL_SOURCE=/absolute/path/to/SkillRL bash scripts/runtime_doctor.sh
 
 ## 配置和运行
 
-先修改 `configs/alfworld_qwen25_7b.yaml` 顶部的本地路径。脚本通过 `CUDA_VISIBLE_DEVICES` 选卡；进程内的 `cuda:0` 指向所选列表的第一张物理卡。
+保留受 Git 跟踪的基线配置不变，先复制一份不会提交的机器专用配置，再修改其中顶部的本地路径：
+
+```bash
+cp configs/alfworld_qwen25_7b.yaml configs/alfworld_qwen25_7b.local.yaml
+export CONFIG=configs/alfworld_qwen25_7b.local.yaml
+```
+
+`configs/*.local.yaml` 已被 Git 忽略，因此修改模型和数据路径不会阻塞后续
+`git pull --ff-only`。脚本通过 `CUDA_VISIBLE_DEVICES` 选卡；进程内的 `cuda:0`
+指向所选列表的第一张物理卡。后续示例都会自动使用上面导出的 `CONFIG`。
 
 ```bash
 # 只检查路径，不加载模型

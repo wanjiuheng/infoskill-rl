@@ -50,7 +50,16 @@ Hybrid Prefix API 可以显示为不可用。保留生成的 `runtime-doctor.jso
 
 ## 3. 修改并校验路径
 
-只修改 `configs/alfworld_qwen25_7b.yaml` 顶部 `paths`。第一轮使用 0 卡：
+不要直接修改 Git 跟踪的基线 YAML。复制一份机器专用配置，只修改副本顶部的
+`paths`，并在当前 shell 导出 `CONFIG`。本地配置已被 `.gitignore` 排除，不会阻塞
+以后拉取代码：
+
+```bash
+cp configs/alfworld_qwen25_7b.yaml configs/alfworld_qwen25_7b.local.yaml
+export CONFIG=configs/alfworld_qwen25_7b.local.yaml
+```
+
+第一轮使用 0 卡校验：
 
 ```bash
 GPUS=0 bash scripts/run_alfworld.sh validate no_skill
