@@ -207,9 +207,10 @@ GPUS=0,1,2,3 PROFILE=smoke RUN_NAME=m0-smoke-u2 \
 阈值作为新实验决策固定下来。若指标缺失、出现非有限值或明显偏离 1，应停止，
 不能继续放大训练。
 
-验证恢复时，源运行必须原本就按 `MAX_UPDATES=2` 规划，并在
-`step-000001/checkpoint.complete.json` 原子提交后中断；不要先让它生成 step 2。
-`MAX_UPDATES=1` 的完整运行不能事后扩展预算。验证原拓扑恢复：
+验证恢复时，源运行必须原本就按 `MAX_UPDATES=2` 规划，并且
+`step-000001/checkpoint.complete.json` 已原子提交。源运行可以随后生成 step 2；
+命名分叉仍会把不可变的 step 1 作为输入。`MAX_UPDATES=1` 的完整运行不能事后
+扩展预算。验证原拓扑恢复：
 
 ```bash
 GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=2 \
@@ -224,6 +225,15 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=2 \
 GPUS=0,1 PROFILE=smoke MAX_UPDATES=2 \
   RUN_NAME=m0-smoke-4to2 \
   RESUME=/absolute/path/to/m0-smoke-u2/checkpoints/step-000001 \
+  bash scripts/run_alfworld.sh train no_skill
+```
+
+反向 2→4 使用一个按 `MAX_UPDATES=2` 完成的两卡 smoke 的 step 1：
+
+```bash
+GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=2 \
+  RUN_NAME=m0-smoke-2to4 \
+  RESUME=/absolute/path/to/m0-smoke-2gpu/checkpoints/step-000001 \
   bash scripts/run_alfworld.sh train no_skill
 ```
 

@@ -140,7 +140,8 @@ GPUS=0,1 PROFILE=smoke MAX_UPDATES=2 \
 
 Transformers 评测后端、ALFWorld/技能/INFO-SKILL 核心模块、M0 `no_skill`
 GRPO 训练入口及可移植 LoRA checkpoint 已实现。M0 不使用 soft prefix，因此不受
-Qwen2.5-7B BF16 的 cross-backend Hybrid Prefix parity 结论阻塞；但它仍需在
-A800 服务器完成真实 smoke、update-0 rollout/recompute 审计和断点恢复验证。
+Qwen2.5-7B BF16 的 cross-backend Hybrid Prefix parity 结论阻塞。A800 上的真实
+smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植 checkpoint
+恢复已经通过；下一门是 M0 integration 稳定性运行。
 `raw_skill_prompt` 与 `infoskill` 训练当前保持 fail-fast；M1 正式训练仍受 Hybrid
 Prefix Input parity gate 约束。
