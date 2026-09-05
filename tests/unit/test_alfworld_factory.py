@@ -7,7 +7,10 @@ from time import sleep
 
 from infoskill.episode import TaskSpec
 from infoskill.integrations.alfworld import AlfworldEnvironmentFactory
-from infoskill.integrations.alfworld.parser_guard import install_textworld_parser_guard
+from infoskill.integrations.alfworld.parser_guard import (
+    install_textworld_parser_guard,
+    install_textworld_parser_guards,
+)
 
 from .test_alfworld_environment import _RawBatchSizeOneEnvironment
 
@@ -70,6 +73,53 @@ class AlfworldEnvironmentFactoryTests(unittest.TestCase):
             results = tuple(executor.map(parse_together, ("a", "b")))
 
         self.assertEqual(results, ("a", "b"))
+
+    def test_textworld_parser_guards_cover_textgen_and_logic_modules(self) -> None:
+        class FakeParserModule:
+            pass
+
+        active_lock = Lock()
+        start_barrier = Barrier(2)
+        active_calls = 0
+
+        def module_with_parser(name: str) -> object:
+            module = FakeParserModule()
+
+            def unsafe_parse(value: str) -> str:
+                nonlocal active_calls
+                with active_lock:
+                    active_calls += 1
+                    overlap = active_calls > 1
+                try:
+                    sleep(0.02)
+                    if overlap:
+                        raise RuntimeError("TextWorld parser modules overlapped")
+                    return f"{name}:{value}"
+                finally:
+                    with active_lock:
+                        active_calls -= 1
+
+            module._parse_and_convert = unsafe_parse
+            return module
+
+        textgen = module_with_parser("textgen")
+        logic = module_with_parser("logic")
+        self.assertEqual(
+            install_textworld_parser_guards(textgen=textgen, logic=logic),
+            (True, True),
+        )
+
+        def parse_together(item: tuple[object, str]) -> str:
+            module, value = item
+            start_barrier.wait(timeout=1.0)
+            return module._parse_and_convert(value)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = tuple(
+                executor.map(parse_together, ((textgen, "a"), (logic, "b")))
+            )
+
+        self.assertEqual(results, ("textgen:a", "logic:b"))
 
     def test_factory_targets_one_game_without_scanning_the_split(self) -> None:
         base_config = {

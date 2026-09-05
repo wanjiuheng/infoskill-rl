@@ -310,8 +310,9 @@ checkpoint 原地恢复时，必须继续显式使用其保存的 `0`，不能�
 这些已加载环境的 `step` 与 `close` 是否并发等待，不改变任务、环境实例、模型
 请求顺序、随机种子、动作或奖励。环境创建与 `reset` 保持串行。TextWorld 1.7
 不仅在 PDDL loader 中使用进程级共享 Tatsu parser，`step` 收集 admissible commands
-和 expert info 时也会进入同一个 parser；INFO-SKILL 因此只对
-`textgen._parse_and_convert` 加进程内互斥，环境 step 的其他部分仍可并发。该优化
+和 expert info 时还会进入 `textworld.logic` 的另一个模块级 parser；INFO-SKILL
+因此用同一个可重入锁保护 `textgen._parse_and_convert` 与
+`logic._parse_and_convert`，环境 step 的其他部分仍可并发。该优化
 通过门禁前默认保持为 `1`。以已经通过的持久会话 benchmark 作为串行基线，再运行
 一次 64 worker 候选：
 
