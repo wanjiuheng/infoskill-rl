@@ -25,6 +25,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         self._infoskill_rollout_session_active = False
+        self._infoskill_rollout_session_generation_count = 0
         seed = int(self.config.model.get("initialization_seed", 0))
         random.seed(seed)
         np.random.seed(seed % (2**32))
@@ -38,6 +39,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         if self._infoskill_rollout_session_active:
             raise RuntimeError("INFO-SKILL rollout session is already active")
         self._infoskill_rollout_session_active = True
+        self._infoskill_rollout_session_generation_count = 0
         try:
             self.rollout_sharding_manager.__enter__()
         except Exception:
@@ -54,6 +56,13 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         prompts = prompts.to(get_torch_device().current_device())
         if not self._is_rollout:
             raise RuntimeError("worker has no rollout engine")
+        if self._infoskill_rollout_session_generation_count > 0:
+            # Baseline sleep(level=1) clears prefix cache after every call.
+            # Preserve that semantic boundary while avoiding repeated weight
+            # synchronization and vLLM allocator teardown.
+            reset = self.rollout_sharding_manager.inference_engine.reset_prefix_cache()
+            if reset is False:
+                raise RuntimeError("vLLM refused to reset prefix cache between env steps")
         prompts.meta_info.update(
             {
                 "eos_token_id": (
@@ -72,6 +81,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         output = self.rollout.generate_sequences(prompts=prompts)
         output = self.rollout_sharding_manager.postprocess_data(output)
         output = output.to("cpu")
+        self._infoskill_rollout_session_generation_count += 1
         get_torch_device().empty_cache()
         return output
 
@@ -83,6 +93,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             self.rollout_sharding_manager.__exit__(None, None, None)
         finally:
             self._infoskill_rollout_session_active = False
+            self._infoskill_rollout_session_generation_count = 0
 
     def _build_rollout(self, trust_remote_code: bool = False):
         from verl.workers.rollout import vllm_rollout as rollout_package

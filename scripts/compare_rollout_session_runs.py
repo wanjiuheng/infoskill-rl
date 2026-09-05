@@ -75,6 +75,13 @@ def _without_logprobs(record: dict) -> dict:
     copied = deepcopy(record)
     for step in copied.get("steps", []):
         step.pop("old_token_logprobs", None)
+        environment = step.get("environment_raw_output", {})
+        info = environment.get("info", {})
+        facts = info.get("facts")
+        if isinstance(facts, list):
+            # TextWorld exposes facts as a set-like collection whose JSON list
+            # ordering can differ between otherwise identical processes.
+            info["facts"] = sorted(facts)
     return copied
 
 

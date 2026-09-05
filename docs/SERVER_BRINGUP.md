@@ -267,7 +267,8 @@ GPUS=0,1,2,3 PROFILE=formal RUN_NAME=m0-formal \
 输出等价性，不替代 smoke、integration、pilot 或 formal 的任何验证。
 
 先运行旧式的“每个环境步都唤醒/休眠 vLLM”基线，再运行同任务、同随机种子的
-持久 rollout session：
+持久 rollout session。持久模式仍会在环境步之间清空 prefix cache，以保持与
+基线相同的交互式生成语义：
 
 ```bash
 GPUS=0,1,2,3 PROFILE=benchmark PERSISTENT_ROLLOUT_SESSION=0 \
@@ -295,8 +296,8 @@ python scripts/compare_rollout_session_runs.py "$BASELINE" "$OPTIMIZED"
 `perf/rollout_generation_worker_seconds`、`perf/old_logprob_seconds`、
 `perf/reference_logprob_seconds`、`perf/actor_update_seconds` 和
 `perf/core_update_seconds`，用来区分生成、环境和训练张量阶段。只有比较结果
-`passed=true` 后，才允许在正式运行中使用默认的
-`PERSISTENT_ROLLOUT_SESSION=1`。
+`passed=true` 后，才允许在正式运行中显式使用
+`PERSISTENT_ROLLOUT_SESSION=1`。门禁通过并更新正式协议前，脚本默认保持为 `0`。
 
 `formal` 固定 445 个 update，并在 update 0、每 25 个 update 和训练结束后评测
 完整 `valid_seen`。正式训练不接受 `MAX_UPDATES` 的其他值。

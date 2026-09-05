@@ -21,6 +21,15 @@ def _record(*, token: int = 7, logprob: float = -0.5) -> dict:
     }
 
 
+def _record_with_facts(facts: list[str]) -> dict:
+    record = _record()
+    record["steps"][0]["environment_raw_output"] = {
+        "observation": "same",
+        "info": {"facts": facts},
+    }
+    return record
+
+
 class RolloutSessionParityTests(unittest.TestCase):
     def test_small_logprob_drift_with_identical_semantics_passes(self) -> None:
         report = compare_records(
@@ -41,6 +50,16 @@ class RolloutSessionParityTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         self.assertFalse(report["semantic_exact"])
+
+    def test_unordered_environment_facts_do_not_create_a_false_mismatch(self) -> None:
+        report = compare_records(
+            [_record_with_facts(["a", "b"])],
+            [_record_with_facts(["b", "a"])],
+            logprob_tolerance=1e-3,
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["semantic_exact"])
 
 
 if __name__ == "__main__":

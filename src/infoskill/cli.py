@@ -65,7 +65,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--persistent-rollout-session",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=False,
         help="keep vLLM awake across environment steps within one rollout update",
     )
     train.add_argument("--dry-run", action="store_true")

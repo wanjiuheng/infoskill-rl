@@ -42,6 +42,18 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["max_updates"], 1)
         self.assertEqual(payload["num_gpus"], 4)
         self.assertEqual(payload["trajectories_per_full_update"], 2)
+        self.assertFalse(payload["persistent_rollout_session"])
+
+    def test_persistent_rollout_session_requires_explicit_opt_in(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + ["--persistent-rollout-session"]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(json.loads(output.getvalue())["persistent_rollout_session"])
 
     def test_no_skill_training_does_not_require_embedding_or_skill_files(self) -> None:
         output = io.StringIO()
