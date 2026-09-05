@@ -50,6 +50,10 @@ class RolloutSessionParityTests(unittest.TestCase):
 
         self.assertFalse(report["passed"])
         self.assertFalse(report["semantic_exact"])
+        self.assertIn(
+            "$.steps[0].response_token_ids[0]: 7 != 8",
+            report["semantic_mismatches"][0],
+        )
 
     def test_unordered_environment_facts_do_not_create_a_false_mismatch(self) -> None:
         report = compare_records(

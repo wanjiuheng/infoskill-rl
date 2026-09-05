@@ -37,7 +37,13 @@ def compare_records(
         left_semantic = _without_logprobs(left)
         right_semantic = _without_logprobs(right)
         if left_semantic != right_semantic:
-            semantic_mismatches.append(f"trajectory {key}: semantic trace differs")
+            differences = _first_differences(left_semantic, right_semantic, limit=3)
+            if differences:
+                semantic_mismatches.extend(
+                    f"trajectory {key}: {difference}" for difference in differences
+                )
+            else:
+                semantic_mismatches.append(f"trajectory {key}: semantic trace differs")
         left_logprobs = _logprobs(left)
         right_logprobs = _logprobs(right)
         if len(left_logprobs) != len(right_logprobs):
@@ -69,6 +75,82 @@ def compare_records(
 
 def _record_key(record: dict) -> tuple[str, int]:
     return str(record.get("task_id")), int(record.get("rollout_id", -1))
+
+
+def _first_differences(
+    left: object,
+    right: object,
+    *,
+    path: str = "$",
+    limit: int = 3,
+) -> list[str]:
+    """Return compact, deterministic paths for the first JSON differences."""
+    differences: list[str] = []
+
+    def visit(left_value: object, right_value: object, current_path: str) -> None:
+        if len(differences) >= limit:
+            return
+        if type(left_value) is not type(right_value):
+            differences.append(
+                f"{current_path}: type {type(left_value).__name__} != "
+                f"{type(right_value).__name__} "
+                f"({_abbreviate(left_value)} != {_abbreviate(right_value)})"
+            )
+            return
+        if isinstance(left_value, dict):
+            left_keys = set(left_value)
+            right_keys = set(right_value)
+            for key in sorted(left_keys | right_keys, key=str):
+                child_path = _json_path(current_path, key)
+                if key not in left_value:
+                    differences.append(
+                        f"{child_path}: <missing> != {_abbreviate(right_value[key])}"
+                    )
+                elif key not in right_value:
+                    differences.append(
+                        f"{child_path}: {_abbreviate(left_value[key])} != <missing>"
+                    )
+                else:
+                    visit(left_value[key], right_value[key], child_path)
+                if len(differences) >= limit:
+                    return
+            return
+        if isinstance(left_value, list):
+            if len(left_value) != len(right_value):
+                differences.append(
+                    f"{current_path}.length: {len(left_value)} != {len(right_value)}"
+                )
+                if len(differences) >= limit:
+                    return
+            for index, (left_item, right_item) in enumerate(
+                zip(left_value, right_value)
+            ):
+                visit(left_item, right_item, f"{current_path}[{index}]")
+                if len(differences) >= limit:
+                    return
+            return
+        if left_value != right_value:
+            differences.append(
+                f"{current_path}: {_abbreviate(left_value)} != "
+                f"{_abbreviate(right_value)}"
+            )
+
+    visit(left, right, path)
+    return differences
+
+
+def _json_path(parent: str, key: object) -> str:
+    text = str(key)
+    if text.isidentifier():
+        return f"{parent}.{text}"
+    return f"{parent}[{text!r}]"
+
+
+def _abbreviate(value: object, *, maximum: int = 160) -> str:
+    rendered = repr(value)
+    if len(rendered) <= maximum:
+        return rendered
+    return f"{rendered[: maximum - 3]}..."
 
 
 def _without_logprobs(record: dict) -> dict:
