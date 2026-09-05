@@ -10,6 +10,7 @@ from torch import Tensor
 from infoskill.episode import TrajectoryGroup
 from infoskill.rollout import GenerationRequest, GenerationResult
 
+from .generation_boundary import trim_vllm_padding_sentinel
 from .hybrid_prefix import build_hybrid_vllm_inputs
 
 
@@ -116,6 +117,11 @@ class VerlBatchCodec:
                 token_logprobs = tuple(0.0 for _ in token_ids)
             else:
                 token_logprobs = tuple(float(value) for value in rollout_logprobs[row, :count].tolist())
+                token_ids, token_logprobs = trim_vllm_padding_sentinel(
+                    token_ids=token_ids,
+                    token_logprobs=token_logprobs,
+                    pad_token_id=self.pad_token_id,
+                )
             text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
             results.append(
                 GenerationResult(
