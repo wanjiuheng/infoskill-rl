@@ -12,8 +12,8 @@ PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark 
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
 DRY_RUN="${DRY_RUN:-0}"
-# Experimental until the server-side semantic parity gate passes.
-PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-0}"
+# Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
+PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"

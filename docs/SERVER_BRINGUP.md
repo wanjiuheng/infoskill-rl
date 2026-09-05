@@ -298,8 +298,9 @@ python scripts/compare_rollout_session_runs.py "$BASELINE" "$OPTIMIZED"
 `perf/rollout_generation_worker_seconds`、`perf/old_logprob_seconds`、
 `perf/reference_logprob_seconds`、`perf/actor_update_seconds` 和
 `perf/core_update_seconds`，用来区分生成、环境和训练张量阶段。只有比较结果
-`passed=true` 后，才允许在正式运行中显式使用
-`PERSISTENT_ROLLOUT_SESSION=1`。门禁通过并更新正式协议前，脚本默认保持为 `0`。
+`passed=true` 后，才允许把持久模式设为正式默认。该门禁已通过，因此脚本默认
+`PERSISTENT_ROLLOUT_SESSION=1`；需要诊断或回退时可显式设为 `0`。从旧式会话
+checkpoint 原地恢复时，必须继续显式使用其保存的 `0`，不能静默改变运行时语义。
 
 `formal` 固定 445 个 update，并在 update 0、每 25 个 update 和训练结束后评测
 完整 `valid_seen`。正式训练不接受 `MAX_UPDATES` 的其他值。

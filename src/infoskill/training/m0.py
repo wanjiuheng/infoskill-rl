@@ -48,7 +48,7 @@ def run_m0_training(
     num_gpus: int,
     run_name: str | None,
     resume: str | None,
-    persistent_rollout_session: bool = False,
+    persistent_rollout_session: bool = True,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 

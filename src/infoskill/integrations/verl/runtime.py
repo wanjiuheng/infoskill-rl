@@ -39,7 +39,7 @@ class VerlRuntimeConfig:
     require_hybrid_prefix: bool = False
     soft_prefix_length: int = 5
     master_seed: int = 0
-    persistent_rollout_session: bool = False
+    persistent_rollout_session: bool = True
 
 
 class VerlRuntime:
