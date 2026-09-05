@@ -8,6 +8,7 @@ from typing import Mapping
 from infoskill.episode import TaskSpec
 
 from .environment import AlfworldEnvironment
+from .parser_guard import install_textworld_parser_guard
 
 
 def _configured_copy(base_config: Mapping[str, object], *, data_root: Path, max_steps: int) -> dict:
@@ -69,10 +70,12 @@ class AlfworldEnvironmentFactory:
         try:
             import yaml
             from alfworld.agents.environment import get_environment
+            from textworld.envs.pddl import textgen
         except ImportError as error:
             raise RuntimeError(
                 "ALFWorld runtime dependencies are missing; install the locked server environment"
             ) from error
+        install_textworld_parser_guard(textgen)
         path = Path(config_path).expanduser().resolve()
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):

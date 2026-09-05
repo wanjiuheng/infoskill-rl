@@ -16,6 +16,8 @@ DRY_RUN="${DRY_RUN:-0}"
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
 # Experimental until the environment-concurrency semantic parity gate passes.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
+# Keep BLAS/OpenMP from multiplying threads inside each environment worker.
+INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -27,8 +29,12 @@ export TOKENIZERS_PARALLELISM=false
 export WANDB_MODE="${WANDB_MODE:-offline}"
 export VLLM_USE_V1="${VLLM_USE_V1:-1}"
 export VLLM_ENABLE_V1_MULTIPROCESSING="${VLLM_ENABLE_V1_MULTIPROCESSING:-0}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+if [[ ! "${INFO_SKILL_CPU_THREADS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "INFO_SKILL_CPU_THREADS must be a positive integer" >&2
+  exit 2
+fi
+export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
+export MKL_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
 
 EXTRA_ARGS=()
 if [[ -n "${RUN_NAME}" ]]; then

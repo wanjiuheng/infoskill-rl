@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock
+from time import sleep
 
 from infoskill.episode import TaskSpec
 from infoskill.integrations.alfworld import AlfworldEnvironmentFactory
+from infoskill.integrations.alfworld.parser_guard import install_textworld_parser_guard
 
 from .test_alfworld_environment import _RawBatchSizeOneEnvironment
 
@@ -29,6 +33,44 @@ class _PinnedAlfredTWEnv:
 
 
 class AlfworldEnvironmentFactoryTests(unittest.TestCase):
+    def test_textworld_parser_guard_serializes_shared_parser_calls(self) -> None:
+        class FakeTextgenModule:
+            pass
+
+        module = FakeTextgenModule()
+        active_lock = Lock()
+        start_barrier = Barrier(2)
+        active_calls = 0
+
+        def unsafe_parse(value: str) -> str:
+            nonlocal active_calls
+            with active_lock:
+                active_calls += 1
+                overlap = active_calls > 1
+            try:
+                sleep(0.02)
+                if overlap:
+                    raise RuntimeError("shared parser call overlapped")
+                return value
+            finally:
+                with active_lock:
+                    active_calls -= 1
+
+        module._parse_and_convert = unsafe_parse
+        self.assertTrue(install_textworld_parser_guard(module))
+        guarded_parse = module._parse_and_convert
+        self.assertFalse(install_textworld_parser_guard(module))
+        self.assertIs(module._parse_and_convert, guarded_parse)
+
+        def parse_together(value: str) -> str:
+            start_barrier.wait(timeout=1.0)
+            return module._parse_and_convert(value)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = tuple(executor.map(parse_together, ("a", "b")))
+
+        self.assertEqual(results, ("a", "b"))
+
     def test_factory_targets_one_game_without_scanning_the_split(self) -> None:
         base_config = {
             "dataset": {},

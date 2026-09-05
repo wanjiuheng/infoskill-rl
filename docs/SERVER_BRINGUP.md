@@ -166,8 +166,10 @@ python -m pip install --force-reinstall --no-deps \
 python -c "import vllm, vllm._C; print(vllm.__version__, 'native OK')"
 ```
 
-`OMP_NUM_THREADS` 也可显式设为正整数，例如 `export OMP_NUM_THREADS=1`；空值、
-非数字或其他非法值会触发 `libgomp` 警告，但不是 `vllm._C` 缺失的原因。
+项目启动脚本不再继承外部 `OMP_NUM_THREADS`/`MKL_NUM_THREADS`，而是用
+`INFO_SKILL_CPU_THREADS` 同时设置二者，默认值为 `1`，且启动前要求它是正整数。
+这避免 Conda 或宿主机遗留的非法值触发 `libgomp` 警告；该警告本身不是
+`vllm._C` 缺失的原因。
 
 ## 8. M0 `no_skill` 训练门禁
 
@@ -306,9 +308,12 @@ checkpoint 原地恢复时，必须继续显式使用其保存的 `0`，不能�
 
 正式形状的每个 update 包含 64 个相互独立的环境。`ENVIRONMENT_WORKERS` 只控制
 这些已加载环境的 `step` 与 `close` 是否并发等待，不改变任务、环境实例、模型
-请求顺序、随机种子、动作或奖励。环境创建与 `reset` 保持串行，因为 TextWorld
-的 PDDL loader 使用非线程安全的共享 Tatsu parser。该优化通过门禁前默认保持为
-`1`。以已经通过的持久会话 benchmark 作为串行基线，再运行一次 64 worker 候选：
+请求顺序、随机种子、动作或奖励。环境创建与 `reset` 保持串行。TextWorld 1.7
+不仅在 PDDL loader 中使用进程级共享 Tatsu parser，`step` 收集 admissible commands
+和 expert info 时也会进入同一个 parser；INFO-SKILL 因此只对
+`textgen._parse_and_convert` 加进程内互斥，环境 step 的其他部分仍可并发。该优化
+通过门禁前默认保持为 `1`。以已经通过的持久会话 benchmark 作为串行基线，再运行
+一次 64 worker 候选：
 
 ```bash
 GPUS=0,1,2,3 PROFILE=benchmark PERSISTENT_ROLLOUT_SESSION=1 \
