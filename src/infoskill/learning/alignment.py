@@ -10,30 +10,110 @@ def summarize_logprob_alignment(
     rollout: Sequence[Sequence[float]],
     recomputed: Sequence[Sequence[float]],
     mask: Sequence[Sequence[bool]],
+    token_ids: Sequence[Sequence[int]] | None = None,
 ) -> dict[str, float | int]:
     if not (len(rollout) == len(recomputed) == len(mask)):
         raise ValueError("logprob alignment batch sizes differ")
-    deltas: list[float] = []
-    for rollout_row, recomputed_row, mask_row in zip(rollout, recomputed, mask):
+    if token_ids is not None and len(token_ids) != len(rollout):
+        raise ValueError("logprob alignment token batch size differs")
+    observations: list[tuple[int, int, float, float, float, int]] = []
+    first_active: set[tuple[int, int]] = set()
+    last_active: set[tuple[int, int]] = set()
+    for row_index, (rollout_row, recomputed_row, mask_row) in enumerate(
+        zip(rollout, recomputed, mask)
+    ):
         if not (len(rollout_row) == len(recomputed_row) == len(mask_row)):
             raise ValueError("logprob alignment row widths differ")
-        for rollout_value, recomputed_value, active in zip(
-            rollout_row, recomputed_row, mask_row
+        token_row = token_ids[row_index] if token_ids is not None else None
+        if token_row is not None and len(token_row) != len(mask_row):
+            raise ValueError("logprob alignment token row width differs")
+        active_positions = [
+            position for position, active in enumerate(mask_row) if active
+        ]
+        if active_positions:
+            first_active.add((row_index, active_positions[0]))
+            last_active.add((row_index, active_positions[-1]))
+        for position, (rollout_value, recomputed_value, active) in enumerate(
+            zip(rollout_row, recomputed_row, mask_row)
         ):
             if not active:
                 continue
             delta = float(recomputed_value) - float(rollout_value)
             if not math.isfinite(delta):
                 raise ValueError("logprob alignment contains a non-finite value")
-            deltas.append(delta)
-    if not deltas:
+            token_id = int(token_row[position]) if token_row is not None else -1
+            observations.append(
+                (
+                    row_index,
+                    position,
+                    float(rollout_value),
+                    float(recomputed_value),
+                    delta,
+                    token_id,
+                )
+            )
+    if not observations:
         raise ValueError("logprob alignment requires at least one active token")
+    deltas = [item[4] for item in observations]
     absolute = [abs(value) for value in deltas]
     ratios = [math.exp(value) for value in deltas]
-    return {
+    ratio_deviations = [abs(value - 1.0) for value in ratios]
+    maximum = max(observations, key=lambda item: abs(item[4]))
+    maximum_location = (maximum[0], maximum[1])
+    summary: dict[str, float | int] = {
         "token_count": len(deltas),
         "logprob_abs_error_mean": statistics.fmean(absolute),
+        "logprob_abs_error_median": _percentile(absolute, 0.50),
+        "logprob_abs_error_p95": _percentile(absolute, 0.95),
+        "logprob_abs_error_p99": _percentile(absolute, 0.99),
         "logprob_abs_error_max": max(absolute),
+        "logprob_abs_error_gt_0_1_rate": _rate_above(absolute, 0.1),
+        "logprob_abs_error_gt_1_rate": _rate_above(absolute, 1.0),
+        "logprob_abs_error_gt_5_rate": _rate_above(absolute, 5.0),
         "ratio_mean": statistics.fmean(ratios),
-        "ratio_max_abs_deviation": max(abs(value - 1.0) for value in ratios),
+        "ratio_abs_deviation_median": _percentile(ratio_deviations, 0.50),
+        "ratio_abs_deviation_p95": _percentile(ratio_deviations, 0.95),
+        "ratio_abs_deviation_p99": _percentile(ratio_deviations, 0.99),
+        "ratio_max_abs_deviation": max(ratio_deviations),
+        "max_sample_index": maximum[0],
+        "max_token_position": maximum[1],
+        "max_token_id": maximum[5],
+        "max_at_first_active_token": int(maximum_location in first_active),
+        "max_at_last_active_token": int(maximum_location in last_active),
+        "max_signed_logprob_delta": maximum[4],
+        "max_rollout_logprob": maximum[2],
+        "max_recomputed_logprob": maximum[3],
     }
+    buckets = {
+        "rollout_ge_neg1": [item for item in observations if item[2] >= -1.0],
+        "rollout_neg5_to_neg1": [
+            item for item in observations if -5.0 <= item[2] < -1.0
+        ],
+        "rollout_lt_neg5": [item for item in observations if item[2] < -5.0],
+    }
+    for name, items in buckets.items():
+        summary[f"{name}_count"] = len(items)
+        if items:
+            errors = [abs(item[4]) for item in items]
+            summary[f"{name}_error_mean"] = statistics.fmean(errors)
+            summary[f"{name}_error_max"] = max(errors)
+    return summary
+
+
+def _rate_above(values: Sequence[float], threshold: float) -> float:
+    return sum(value > threshold for value in values) / len(values)
+
+
+def _percentile(values: Sequence[float], quantile: float) -> float:
+    if not values:
+        raise ValueError("percentile requires at least one value")
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * quantile
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction

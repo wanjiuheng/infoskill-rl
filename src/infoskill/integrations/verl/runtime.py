@@ -148,6 +148,7 @@ class VerlRuntime:
                 rollout=real_data.batch["rollout_log_probs"].tolist(),
                 recomputed=real_old.batch["old_log_probs"].tolist(),
                 mask=response_mask.tolist(),
+                token_ids=real_data.batch["responses"].tolist(),
             )
             alignment_metrics = {
                 f"rollout_recompute/{key}": float(value)

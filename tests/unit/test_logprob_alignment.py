@@ -30,6 +30,32 @@ class LogprobAlignmentTests(unittest.TestCase):
                 mask=((True,),),
             )
 
+    def test_alignment_reports_tail_and_worst_token_diagnostics(self) -> None:
+        summary = summarize_logprob_alignment(
+            rollout=((-1.0, -6.0, -2.0, 99.0),),
+            recomputed=((-1.0, -5.0, -5.0, -50.0),),
+            mask=((True, True, True, False),),
+            token_ids=((11, 22, 33, 0),),
+        )
+
+        self.assertEqual(summary["token_count"], 3)
+        self.assertAlmostEqual(summary["logprob_abs_error_median"], 1.0)
+        self.assertAlmostEqual(summary["logprob_abs_error_p95"], 2.8)
+        self.assertAlmostEqual(summary["logprob_abs_error_p99"], 2.96)
+        self.assertAlmostEqual(summary["logprob_abs_error_gt_1_rate"], 1 / 3)
+        self.assertEqual(summary["max_sample_index"], 0)
+        self.assertEqual(summary["max_token_position"], 2)
+        self.assertEqual(summary["max_token_id"], 33)
+        self.assertEqual(summary["max_at_first_active_token"], 0)
+        self.assertEqual(summary["max_at_last_active_token"], 1)
+        self.assertAlmostEqual(summary["max_signed_logprob_delta"], -3.0)
+        self.assertAlmostEqual(summary["max_rollout_logprob"], -2.0)
+        self.assertAlmostEqual(summary["max_recomputed_logprob"], -5.0)
+        self.assertEqual(summary["rollout_ge_neg1_count"], 1)
+        self.assertEqual(summary["rollout_neg5_to_neg1_count"], 1)
+        self.assertEqual(summary["rollout_lt_neg5_count"], 1)
+        self.assertAlmostEqual(summary["rollout_lt_neg5_error_mean"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
