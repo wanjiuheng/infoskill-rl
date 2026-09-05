@@ -359,3 +359,18 @@ VERBOSE_RUNTIME_LOGS=1 bash scripts/run_alfworld.sh train no_skill
 
 `formal` 固定 445 个 update，并在 update 0、每 25 个 update 和训练结束后评测
 完整 `valid_seen`。正式训练不接受 `MAX_UPDATES` 的其他值。
+
+## ALFWorld 环境多进程基准
+
+在训练中启用任何进程式环境后端前，必须先运行独立的 CPU 差分基准。它不会加载
+Qwen、vLLM、Ray 或 FSDP。`smoke` 使用 2 个任务 × 2 条 rollout × 3 步；`full`
+复现正式训练的 8 个任务 × 8 条 rollout × 30 步形状。两者都将候选后端的规范状态、
+原始转移输出、终止标志、奖励和世界状态 checksum 与当前串行 `batch_size=1` 实现比较。
+
+```bash
+PROFILE=smoke bash scripts/benchmark_alfworld_environment.sh
+PROFILE=full bash scripts/benchmark_alfworld_environment.sh
+```
+
+门要求 `semantic_exact=true` 且环境工作至少加速 `1.25x`。失败时返回非零退出码，
+不会改变正式训练入口；结果 JSON 写入 `runs/`。

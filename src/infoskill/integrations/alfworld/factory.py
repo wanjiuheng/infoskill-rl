@@ -7,6 +7,7 @@ from typing import Mapping
 
 from infoskill.episode import TaskSpec
 
+from .batch_environment import AlfworldEnvironmentBatch
 from .environment import AlfworldEnvironment
 from .parser_guard import install_textworld_parser_guards
 
@@ -115,3 +116,46 @@ class AlfworldEnvironmentFactory:
         if hasattr(raw_environment, "seed"):
             raw_environment.seed(seed)
         return AlfworldEnvironment(raw_environment, task=task)
+
+    def create_batch(
+        self,
+        tasks: tuple[TaskSpec, ...],
+        *,
+        seeds: tuple[int, ...],
+    ) -> AlfworldEnvironmentBatch:
+        """Create one TextWorld AsyncBatchEnv with a stable task per process slot."""
+
+        if len(tasks) < 2:
+            raise ValueError("native ALFWorld batching requires at least two tasks")
+        if len(seeds) != len(tasks):
+            raise ValueError("one semantic seed is required for every ALFWorld batch slot")
+        if any(task.environment_path is None for task in tasks):
+            raise ValueError("every ALFWorld TaskSpec requires environment_path")
+        splits = {task.split for task in tasks}
+        if len(splits) != 1:
+            raise ValueError("one ALFWorld native batch cannot mix data splits")
+        split_to_mode = {
+            "train": "train",
+            "valid_seen": "eval_in_distribution",
+            "valid_unseen": "eval_out_of_distribution",
+        }
+        try:
+            train_eval = split_to_mode[next(iter(splits))]
+        except KeyError as error:
+            raise ValueError(f"unsupported ALFWorld split: {next(iter(splits))}") from error
+
+        definition = self._environment_class.__new__(self._environment_class)
+        definition.config = _configured_copy(
+            self._base_config,
+            data_root=self._data_root,
+            max_steps=self._max_steps,
+        )
+        # Kept for provenance parity with the single-instance factory. With domain
+        # randomization disabled, task identity and transition semantics are fixed by
+        # the explicit game paths below rather than a shared mutable RNG.
+        definition.config["general"]["random_seed"] = seeds[0]
+        definition.train_eval = train_eval
+        definition.game_files = [str(task.environment_path) for task in tasks]
+        definition.num_games = len(tasks)
+        raw_environment = definition.init_env(batch_size=len(tasks))
+        return AlfworldEnvironmentBatch(raw_environment, tasks=tasks)

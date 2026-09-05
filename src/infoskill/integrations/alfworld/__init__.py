@@ -1,6 +1,7 @@
 """ALFWorld task discovery and environment adapter."""
 
 from .environment import AlfworldEnvironment
+from .batch_environment import AlfworldEnvironmentBatch
 from .expert_replay import ExpertReplayResult, GroundingSample, StrictExpertReplay
 from .factory import AlfworldEnvironmentFactory
 from .grounding_io import (
@@ -20,6 +21,7 @@ from .tasks import ALFWORLD_TASK_TYPES, discover_tasks
 __all__ = [
     "ALFWORLD_TASK_TYPES",
     "AlfworldEnvironment",
+    "AlfworldEnvironmentBatch",
     "AlfworldEnvironmentFactory",
     "ExpertReplayResult",
     "GroundingSample",

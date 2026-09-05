@@ -23,7 +23,13 @@ class _PinnedAlfredTWEnv:
 
     def init_env(self, batch_size: int):
         self.__class__.last_definition = self
-        assert batch_size == 1
+        assert batch_size >= 1
+        if batch_size > 1:
+            from .test_alfworld_batch_environment import _RawBatchEnvironment
+
+            raw = _RawBatchEnvironment(tuple(self.game_files))
+            self.raw = raw
+            return raw
         raw = _RawBatchSizeOneEnvironment()
         raw.seed_value = None
 
@@ -152,6 +158,39 @@ class AlfworldEnvironmentFactoryTests(unittest.TestCase):
         self.assertEqual(definition.config["dagger"]["training"]["max_nb_steps_per_episode"], 30)
         self.assertFalse(definition.config["env"]["domain_randomization"])
         self.assertEqual(definition.raw.seed_value, 99)
+
+    def test_factory_builds_one_native_batch_with_exact_slot_order(self) -> None:
+        base_config = {
+            "dataset": {},
+            "logic": {},
+            "env": {"type": "AlfredTWEnv", "domain_randomization": True},
+            "general": {"use_cuda": True},
+            "dagger": {"training": {}},
+        }
+        factory = AlfworldEnvironmentFactory(
+            data_root="/data",
+            max_steps=30,
+            base_config=base_config,
+            environment_class=_PinnedAlfredTWEnv,
+        )
+        tasks = tuple(
+            TaskSpec(
+                task_id=f"game-{index}",
+                split="train",
+                task_type="pick_and_place_simple",
+                goal="goal",
+                environment_path=f"/data/game-{index}.tw-pddl",
+            )
+            for index in range(2)
+        )
+
+        batch = factory.create_batch(tasks, seeds=(10, 11))
+        states = batch.reset()
+        definition = _PinnedAlfredTWEnv.last_definition
+
+        self.assertEqual(definition.game_files, [task.environment_path for task in tasks])
+        self.assertEqual(definition.raw.loaded_gamefiles, definition.game_files)
+        self.assertEqual([state.task_id for state in states], ["game-0", "game-1"])
 
 
 if __name__ == "__main__":
