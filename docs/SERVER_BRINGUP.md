@@ -281,7 +281,9 @@ RUN_NAME=rollout-session-optimized \
 ```
 
 比较两份轨迹。门禁要求任务、生成 token、原始响应、动作、环境输出和奖励完全
-一致，rollout logprob 最大绝对误差不超过 `1e-3`：
+一致，rollout logprob 最大绝对误差不超过 `1e-3`。唯一排除项是 ALFWorld
+在每步额外计算、但不进入策略输入、动作解析、奖励、世界状态 checksum 或策略更新
+的 `extra.expert_plan`；其余 `info` 字段仍严格比较：
 
 ```bash
 BASELINE=$(find "$PWD/runs" -maxdepth 1 -type d \

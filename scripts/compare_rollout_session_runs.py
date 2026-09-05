@@ -159,6 +159,12 @@ def _without_logprobs(record: dict) -> dict:
         step.pop("old_token_logprobs", None)
         environment = step.get("environment_raw_output", {})
         info = environment.get("info", {})
+        # ALFWorld computes this hand-coded expert suggestion after each step,
+        # but INFO-SKILL does not feed it to the policy, action resolver,
+        # reward, state checksum, or policy update.  Its choice among equivalent
+        # object instances is therefore diagnostic metadata, not rollout
+        # semantics for this parity gate.
+        info.pop("extra.expert_plan", None)
         facts = info.get("facts")
         if isinstance(facts, list):
             # TextWorld exposes facts as a set-like collection whose JSON list

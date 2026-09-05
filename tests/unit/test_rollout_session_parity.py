@@ -41,6 +41,35 @@ class RolloutSessionParityTests(unittest.TestCase):
         self.assertTrue(report["passed"])
         self.assertTrue(report["semantic_exact"])
 
+    def test_unused_environment_expert_plan_does_not_create_a_false_mismatch(
+        self,
+    ) -> None:
+        baseline = _record()
+        optimized = _record()
+        baseline["steps"][0]["environment_raw_output"] = {
+            "observation": "same",
+            "info": {
+                "facts": ["same fact"],
+                "extra.expert_plan": ["take mug 1 from countertop 1"],
+            },
+        }
+        optimized["steps"][0]["environment_raw_output"] = {
+            "observation": "same",
+            "info": {
+                "facts": ["same fact"],
+                "extra.expert_plan": ["take mug 2 from countertop 1"],
+            },
+        }
+
+        report = compare_records(
+            [baseline],
+            [optimized],
+            logprob_tolerance=1e-3,
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["semantic_exact"])
+
     def test_token_difference_is_a_semantic_failure(self) -> None:
         report = compare_records(
             [_record(token=7)],
