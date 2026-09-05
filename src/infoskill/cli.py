@@ -64,7 +64,7 @@ def _parser() -> argparse.ArgumentParser:
         "--environment-workers",
         type=int,
         default=1,
-        help="number of independent ALFWorld reset/step calls allowed in parallel",
+        help="number of already-loaded ALFWorld step/close calls allowed in parallel",
     )
     train.add_argument("--run-name")
     train.add_argument("--resume")

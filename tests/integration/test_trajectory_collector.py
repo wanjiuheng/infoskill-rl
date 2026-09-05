@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager
-from threading import Barrier
+from threading import Barrier, Lock
+from time import sleep
 
 from infoskill.conditioning import NoSkillConditioner
 from infoskill.domain.state import AgentHistoryEntry, CanonicalAgentState
@@ -74,6 +75,40 @@ class _BarrierEnvironmentFactory:
 
     def create(self, task: TaskSpec, *, rollout_id: int, seed: int) -> _FakeEnvironment:
         return _BarrierEnvironment(task, rollout_id, self._barrier)
+
+
+class _ParserLikeEnvironment(_BarrierEnvironment):
+    def __init__(
+        self,
+        task: TaskSpec,
+        rollout_id: int,
+        factory: "_ParserLikeEnvironmentFactory",
+    ) -> None:
+        super().__init__(task, rollout_id, factory.step_barrier)
+        self._factory = factory
+
+    def reset(self) -> CanonicalAgentState:
+        with self._factory.reset_lock:
+            self._factory.active_resets += 1
+            overlap = self._factory.active_resets > 1
+        try:
+            sleep(0.02)
+            if overlap:
+                raise RuntimeError("shared parser reset overlapped")
+            return super().reset()
+        finally:
+            with self._factory.reset_lock:
+                self._factory.active_resets -= 1
+
+
+class _ParserLikeEnvironmentFactory:
+    def __init__(self, parties: int) -> None:
+        self.step_barrier = Barrier(parties)
+        self.reset_lock = Lock()
+        self.active_resets = 0
+
+    def create(self, task: TaskSpec, *, rollout_id: int, seed: int) -> _FakeEnvironment:
+        return _ParserLikeEnvironment(task, rollout_id, self)
 
 
 class _FakeRolloutBackend:
@@ -241,6 +276,26 @@ class TrajectoryCollectorTests(unittest.TestCase):
             )
 
         self.assertEqual(collect(1), collect(2))
+
+    def test_non_thread_safe_environment_loading_stays_serial(self) -> None:
+        collector = TrajectoryCollector(
+            environment_factory=_ParserLikeEnvironmentFactory(parties=2),
+            conditioner=NoSkillConditioner(),
+            rollout_backend=_FakeRolloutBackend(),
+            max_steps=1,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+            environment_workers=2,
+        )
+        task = TaskSpec("game-1", "train", "pick_and_place_simple", "look")
+
+        group = collector.collect_task_group(
+            task,
+            rollouts_per_task=2,
+            master_seed=0,
+        )
+
+        self.assertEqual(len(group.trajectories), 2)
 
 
 if __name__ == "__main__":

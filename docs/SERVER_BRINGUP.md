@@ -305,9 +305,10 @@ checkpoint 原地恢复时，必须继续显式使用其保存的 `0`，不能�
 ### 独立 ALFWorld 环境并发门禁
 
 正式形状的每个 update 包含 64 个相互独立的环境。`ENVIRONMENT_WORKERS` 只控制
-这些环境的 `reset`、`step` 与 `close` 是否并发等待，不改变任务、环境实例、模型
-请求顺序、随机种子、动作或奖励。该优化通过门禁前默认保持为 `1`。以已经通过的
-持久会话 benchmark 作为串行基线，再运行一次 64 worker 候选：
+这些已加载环境的 `step` 与 `close` 是否并发等待，不改变任务、环境实例、模型
+请求顺序、随机种子、动作或奖励。环境创建与 `reset` 保持串行，因为 TextWorld
+的 PDDL loader 使用非线程安全的共享 Tatsu parser。该优化通过门禁前默认保持为
+`1`。以已经通过的持久会话 benchmark 作为串行基线，再运行一次 64 worker 候选：
 
 ```bash
 GPUS=0,1,2,3 PROFILE=benchmark PERSISTENT_ROLLOUT_SESSION=1 \

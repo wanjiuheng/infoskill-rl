@@ -183,8 +183,12 @@ class TrajectoryCollector:
         ]
         try:
             stage_started = time.perf_counter()
+            # TextWorld's PDDL loader uses a module-level Tatsu parser whose
+            # mutable parse stacks are not thread-safe. Loading happens inside
+            # reset(), so resets must remain serial even when already-loaded
+            # environment steps are allowed to run concurrently.
             flat_states = _ordered_map(
-                executor,
+                None,
                 _reset_environment,
                 flat_environments,
             )
