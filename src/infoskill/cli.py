@@ -74,6 +74,11 @@ def _parser() -> argparse.ArgumentParser:
         default=True,
         help="keep vLLM awake across environment steps within one rollout update",
     )
+    train.add_argument(
+        "--verbose-runtime-logs",
+        action="store_true",
+        help="forward verbose Ray/vLLM/FSDP worker logs to the terminal",
+    )
     train.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -112,6 +117,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "num_gpus": args.num_gpus,
                     "environment_workers": args.environment_workers,
                     "persistent_rollout_session": args.persistent_rollout_session,
+                    "verbose_runtime_logs": args.verbose_runtime_logs,
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "dry_run": True,
@@ -133,6 +139,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         resume=args.resume,
         persistent_rollout_session=args.persistent_rollout_session,
         environment_workers=args.environment_workers,
+        verbose_runtime_logs=args.verbose_runtime_logs,
     )
 
 
@@ -310,6 +317,7 @@ def _configure_logging(run_directory: Path) -> logging.Logger:
     logger = logging.getLogger("infoskill")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
+    logger.propagate = False
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
     for handler in (logging.StreamHandler(sys.stdout), logging.FileHandler(run_directory / "console.log", encoding="utf-8")):
         handler.setFormatter(formatter)

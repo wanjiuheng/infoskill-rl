@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -50,6 +51,7 @@ def run_m0_training(
     resume: str | None,
     persistent_rollout_session: bool = True,
     environment_workers: int = 1,
+    verbose_runtime_logs: bool = False,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 
@@ -144,6 +146,7 @@ def run_m0_training(
         "scheduled_task_count": len(scheduled_tasks),
         "train_task_manifest_sha256": monitor.source_manifest_sha256,
         "skillrl_expected_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
+        "verbose_runtime_logs": verbose_runtime_logs,
     }
     if checkpoint_to_load is not None:
         provenance.update(
@@ -159,6 +162,12 @@ def run_m0_training(
 
     if VerlRuntime is None or VerlRuntimeConfig is None:
         raise RuntimeError("the pinned VERL runtime is unavailable")
+    logger.info(
+        "Initializing Ray/FSDP/vLLM runtime on %d GPU(s); worker logs=%s",
+        num_gpus,
+        "verbose" if verbose_runtime_logs else "quiet",
+    )
+    runtime_started = time.perf_counter()
     runtime = VerlRuntime.start(
         VerlRuntimeConfig(
             skillrl_source=config.paths.skillrl_source,
@@ -173,8 +182,10 @@ def run_m0_training(
             require_hybrid_prefix=False,
             master_seed=config.master_seed,
             persistent_rollout_session=persistent_rollout_session,
+            verbose_runtime_logs=verbose_runtime_logs,
         )
     )
+    logger.info("Runtime ready in %.1f seconds", time.perf_counter() - runtime_started)
     try:
         factory = AlfworldEnvironmentFactory.from_paths(
             alfworld_source=config.paths.alfworld_source,
@@ -320,8 +331,9 @@ def run_m0_training(
         _write_json(run_directory / "training_summary.json", summary)
         logger.info("M0 training segment complete: %s", json.dumps(summary))
         return 0
-    except Exception:
-        logger.exception("M0 training failed")
+    except Exception as error:
+        # The uncaught exception below prints the complete traceback once.
+        logger.error("M0 training failed: %s", error)
         raise
     finally:
         runtime.close()
@@ -558,6 +570,7 @@ def _configure_training_logging(run_directory: Path) -> logging.Logger:
     logger = logging.getLogger("infoskill.training")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
+    logger.propagate = False
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
     for handler in (
         logging.StreamHandler(sys.stdout),

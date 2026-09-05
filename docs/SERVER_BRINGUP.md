@@ -341,5 +341,21 @@ python scripts/compare_rollout_session_runs.py \
 `perf/environment_step_seconds` 和 `perf/environment_close_seconds` 用于确认串行
 加载与交互各自的耗时；若并发不稳定或无收益，保持 `ENVIRONMENT_WORKERS=1`。
 
+### 终端日志级别
+
+训练默认使用精简终端日志：保留 INFO-SKILL 的运行时初始化/就绪、逐 update 指标、
+checkpoint、评测汇总、错误 traceback 和所有 `tqdm` 进度条，但不再把每个 Ray
+worker 的 Qwen 配置、vLLM 初始化、FSDP 弃用警告及重复消息复制到 driver 终端。
+Ray worker 的原始 stdout/stderr 仍保存在 `/tmp/ray/session_latest/logs/`；项目的
+`console.log`、`metrics.jsonl`、压缩轨迹、模型原始响应和环境原始输出均不受影响。
+需要调查底层运行时问题时，可一键恢复详细输出：
+
+```bash
+VERBOSE_RUNTIME_LOGS=1 bash scripts/run_alfworld.sh train no_skill
+```
+
+`VERBOSE_RUNTIME_LOGS` 只接受 `0` 或 `1`，默认 `0`。它只改变可观测日志，不改变
+任务顺序、随机种子、rollout、优化器或 checkpoint 恢复语义。
+
 `formal` 固定 445 个 update，并在 update 0、每 25 个 update 和训练结束后评测
 完整 `valid_seen`。正式训练不接受 `MAX_UPDATES` 的其他值。

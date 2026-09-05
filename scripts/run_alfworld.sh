@@ -18,6 +18,8 @@ PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
 # Keep BLAS/OpenMP from multiplying threads inside each environment worker.
 INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
+# Default keeps only INFO-SKILL milestones, errors and progress bars in terminal.
+VERBOSE_RUNTIME_LOGS="${VERBOSE_RUNTIME_LOGS:-0}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -35,6 +37,7 @@ if [[ ! "${INFO_SKILL_CPU_THREADS}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
 export MKL_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
+export RAY_DEDUP_LOGS="${RAY_DEDUP_LOGS:-1}"
 
 EXTRA_ARGS=()
 if [[ -n "${RUN_NAME}" ]]; then
@@ -93,6 +96,14 @@ case "${ACTION}" in
       0) TRAIN_ARGS+=(--no-persistent-rollout-session) ;;
       *)
         echo "PERSISTENT_ROLLOUT_SESSION must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
+    case "${VERBOSE_RUNTIME_LOGS}" in
+      0) ;;
+      1) TRAIN_ARGS+=(--verbose-runtime-logs) ;;
+      *)
+        echo "VERBOSE_RUNTIME_LOGS must be 0 or 1" >&2
         exit 2
         ;;
     esac

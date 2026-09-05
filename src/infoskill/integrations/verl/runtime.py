@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import statistics
 import sys
 import time
@@ -40,6 +41,7 @@ class VerlRuntimeConfig:
     soft_prefix_length: int = 5
     master_seed: int = 0
     persistent_rollout_session: bool = True
+    verbose_runtime_logs: bool = False
 
 
 class VerlRuntime:
@@ -79,7 +81,15 @@ class VerlRuntime:
         runtime_config = _actor_config(config)
         started_ray = not ray.is_initialized()
         if started_ray:
-            ray.init(num_cpus=config.num_cpus, num_gpus=config.num_gpus, ignore_reinit_error=True)
+            ray.init(
+                num_cpus=config.num_cpus,
+                num_gpus=config.num_gpus,
+                ignore_reinit_error=True,
+                log_to_driver=config.verbose_runtime_logs,
+                logging_level=(
+                    logging.INFO if config.verbose_runtime_logs else logging.ERROR
+                ),
+            )
         try:
             pool = RayResourcePool(
                 process_on_nodes=[config.num_gpus],

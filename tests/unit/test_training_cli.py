@@ -44,6 +44,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["trajectories_per_full_update"], 2)
         self.assertTrue(payload["persistent_rollout_session"])
         self.assertEqual(payload["environment_workers"], 1)
+        self.assertFalse(payload["verbose_runtime_logs"])
 
     def test_persistent_rollout_session_allows_explicit_opt_out(self) -> None:
         output = io.StringIO()
@@ -66,6 +67,17 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue())["environment_workers"], 64)
+
+    def test_verbose_runtime_logs_can_be_enabled_for_debugging(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + ["--verbose-runtime-logs"]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(json.loads(output.getvalue())["verbose_runtime_logs"])
 
     def test_no_skill_training_does_not_require_embedding_or_skill_files(self) -> None:
         output = io.StringIO()
