@@ -10,7 +10,7 @@ import ray
 
 from infoskill.distributed import pad_batch_to_divisor
 from infoskill.episode import TrajectoryGroup
-from infoskill.learning import summarize_logprob_alignment
+from infoskill.learning import require_logprob_alignment, summarize_logprob_alignment
 from infoskill.rollout import GenerationRequest, GenerationResult
 
 from .codec import VerlBatchCodec
@@ -150,6 +150,7 @@ class VerlRuntime:
                 mask=response_mask.tolist(),
                 token_ids=real_data.batch["responses"].tolist(),
             )
+            require_logprob_alignment(alignment)
             alignment_metrics = {
                 f"rollout_recompute/{key}": float(value)
                 for key, value in alignment.items()

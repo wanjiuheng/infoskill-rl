@@ -3,6 +3,70 @@ from __future__ import annotations
 import math
 import statistics
 from collections.abc import Sequence
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class LogprobAlignmentThresholds:
+    error_mean_max: float = 0.05
+    error_median_max: float = 0.01
+    error_p95_max: float = 0.15
+    error_p99_max: float = 0.25
+    error_gt_1_rate_max: float = 0.001
+    error_gt_5_rate_max: float = 0.0
+    ratio_mean_min: float = 0.98
+    ratio_mean_max: float = 1.02
+
+
+DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS = LogprobAlignmentThresholds()
+
+
+def require_logprob_alignment(
+    summary: dict[str, float | int],
+    thresholds: LogprobAlignmentThresholds = DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS,
+) -> None:
+    required = (
+        "logprob_abs_error_mean",
+        "logprob_abs_error_median",
+        "logprob_abs_error_p95",
+        "logprob_abs_error_p99",
+        "logprob_abs_error_gt_1_rate",
+        "logprob_abs_error_gt_5_rate",
+        "ratio_mean",
+    )
+    values: dict[str, float] = {}
+    for key in required:
+        if key not in summary:
+            raise ValueError(f"logprob alignment is missing required metric: {key}")
+        value = float(summary[key])
+        if not math.isfinite(value):
+            raise ValueError(f"logprob alignment metric is non-finite: {key}")
+        values[key] = value
+
+    upper_bounds = {
+        "logprob_abs_error_mean": thresholds.error_mean_max,
+        "logprob_abs_error_median": thresholds.error_median_max,
+        "logprob_abs_error_p95": thresholds.error_p95_max,
+        "logprob_abs_error_p99": thresholds.error_p99_max,
+        "logprob_abs_error_gt_1_rate": thresholds.error_gt_1_rate_max,
+        "logprob_abs_error_gt_5_rate": thresholds.error_gt_5_rate_max,
+    }
+    failures = [
+        f"{key}={values[key]:.8g} > {limit:.8g}"
+        for key, limit in upper_bounds.items()
+        if values[key] > limit
+    ]
+    ratio_mean = values["ratio_mean"]
+    if not thresholds.ratio_mean_min <= ratio_mean <= thresholds.ratio_mean_max:
+        failures.append(
+            f"ratio_mean={ratio_mean:.8g} outside "
+            f"[{thresholds.ratio_mean_min:.8g}, {thresholds.ratio_mean_max:.8g}]"
+        )
+    if failures:
+        raise RuntimeError(
+            "rollout/recompute alignment gate failed before policy update: "
+            + "; ".join(failures)
+        )
 
 
 def summarize_logprob_alignment(

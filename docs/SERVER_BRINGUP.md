@@ -197,15 +197,20 @@ GPUS=0,1,2,3 PROFILE=smoke RUN_NAME=m0-smoke-u2 \
 一个 update 成功的最低检查项：
 
 - `console.log` 和 `metrics.jsonl` 中所有 loss、KL、gradient norm 均为有限值；
-- `rollout_recompute/ratio_mean` 接近 1，并保留 mean/max log-prob 偏差用于决定后续门限；
+- 首个 update 在优化器更新前通过 rollout/recompute 强制门禁：logprob 绝对误差
+  mean/median/P95/P99 分别不超过 `0.05/0.01/0.15/0.25`，误差大于 `1`
+  的比例不超过 `0.1%`，误差大于 `5` 的比例必须为 `0`，且 ratio mean 位于
+  `[0.98, 1.02]`；
 - `runtime/training_sample_count + runtime/training_padding_count = runtime/training_padded_sample_count`，且 padded 数能被当前 GPU 数整除；
 - `traces/train-update-*.jsonl.zst` 存在，包含该 update 的全部任务组和全部环境步骤；
 - `checkpoints/step-*/checkpoint.complete.json` 存在，目录才可用于恢复；
 - 第 2 个 update 使用不同于第 1 个 update 的任务，证明游标实际前进。
 
-首个 update 的偏差指标暂不硬编码阈值：先取得 A800 上的真实观测值，再把接受
-阈值作为新实验决策固定下来。若指标缺失、出现非有限值或明显偏离 1，应停止，
-不能继续放大训练。
+这些阈值来自 A800、Qwen2.5-7B/Alfworld-7B-SFT 的真实 token-only smoke：修复
+VERL `action_stop` 末尾 padding 哨兵后，观测到 mean/median/P95/P99 为
+`0.0212/0.00175/0.1028/0.1826`、ratio mean 为 `1.0005`，且无误差大于 `1`
+的 token。若门禁失败，训练在 reference 计算和 optimizer update 前停止，错误消息
+列出所有超标项；不得绕过后继续放大训练。
 
 验证恢复时，源运行必须原本就按 `MAX_UPDATES=2` 规划，并且
 `step-000001/checkpoint.complete.json` 已原子提交。源运行可以随后生成 step 2；

@@ -3,7 +3,10 @@ from __future__ import annotations
 import math
 import unittest
 
-from infoskill.learning import summarize_logprob_alignment
+from infoskill.learning import (
+    require_logprob_alignment,
+    summarize_logprob_alignment,
+)
 
 
 class LogprobAlignmentTests(unittest.TestCase):
@@ -55,6 +58,45 @@ class LogprobAlignmentTests(unittest.TestCase):
         self.assertEqual(summary["rollout_neg5_to_neg1_count"], 1)
         self.assertEqual(summary["rollout_lt_neg5_count"], 1)
         self.assertAlmostEqual(summary["rollout_lt_neg5_error_mean"], 1.0)
+
+    def test_observed_post_fix_alignment_passes_the_default_gate(self) -> None:
+        require_logprob_alignment(
+            {
+                "logprob_abs_error_mean": 0.021211,
+                "logprob_abs_error_median": 0.001749,
+                "logprob_abs_error_p95": 0.102767,
+                "logprob_abs_error_p99": 0.182578,
+                "logprob_abs_error_gt_1_rate": 0.0,
+                "logprob_abs_error_gt_5_rate": 0.0,
+                "ratio_mean": 1.000495,
+            }
+        )
+
+    def test_prefixed_padding_failure_is_blocked_before_update(self) -> None:
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "alignment gate failed before policy update",
+        ) as raised:
+            require_logprob_alignment(
+                {
+                    "logprob_abs_error_mean": 0.377112,
+                    "logprob_abs_error_median": 0.001976,
+                    "logprob_abs_error_p95": 0.115651,
+                    "logprob_abs_error_p99": 22.203129,
+                    "logprob_abs_error_gt_1_rate": 0.015819,
+                    "logprob_abs_error_gt_5_rate": 0.015819,
+                    "ratio_mean": 0.984668,
+                }
+            )
+
+        message = str(raised.exception)
+        self.assertIn("logprob_abs_error_mean", message)
+        self.assertIn("logprob_abs_error_p99", message)
+        self.assertIn("logprob_abs_error_gt_5_rate", message)
+
+    def test_missing_gate_metric_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "missing required metric"):
+            require_logprob_alignment({"ratio_mean": 1.0})
 
 
 if __name__ == "__main__":

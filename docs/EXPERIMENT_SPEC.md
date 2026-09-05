@@ -72,6 +72,10 @@ _Avoid_: greedy GRPO rollout、sampled main evaluation、untracked worker RNG
 M0/M1 训练与评测默认文本 prompt 上限 4,096 tokens、每个环境步骤 response 上限 256 tokens；soft prefix 计入模型实际序列长度但不计入文本 prompt 上限。生成 EOS 或完整 `</action>` 时立即停止；缺少标签的基础模型允许生成到 EOS/长度上限后交给 fallback parser。超长 prompt 优先移除最旧历史并记录，任务目标、当前 observation 与合法命令仍超限时显式报错而非静默改变动作空间。日志记录 finish reason、生成长度分位数、达到长度上限比例和因截断解析失败比例；128/384/512 仅为显式可选上限，三个正式对比方法保持一致。
 _Avoid_: 512-token default per step、silent right truncation、different train/eval generation caps
 
+**Rollout/Recompute Pre-Update Gate**:
+每次新训练运行在首个 update 的 optimizer step 前，以全部真实 response token 比较 vLLM 行为策略 logprob 与 FSDP/Transformers 首次重算值；VERL 为 `action_stop` 添加、同时满足 `token_id=pad_token_id` 与 `rollout_logprob=-1` 的末尾 padding 哨兵必须先从 response、mask 和训练样本中删除，真实 EOS 仍保留。强制门限固定为 logprob 绝对误差 mean≤`0.05`、median≤`0.01`、P95≤`0.15`、P99≤`0.25`、误差大于 `1` 的 token 比例≤`0.1%`、误差大于 `5` 的比例=`0`，且 token ratio mean∈`[0.98,1.02]`。任一指标缺失、非有限或越界都在 reference 计算与 policy update 前 fail-fast；max、分桶误差和最坏 token 位置继续记录作诊断，但不因单个低概率 token 的 ratio 放大而单独阻断。
+_Avoid_: training on padding sentinel、mean-only gate、post-update validation、max-ratio-only rejection
+
 **Structured Trajectory Trace**:
 每个正式 update 的全部 8 个任务组×G=8、共 64 条训练轨迹都按 update/rank 分片写入压缩 `.jsonl.zst`；每次 `valid_seen` 则完整保存 140 条轨迹。记录 canonical state、模型原始响应、finish reason、token 数、解析/执行动作、`admissible_commands`、环境原始 observation/reward/done/won、合法性/格式、检索技能 ID/分数/版本、轨迹 reward/advantage 与必要训练统计。运行目录另存 resolved config、来源 manifest、console/JSONL/CSV/TensorBoard 指标和六类汇总；外部 W&B 默认关闭。
 _Avoid_: one-group-only routine trace、single monolithic log、external-logger-only evidence
