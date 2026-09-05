@@ -90,6 +90,31 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                     allow_gpu_change=True,
                 )
 
+    def test_missing_historical_environment_workers_means_serial(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 4,
+            "runtime_options": {"persistent_rollout_session": True},
+        }
+        current = {
+            "num_gpus": 4,
+            "runtime_options": {
+                "persistent_rollout_session": True,
+                "environment_workers": 1,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=False,
+            )
+
+        self.assertEqual(source_gpus, 4)
+
 
 if __name__ == "__main__":
     unittest.main()

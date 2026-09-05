@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from contextlib import contextmanager
+from threading import Barrier
 
 from infoskill.conditioning import NoSkillConditioner
 from infoskill.domain.state import AgentHistoryEntry, CanonicalAgentState
@@ -55,6 +56,24 @@ class _FakeEnvironment:
 class _FakeEnvironmentFactory:
     def create(self, task: TaskSpec, *, rollout_id: int, seed: int) -> _FakeEnvironment:
         return _FakeEnvironment(task, rollout_id)
+
+
+class _BarrierEnvironment(_FakeEnvironment):
+    def __init__(self, task: TaskSpec, rollout_id: int, barrier: Barrier) -> None:
+        super().__init__(task, rollout_id)
+        self._barrier = barrier
+
+    def step(self, action: str) -> EnvironmentTransition:
+        self._barrier.wait(timeout=1.0)
+        return super().step(action)
+
+
+class _BarrierEnvironmentFactory:
+    def __init__(self, parties: int) -> None:
+        self._barrier = Barrier(parties)
+
+    def create(self, task: TaskSpec, *, rollout_id: int, seed: int) -> _FakeEnvironment:
+        return _BarrierEnvironment(task, rollout_id, self._barrier)
 
 
 class _FakeRolloutBackend:
@@ -168,6 +187,60 @@ class TrajectoryCollectorTests(unittest.TestCase):
             backend.events,
             ["enter", "generate", "generate", "exit"],
         )
+
+    def test_independent_environment_steps_can_run_concurrently(self) -> None:
+        collector = TrajectoryCollector(
+            environment_factory=_BarrierEnvironmentFactory(parties=2),
+            conditioner=NoSkillConditioner(),
+            rollout_backend=_FakeRolloutBackend(),
+            max_steps=1,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+            environment_workers=2,
+        )
+        task = TaskSpec("game-1", "train", "pick_and_place_simple", "look")
+
+        group = collector.collect_task_group(
+            task,
+            rollouts_per_task=2,
+            master_seed=0,
+        )
+
+        self.assertEqual(len(group.trajectories), 2)
+        metrics = collector.performance_metrics()
+        for key in (
+            "perf/collector_seconds",
+            "perf/environment_create_seconds",
+            "perf/environment_reset_seconds",
+            "perf/environment_step_seconds",
+            "perf/environment_close_seconds",
+        ):
+            self.assertIn(key, metrics)
+            self.assertGreaterEqual(metrics[key], 0.0)
+        self.assertEqual(metrics["perf/environment_workers"], 2.0)
+
+    def test_parallel_environment_results_preserve_serial_order_and_semantics(
+        self,
+    ) -> None:
+        task = TaskSpec("game-1", "train", "pick_and_place_simple", "look")
+
+        def collect(environment_workers: int):
+            collector = TrajectoryCollector(
+                environment_factory=_FakeEnvironmentFactory(),
+                conditioner=NoSkillConditioner(),
+                rollout_backend=_FakeRolloutBackend(),
+                max_steps=2,
+                history_limit=2,
+                invalid_action_penalty=0.01,
+                environment_workers=environment_workers,
+            )
+            return collector.collect_task_group(
+                task,
+                rollouts_per_task=2,
+                master_seed=0,
+            )
+
+        self.assertEqual(collect(1), collect(2))
 
 
 if __name__ == "__main__":

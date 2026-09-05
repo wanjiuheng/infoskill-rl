@@ -198,10 +198,43 @@ def _read_traces(run_directory: Path) -> list[dict]:
     return records
 
 
-def _session_setting(run_directory: Path) -> bool | None:
-    payload = json.loads((run_directory / "resolved_config.json").read_text(encoding="utf-8"))
-    value = payload.get("runtime_options", {}).get("persistent_rollout_session")
+def _runtime_options(run_directory: Path) -> dict[str, object]:
+    payload = json.loads(
+        (run_directory / "resolved_config.json").read_text(encoding="utf-8")
+    )
+    options = payload.get("runtime_options", {})
+    return dict(options) if isinstance(options, dict) else {}
+
+
+def _session_setting(options: dict[str, object]) -> bool | None:
+    value = options.get("persistent_rollout_session")
     return value if isinstance(value, bool) else None
+
+
+def _environment_worker_setting(options: dict[str, object]) -> int | None:
+    value = options.get("environment_workers", 1)
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _settings_are_valid(
+    comparison_mode: str,
+    *,
+    baseline_session: bool | None,
+    optimized_session: bool | None,
+    baseline_environment_workers: int | None,
+    optimized_environment_workers: int | None,
+) -> bool:
+    if comparison_mode == "persistent-session":
+        return baseline_session is False and optimized_session is True
+    if comparison_mode == "environment-workers":
+        return (
+            baseline_session is True
+            and optimized_session is True
+            and baseline_environment_workers == 1
+            and optimized_environment_workers is not None
+            and optimized_environment_workers > 1
+        )
+    raise ValueError(f"unsupported comparison mode: {comparison_mode}")
 
 
 def main() -> int:
@@ -209,21 +242,39 @@ def main() -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("optimized", type=Path)
     parser.add_argument("--logprob-tolerance", type=float, default=1e-3)
+    parser.add_argument(
+        "--comparison-mode",
+        choices=("persistent-session", "environment-workers"),
+        default="persistent-session",
+    )
     args = parser.parse_args()
-    baseline_setting = _session_setting(args.baseline)
-    optimized_setting = _session_setting(args.optimized)
+    baseline_options = _runtime_options(args.baseline)
+    optimized_options = _runtime_options(args.optimized)
+    baseline_setting = _session_setting(baseline_options)
+    optimized_setting = _session_setting(optimized_options)
+    baseline_environment_workers = _environment_worker_setting(baseline_options)
+    optimized_environment_workers = _environment_worker_setting(optimized_options)
     report = compare_records(
         _read_traces(args.baseline),
         _read_traces(args.optimized),
         logprob_tolerance=args.logprob_tolerance,
     )
-    settings_valid = baseline_setting is False and optimized_setting is True
+    settings_valid = _settings_are_valid(
+        args.comparison_mode,
+        baseline_session=baseline_setting,
+        optimized_session=optimized_setting,
+        baseline_environment_workers=baseline_environment_workers,
+        optimized_environment_workers=optimized_environment_workers,
+    )
     report.update(
         {
             "baseline": str(args.baseline.resolve()),
             "optimized": str(args.optimized.resolve()),
+            "comparison_mode": args.comparison_mode,
             "baseline_persistent_rollout_session": baseline_setting,
             "optimized_persistent_rollout_session": optimized_setting,
+            "baseline_environment_workers": baseline_environment_workers,
+            "optimized_environment_workers": optimized_environment_workers,
             "settings_valid": settings_valid,
         }
     )

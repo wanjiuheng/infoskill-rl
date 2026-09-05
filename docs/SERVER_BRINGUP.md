@@ -302,5 +302,37 @@ python scripts/compare_rollout_session_runs.py "$BASELINE" "$OPTIMIZED"
 `PERSISTENT_ROLLOUT_SESSION=1`；需要诊断或回退时可显式设为 `0`。从旧式会话
 checkpoint 原地恢复时，必须继续显式使用其保存的 `0`，不能静默改变运行时语义。
 
+### 独立 ALFWorld 环境并发门禁
+
+正式形状的每个 update 包含 64 个相互独立的环境。`ENVIRONMENT_WORKERS` 只控制
+这些环境的 `reset`、`step` 与 `close` 是否并发等待，不改变任务、环境实例、模型
+请求顺序、随机种子、动作或奖励。该优化通过门禁前默认保持为 `1`。以已经通过的
+持久会话 benchmark 作为串行基线，再运行一次 64 worker 候选：
+
+```bash
+GPUS=0,1,2,3 PROFILE=benchmark PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_WORKERS=64 RUN_NAME=environment-workers-64 \
+  bash scripts/run_alfworld.sh train no_skill
+```
+
+比较时必须显式选择环境并发门禁；比较器会同时要求两侧均使用持久会话、基线
+worker 数为 1、候选 worker 数大于 1：
+
+```bash
+BASELINE=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m0-sft-noskill-benchmark-persistent-u1' | sort | tail -n 1)
+OPTIMIZED=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-environment-workers-64' | sort | tail -n 1)
+
+python scripts/compare_rollout_session_runs.py \
+  "$BASELINE" "$OPTIMIZED" \
+  --comparison-mode environment-workers
+```
+
+新 trace 必须达到 `passed=true` 才能启用。新指标中的
+`perf/environment_create_seconds`、`perf/environment_reset_seconds`、
+`perf/environment_step_seconds` 和 `perf/environment_close_seconds` 用于确认串行
+加载与交互各自的耗时；若并发不稳定或无收益，保持 `ENVIRONMENT_WORKERS=1`。
+
 `formal` 固定 445 个 update，并在 update 0、每 25 个 update 和训练结束后评测
 完整 `valid_seen`。正式训练不接受 `MAX_UPDATES` 的其他值。

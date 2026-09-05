@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.compare_rollout_session_runs import compare_records
+from scripts.compare_rollout_session_runs import _settings_are_valid, compare_records
 
 
 def _record(*, token: int = 7, logprob: float = -0.5) -> dict:
@@ -31,6 +31,28 @@ def _record_with_facts(facts: list[str]) -> dict:
 
 
 class RolloutSessionParityTests(unittest.TestCase):
+    def test_environment_worker_gate_requires_one_to_many_with_same_session_mode(
+        self,
+    ) -> None:
+        self.assertTrue(
+            _settings_are_valid(
+                "environment-workers",
+                baseline_session=True,
+                optimized_session=True,
+                baseline_environment_workers=1,
+                optimized_environment_workers=64,
+            )
+        )
+        self.assertFalse(
+            _settings_are_valid(
+                "environment-workers",
+                baseline_session=False,
+                optimized_session=True,
+                baseline_environment_workers=1,
+                optimized_environment_workers=64,
+            )
+        )
+
     def test_small_logprob_drift_with_identical_semantics_passes(self) -> None:
         report = compare_records(
             [_record(logprob=-0.5)],

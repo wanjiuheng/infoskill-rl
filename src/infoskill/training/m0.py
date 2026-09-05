@@ -49,6 +49,7 @@ def run_m0_training(
     run_name: str | None,
     resume: str | None,
     persistent_rollout_session: bool = True,
+    environment_workers: int = 1,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 
@@ -56,6 +57,8 @@ def run_m0_training(
         raise ValueError("formal M0 must start from the unmodified base policy")
     if num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
+    if environment_workers <= 0:
+        raise ValueError("environment_workers must be positive")
 
     all_train_tasks = discover_tasks(config.paths.alfworld_data, split="train")
     if len(all_train_tasks) != EXPECTED_TRAIN_TASKS:
@@ -101,6 +104,7 @@ def run_m0_training(
         "runtime_options": {
             "persistent_rollout_session": persistent_rollout_session,
             "cross_step_prefix_cache": False,
+            "environment_workers": environment_workers,
         },
     }
     resume_source_num_gpus: int | None = None
@@ -179,10 +183,18 @@ def run_m0_training(
             max_steps=config.max_steps,
         )
         training_collector = _collector(
-            config, factory=factory, runtime=runtime, training=True
+            config,
+            factory=factory,
+            runtime=runtime,
+            training=True,
+            environment_workers=environment_workers,
         )
         evaluation_collector = _collector(
-            config, factory=factory, runtime=runtime, training=False
+            config,
+            factory=factory,
+            runtime=runtime,
+            training=False,
+            environment_workers=environment_workers,
         )
         if checkpoint_to_load is not None:
             runtime.load_portable_state(checkpoint_to_load / "runtime")
@@ -321,6 +333,7 @@ def _collector(
     factory: AlfworldEnvironmentFactory,
     runtime: object,
     training: bool,
+    environment_workers: int,
 ) -> TrajectoryCollector:
     parameters = GenerationParameters(
         do_sample=training,
@@ -336,6 +349,7 @@ def _collector(
         history_limit=config.history_length,
         invalid_action_penalty=0.01,
         generation_parameters=parameters,
+        environment_workers=environment_workers,
     )
 
 

@@ -44,8 +44,8 @@ def validate_resume_config(
     previous_gpus = int(previous.get("num_gpus", 0))
     current_gpus = int(current.get("num_gpus", 0))
 
-    previous_without_gpus = dict(previous)
-    current_without_gpus = dict(current)
+    previous_without_gpus = _with_runtime_defaults(previous)
+    current_without_gpus = _with_runtime_defaults(current)
     previous_without_gpus.pop("num_gpus", None)
     current_without_gpus.pop("num_gpus", None)
     if previous_without_gpus != current_without_gpus:
@@ -55,6 +55,16 @@ def validate_resume_config(
             "changing GPU count during resume requires a new run_name"
         )
     return previous_gpus
+
+
+def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
+    normalized = dict(config)
+    runtime_options = normalized.get("runtime_options")
+    if isinstance(runtime_options, Mapping):
+        normalized_options = dict(runtime_options)
+        normalized_options.setdefault("environment_workers", 1)
+        normalized["runtime_options"] = normalized_options
+    return normalized
 
 
 def _create_run_directory(output_root: str | Path, name: str) -> Path:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import time
+from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
+from typing import Callable, TypeVar
 
 from infoskill.conditioning import SkillConditioner
 from infoskill.domain.actions import resolve_action
@@ -9,7 +12,42 @@ from infoskill.domain.rewards import trajectory_reward
 from infoskill.domain.state import CanonicalAgentState, render_state_views
 from infoskill.rollout import GenerationParameters, GenerationRequest, RolloutBackend
 
-from .contracts import EnvironmentFactory, TaskSpec, Trajectory, TrajectoryGroup, TrajectoryStep
+from .contracts import (
+    Environment,
+    EnvironmentFactory,
+    EnvironmentTransition,
+    TaskSpec,
+    Trajectory,
+    TrajectoryGroup,
+    TrajectoryStep,
+)
+
+
+_Input = TypeVar("_Input")
+_Output = TypeVar("_Output")
+
+
+def _reset_environment(environment: Environment) -> CanonicalAgentState:
+    return environment.reset()
+
+
+def _step_environment(item: tuple[Environment, str]) -> EnvironmentTransition:
+    environment, action = item
+    return environment.step(action)
+
+
+def _close_environment(environment: Environment) -> None:
+    environment.close()
+
+
+def _ordered_map(
+    executor: Executor | None,
+    function: Callable[[_Input], _Output],
+    items: tuple[_Input, ...],
+) -> tuple[_Output, ...]:
+    if executor is None:
+        return tuple(map(function, items))
+    return tuple(executor.map(function, items))
 
 
 def _semantic_seed(
@@ -37,9 +75,12 @@ class TrajectoryCollector:
         history_limit: int,
         invalid_action_penalty: float,
         generation_parameters: GenerationParameters | None = None,
+        environment_workers: int = 1,
     ) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
+        if environment_workers <= 0:
+            raise ValueError("environment_workers must be positive")
         self._environment_factory = environment_factory
         self._conditioner = conditioner
         self._rollout_backend = rollout_backend
@@ -47,7 +88,12 @@ class TrajectoryCollector:
         self._history_limit = history_limit
         self._invalid_action_penalty = invalid_action_penalty
         self._generation_parameters = generation_parameters or GenerationParameters.training()
+        self._environment_workers = environment_workers
         self._rollout_session_depth = 0
+        self._last_performance_metrics: dict[str, float] = {}
+
+    def performance_metrics(self) -> dict[str, float]:
+        return dict(self._last_performance_metrics)
 
     @contextmanager
     def rollout_session(self):
@@ -96,6 +142,14 @@ class TrajectoryCollector:
         if len({task.task_id for task in tasks}) != len(tasks):
             raise ValueError("task IDs must be unique within one rollout update")
 
+        collection_started = time.perf_counter()
+        stage_started = collection_started
+        environment_reset_seconds = 0.0
+        environment_step_seconds = 0.0
+        environment_close_seconds = 0.0
+        conditioning_seconds = 0.0
+        backend_generate_seconds = 0.0
+        action_resolution_seconds = 0.0
         environments = tuple(
             tuple(
                 self._environment_factory.create(
@@ -113,13 +167,35 @@ class TrajectoryCollector:
             )
             for task in tasks
         )
+        environment_create_seconds = time.perf_counter() - stage_started
+        flat_environments = tuple(
+            environment for group in environments for environment in group
+        )
+        executor: ThreadPoolExecutor | None = None
+        if self._environment_workers > 1 and len(flat_environments) > 1:
+            executor = ThreadPoolExecutor(
+                max_workers=min(self._environment_workers, len(flat_environments)),
+                thread_name_prefix="infoskill-env",
+            )
         states: list[list[CanonicalAgentState]] = []
         step_records: list[list[list[TrajectoryStep]]] = [
             [[] for _ in range(rollouts_per_task)] for _ in tasks
         ]
         try:
-            states = [[environment.reset() for environment in group] for group in environments]
+            stage_started = time.perf_counter()
+            flat_states = _ordered_map(
+                executor,
+                _reset_environment,
+                flat_environments,
+            )
+            states = [
+                list(flat_states[offset : offset + rollouts_per_task])
+                for offset in range(0, len(flat_states), rollouts_per_task)
+            ]
+            environment_reset_seconds = time.perf_counter() - stage_started
+            stage_started = time.perf_counter()
             contexts = [self._conditioner.prepare_group(group[0]) for group in states]
+            conditioning_seconds += time.perf_counter() - stage_started
             active = [
                 (task_index, rollout_id)
                 for task_index, group in enumerate(states)
@@ -145,9 +221,11 @@ class TrajectoryCollector:
                             render_state_views(state, history_limit=self._history_limit)
                             for state in active_states
                         )
+                        stage_started = time.perf_counter()
                         conditioned = self._conditioner.condition_batch(
                             active_states, views, contexts[task_index]
                         )
+                        conditioning_seconds += time.perf_counter() - stage_started
                         if len(conditioned) != len(rollout_ids):
                             raise RuntimeError("conditioner returned a different batch size")
                         prepared.extend(
@@ -179,7 +257,9 @@ class TrajectoryCollector:
                         )
                         for task_index, rollout_id, _, policy_input in prepared
                     )
+                    stage_started = time.perf_counter()
                     results = self._rollout_backend.generate(requests)
+                    backend_generate_seconds += time.perf_counter() - stage_started
                     by_request_id = {result.request_id: result for result in results}
                     if len(by_request_id) != len(requests) or set(by_request_id) != {
                         request.request_id for request in requests
@@ -188,15 +268,58 @@ class TrajectoryCollector:
                             "rollout backend did not return exactly one result per request"
                         )
 
-                    next_active: list[tuple[int, int]] = []
+                    stage_started = time.perf_counter()
+                    resolved_steps = []
                     for (task_index, rollout_id, state, policy_input), request in zip(
                         prepared, requests
                     ):
                         generation = by_request_id[request.request_id]
                         action = resolve_action(generation.text, state.admissible_commands)
-                        transition = environments[task_index][rollout_id].step(
-                            action.executed_action
+                        resolved_steps.append(
+                            (
+                                task_index,
+                                rollout_id,
+                                state,
+                                policy_input,
+                                generation,
+                                action,
+                            )
                         )
+                    action_resolution_seconds += time.perf_counter() - stage_started
+                    stage_started = time.perf_counter()
+                    transitions = _ordered_map(
+                        executor,
+                        _step_environment,
+                        tuple(
+                            (
+                                environments[task_index][rollout_id],
+                                action.executed_action,
+                            )
+                            for (
+                                task_index,
+                                rollout_id,
+                                _,
+                                _,
+                                _,
+                                action,
+                            ) in resolved_steps
+                        ),
+                    )
+                    environment_step_seconds += time.perf_counter() - stage_started
+
+                    next_active: list[tuple[int, int]] = []
+                    for resolved_step, transition in zip(
+                        resolved_steps,
+                        transitions,
+                    ):
+                        (
+                            task_index,
+                            rollout_id,
+                            state,
+                            policy_input,
+                            generation,
+                            action,
+                        ) = resolved_step
                         step_records[task_index][rollout_id].append(
                             TrajectoryStep(
                                 state_before=state,
@@ -237,6 +360,22 @@ class TrajectoryCollector:
                 groups.append(TrajectoryGroup(task=task, trajectories=tuple(trajectories)))
             return tuple(groups)
         finally:
-            for group in environments:
-                for environment in group:
-                    environment.close()
+            try:
+                stage_started = time.perf_counter()
+                _ordered_map(executor, _close_environment, flat_environments)
+                environment_close_seconds = time.perf_counter() - stage_started
+            finally:
+                if executor is not None:
+                    executor.shutdown(wait=True)
+                self._last_performance_metrics = {
+                    "perf/collector_seconds": time.perf_counter()
+                    - collection_started,
+                    "perf/environment_create_seconds": environment_create_seconds,
+                    "perf/environment_reset_seconds": environment_reset_seconds,
+                    "perf/environment_step_seconds": environment_step_seconds,
+                    "perf/environment_close_seconds": environment_close_seconds,
+                    "perf/rollout_conditioning_seconds": conditioning_seconds,
+                    "perf/rollout_backend_generate_seconds": backend_generate_seconds,
+                    "perf/rollout_action_resolution_seconds": action_resolution_seconds,
+                    "perf/environment_workers": float(self._environment_workers),
+                }

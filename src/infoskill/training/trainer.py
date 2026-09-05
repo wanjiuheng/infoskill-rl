@@ -96,6 +96,11 @@ class InfoSkillTrainer:
                 global_update=self.global_update,
             )
             rollout_seconds = time.perf_counter() - stage_started
+            performance_metrics = getattr(
+                self.collector,
+                "performance_metrics",
+                lambda: {},
+            )()
             stage_started = time.perf_counter()
             advantages = tuple(
                 group_relative_advantages([trajectory.reward for trajectory in group.trajectories])
@@ -131,6 +136,7 @@ class InfoSkillTrainer:
                     - core_update_started,
                 }
             )
+            values.update(performance_metrics)
             values.update(_rollout_metrics(groups))
             if self.on_update:
                 self.on_update(UpdateMetrics(self.global_update, values), groups)

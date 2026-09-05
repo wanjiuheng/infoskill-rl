@@ -60,6 +60,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     train.add_argument("--max-updates", type=int)
     train.add_argument("--num-gpus", type=int, required=True)
+    train.add_argument(
+        "--environment-workers",
+        type=int,
+        default=1,
+        help="number of independent ALFWorld reset/step calls allowed in parallel",
+    )
     train.add_argument("--run-name")
     train.add_argument("--resume")
     train.add_argument(
@@ -81,6 +87,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         )
     if args.num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
+    if args.environment_workers <= 0:
+        raise ValueError("environment_workers must be positive")
     _validate_paths(
         config,
         mode=mode,
@@ -102,6 +110,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "action_minibatch_size": plan.action_minibatch_size,
                     "evaluation_kind": plan.evaluation_kind,
                     "num_gpus": args.num_gpus,
+                    "environment_workers": args.environment_workers,
                     "persistent_rollout_session": args.persistent_rollout_session,
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
@@ -123,6 +132,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         run_name=args.run_name,
         resume=args.resume,
         persistent_rollout_session=args.persistent_rollout_session,
+        environment_workers=args.environment_workers,
     )
 
 

@@ -43,6 +43,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["num_gpus"], 4)
         self.assertEqual(payload["trajectories_per_full_update"], 2)
         self.assertTrue(payload["persistent_rollout_session"])
+        self.assertEqual(payload["environment_workers"], 1)
 
     def test_persistent_rollout_session_allows_explicit_opt_out(self) -> None:
         output = io.StringIO()
@@ -54,6 +55,17 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertFalse(json.loads(output.getvalue())["persistent_rollout_session"])
+
+    def test_environment_worker_count_is_explicitly_configurable(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + ["--environment-workers", "64"]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue())["environment_workers"], 64)
 
     def test_no_skill_training_does_not_require_embedding_or_skill_files(self) -> None:
         output = io.StringIO()

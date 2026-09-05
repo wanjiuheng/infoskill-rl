@@ -14,6 +14,8 @@ RESUME="${RESUME:-}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
+# Experimental until the environment-concurrency semantic parity gate passes.
+ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -66,6 +68,7 @@ case "${ACTION}" in
       --mode "${MODE}"
       --profile "${PROFILE}"
       --num-gpus "${#GPU_IDS[@]}"
+      --environment-workers "${ENVIRONMENT_WORKERS}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
       TRAIN_ARGS+=(--max-updates "${MAX_UPDATES}")
