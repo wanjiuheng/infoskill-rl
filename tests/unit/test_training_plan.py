@@ -9,6 +9,7 @@ class TrainingPlanTests(unittest.TestCase):
     def test_registered_profiles_keep_development_and_formal_budgets_distinct(self) -> None:
         smoke = resolve_training_plan(TrainingProfile.SMOKE)
         integration = resolve_training_plan(TrainingProfile.INTEGRATION)
+        benchmark = resolve_training_plan(TrainingProfile.BENCHMARK)
         pilot = resolve_training_plan(TrainingProfile.PILOT)
         formal = resolve_training_plan(TrainingProfile.FORMAL)
 
@@ -23,6 +24,17 @@ class TrainingPlanTests(unittest.TestCase):
                 integration.rollouts_per_task,
             ),
             (20, 4, 4),
+        )
+        self.assertEqual(
+            (
+                benchmark.max_updates,
+                benchmark.task_groups_per_update,
+                benchmark.rollouts_per_task,
+                benchmark.action_minibatch_size,
+                benchmark.evaluation_kind,
+                benchmark.include_monitor_tasks,
+            ),
+            (1, 8, 8, 256, "none", True),
         )
         self.assertEqual(
             (pilot.max_updates, pilot.evaluation_kind),

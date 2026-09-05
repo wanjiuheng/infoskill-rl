@@ -48,6 +48,7 @@ def run_m0_training(
     num_gpus: int,
     run_name: str | None,
     resume: str | None,
+    persistent_rollout_session: bool = True,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 
@@ -97,6 +98,9 @@ def run_m0_training(
         "num_gpus": num_gpus,
         "app_config": config.as_dict(),
         "training_plan": _plan_payload(plan),
+        "runtime_options": {
+            "persistent_rollout_session": persistent_rollout_session,
+        },
     }
     resume_source_num_gpus: int | None = None
     if checkpoint_to_load is not None:
@@ -163,6 +167,7 @@ def run_m0_training(
             gpu_memory_utilization=0.45,
             require_hybrid_prefix=False,
             master_seed=config.master_seed,
+            persistent_rollout_session=persistent_rollout_session,
         )
     )
     try:
@@ -392,7 +397,8 @@ def _evaluation_callback(
             on_progress=evaluation_progress.update,
         )
         try:
-            run = runner.run(tasks, checkpoint_step=global_update)
+            with collector.rollout_session():
+                run = runner.run(tasks, checkpoint_step=global_update)
         finally:
             evaluation_progress.close()
         trace_path = traces.write_evaluation(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Callable, Mapping, Protocol, Sequence
 
@@ -86,27 +87,50 @@ class InfoSkillTrainer:
             tasks = self.schedule.next_batch(self.task_groups_per_update)
             if not tasks:
                 break
+            core_update_started = time.perf_counter()
+            stage_started = core_update_started
             groups = self.collector.collect_task_groups(
                 tasks,
                 rollouts_per_task=self.rollouts_per_task,
                 master_seed=self.master_seed,
                 global_update=self.global_update,
             )
+            rollout_seconds = time.perf_counter() - stage_started
+            stage_started = time.perf_counter()
             advantages = tuple(
                 group_relative_advantages([trajectory.reward for trajectory in group.trajectories])
                 for group in groups
             )
+            advantage_seconds = time.perf_counter() - stage_started
+            stage_started = time.perf_counter()
             values = dict(
                 self.runtime.update_policy(groups, advantages, global_update=self.global_update)
             )
+            policy_update_seconds = time.perf_counter() - stage_started
             if self.auxiliary_enabled:
+                stage_started = time.perf_counter()
                 values.update(
                     self.runtime.update_auxiliary(
                         groups, advantages, global_update=self.global_update
                     )
                 )
+                values["perf/auxiliary_update_seconds"] = (
+                    time.perf_counter() - stage_started
+                )
+            stage_started = time.perf_counter()
             self.runtime.synchronize_rollout_weights()
+            rollout_weight_sync_seconds = time.perf_counter() - stage_started
             self.global_update += 1
+            values.update(
+                {
+                    "perf/rollout_seconds": rollout_seconds,
+                    "perf/advantage_seconds": advantage_seconds,
+                    "perf/policy_update_seconds": policy_update_seconds,
+                    "perf/rollout_weight_sync_seconds": rollout_weight_sync_seconds,
+                    "perf/core_update_seconds": time.perf_counter()
+                    - core_update_started,
+                }
+            )
             values.update(_rollout_metrics(groups))
             if self.on_update:
                 self.on_update(UpdateMetrics(self.global_update, values), groups)

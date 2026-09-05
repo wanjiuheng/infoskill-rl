@@ -8,10 +8,11 @@ CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 GPUS="${GPUS:-${4:-0}}"                       # examples: 0 or 0,1 or 0,1,2,3
 RUN_NAME="${RUN_NAME:-}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-0}"
-PROFILE="${PROFILE:-smoke}"                   # smoke | integration | pilot | formal
+PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark | pilot | formal
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
 DRY_RUN="${DRY_RUN:-0}"
+PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -77,6 +78,14 @@ case "${ACTION}" in
     if [[ "${DRY_RUN}" == "1" ]]; then
       TRAIN_ARGS+=(--dry-run)
     fi
+    case "${PERSISTENT_ROLLOUT_SESSION}" in
+      1) TRAIN_ARGS+=(--persistent-rollout-session) ;;
+      0) TRAIN_ARGS+=(--no-persistent-rollout-session) ;;
+      *)
+        echo "PERSISTENT_ROLLOUT_SESSION must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)

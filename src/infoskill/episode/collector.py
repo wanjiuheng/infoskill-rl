@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager, nullcontext
 
 from infoskill.conditioning import SkillConditioner
 from infoskill.domain.actions import resolve_action
@@ -46,6 +47,24 @@ class TrajectoryCollector:
         self._history_limit = history_limit
         self._invalid_action_penalty = invalid_action_penalty
         self._generation_parameters = generation_parameters or GenerationParameters.training()
+        self._rollout_session_depth = 0
+
+    @contextmanager
+    def rollout_session(self):
+        if self._rollout_session_depth > 0:
+            self._rollout_session_depth += 1
+            try:
+                yield
+            finally:
+                self._rollout_session_depth -= 1
+            return
+        session_factory = getattr(self._rollout_backend, "rollout_session", nullcontext)
+        self._rollout_session_depth = 1
+        try:
+            with session_factory():
+                yield
+        finally:
+            self._rollout_session_depth = 0
 
     def collect_task_group(
         self,
@@ -108,76 +127,89 @@ class TrajectoryCollector:
                 if not state.done
             ]
 
-            for env_step in range(self._max_steps):
-                if not active:
-                    break
-                prepared: list[tuple[int, int, CanonicalAgentState, object]] = []
-                for task_index in range(len(tasks)):
-                    rollout_ids = [rollout_id for index, rollout_id in active if index == task_index]
-                    if not rollout_ids:
-                        continue
-                    active_states = tuple(states[task_index][rollout_id] for rollout_id in rollout_ids)
-                    views = tuple(
-                        render_state_views(state, history_limit=self._history_limit)
-                        for state in active_states
-                    )
-                    conditioned = self._conditioner.condition_batch(
-                        active_states, views, contexts[task_index]
-                    )
-                    if len(conditioned) != len(rollout_ids):
-                        raise RuntimeError("conditioner returned a different batch size")
-                    prepared.extend(
-                        (task_index, rollout_id, state, policy_input)
-                        for rollout_id, state, policy_input in zip(
-                            rollout_ids, active_states, conditioned
+            with self.rollout_session():
+                for env_step in range(self._max_steps):
+                    if not active:
+                        break
+                    prepared: list[tuple[int, int, CanonicalAgentState, object]] = []
+                    for task_index in range(len(tasks)):
+                        rollout_ids = [
+                            rollout_id for index, rollout_id in active if index == task_index
+                        ]
+                        if not rollout_ids:
+                            continue
+                        active_states = tuple(
+                            states[task_index][rollout_id] for rollout_id in rollout_ids
                         )
-                    )
-
-                requests = tuple(
-                    GenerationRequest(
-                        request_id=f"{tasks[task_index].task_id}:{rollout_id}:{env_step}",
-                        task_id=tasks[task_index].task_id,
-                        rollout_id=rollout_id,
-                        env_step=env_step,
-                        user_message=policy_input.user_message,  # type: ignore[attr-defined]
-                        parameters=self._generation_parameters,
-                        soft_prefix=policy_input.soft_prefix,  # type: ignore[attr-defined]
-                        seed=_semantic_seed(
-                            "policy_sampling",
-                            master_seed,
-                            tasks[task_index].task_id,
-                            rollout_id,
-                            env_step,
-                            global_update,
-                        ),
-                    )
-                    for task_index, rollout_id, _, policy_input in prepared
-                )
-                results = self._rollout_backend.generate(requests)
-                by_request_id = {result.request_id: result for result in results}
-                if len(by_request_id) != len(requests) or set(by_request_id) != {
-                    request.request_id for request in requests
-                }:
-                    raise RuntimeError("rollout backend did not return exactly one result per request")
-
-                next_active: list[tuple[int, int]] = []
-                for (task_index, rollout_id, state, policy_input), request in zip(prepared, requests):
-                    generation = by_request_id[request.request_id]
-                    action = resolve_action(generation.text, state.admissible_commands)
-                    transition = environments[task_index][rollout_id].step(action.executed_action)
-                    step_records[task_index][rollout_id].append(
-                        TrajectoryStep(
-                            state_before=state,
-                            conditioned_input=policy_input,
-                            generation=generation,
-                            action=action,
-                            transition=transition,
+                        views = tuple(
+                            render_state_views(state, history_limit=self._history_limit)
+                            for state in active_states
                         )
+                        conditioned = self._conditioner.condition_batch(
+                            active_states, views, contexts[task_index]
+                        )
+                        if len(conditioned) != len(rollout_ids):
+                            raise RuntimeError("conditioner returned a different batch size")
+                        prepared.extend(
+                            (task_index, rollout_id, state, policy_input)
+                            for rollout_id, state, policy_input in zip(
+                                rollout_ids, active_states, conditioned
+                            )
+                        )
+
+                    requests = tuple(
+                        GenerationRequest(
+                            request_id=(
+                                f"{tasks[task_index].task_id}:{rollout_id}:{env_step}"
+                            ),
+                            task_id=tasks[task_index].task_id,
+                            rollout_id=rollout_id,
+                            env_step=env_step,
+                            user_message=policy_input.user_message,  # type: ignore[attr-defined]
+                            parameters=self._generation_parameters,
+                            soft_prefix=policy_input.soft_prefix,  # type: ignore[attr-defined]
+                            seed=_semantic_seed(
+                                "policy_sampling",
+                                master_seed,
+                                tasks[task_index].task_id,
+                                rollout_id,
+                                env_step,
+                                global_update,
+                            ),
+                        )
+                        for task_index, rollout_id, _, policy_input in prepared
                     )
-                    states[task_index][rollout_id] = transition.next_state
-                    if not transition.next_state.done:
-                        next_active.append((task_index, rollout_id))
-                active = next_active
+                    results = self._rollout_backend.generate(requests)
+                    by_request_id = {result.request_id: result for result in results}
+                    if len(by_request_id) != len(requests) or set(by_request_id) != {
+                        request.request_id for request in requests
+                    }:
+                        raise RuntimeError(
+                            "rollout backend did not return exactly one result per request"
+                        )
+
+                    next_active: list[tuple[int, int]] = []
+                    for (task_index, rollout_id, state, policy_input), request in zip(
+                        prepared, requests
+                    ):
+                        generation = by_request_id[request.request_id]
+                        action = resolve_action(generation.text, state.admissible_commands)
+                        transition = environments[task_index][rollout_id].step(
+                            action.executed_action
+                        )
+                        step_records[task_index][rollout_id].append(
+                            TrajectoryStep(
+                                state_before=state,
+                                conditioned_input=policy_input,
+                                generation=generation,
+                                action=action,
+                                transition=transition,
+                            )
+                        )
+                        states[task_index][rollout_id] = transition.next_state
+                        if not transition.next_state.done:
+                            next_active.append((task_index, rollout_id))
+                    active = next_active
 
             groups = []
             for task_index, task in enumerate(tasks):

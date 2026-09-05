@@ -133,6 +133,33 @@ class InfoSkillTrainerTests(unittest.TestCase):
         self.assertEqual(checkpoint_calls, [])
         self.assertEqual(evaluation_calls, [])
 
+    def test_update_reports_nonnegative_core_stage_timings(self) -> None:
+        captured = []
+        trainer = InfoSkillTrainer(
+            collector=_Collector(),  # type: ignore[arg-type]
+            runtime=_Runtime(),  # type: ignore[arg-type]
+            schedule=TaskSchedule(_tasks(), master_seed=0),
+            task_groups_per_update=1,
+            rollouts_per_task=2,
+            master_seed=0,
+            auxiliary_enabled=False,
+            on_update=lambda update, groups: captured.append(update.values),
+            checkpoint_every=1,
+        )
+
+        trainer.fit(max_updates=1, evaluate_at_start=False)
+
+        self.assertEqual(len(captured), 1)
+        for key in (
+            "perf/rollout_seconds",
+            "perf/advantage_seconds",
+            "perf/policy_update_seconds",
+            "perf/rollout_weight_sync_seconds",
+            "perf/core_update_seconds",
+        ):
+            self.assertIn(key, captured[0])
+            self.assertGreaterEqual(captured[0][key], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

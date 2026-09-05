@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import statistics
 import sys
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -37,6 +39,7 @@ class VerlRuntimeConfig:
     require_hybrid_prefix: bool = False
     soft_prefix_length: int = 5
     master_seed: int = 0
+    persistent_rollout_session: bool = True
 
 
 class VerlRuntime:
@@ -47,6 +50,11 @@ class VerlRuntime:
         self.codec = codec
         self.config = config
         self._completed_updates = 0
+        self._generation_calls = 0
+        self._generation_requests = 0
+        self._generation_seconds = 0.0
+        self._generation_worker_seconds = 0.0
+        self._rollout_session_active = False
 
     @classmethod
     def start(cls, config: VerlRuntimeConfig) -> "VerlRuntime":
@@ -109,6 +117,7 @@ class VerlRuntime:
     def generate(self, requests: tuple[GenerationRequest, ...]) -> tuple[GenerationResult, ...]:
         if not requests:
             return ()
+        generation_started = time.perf_counter()
         if (
             any(request.soft_prefix is not None for request in requests)
             and not self.config.require_hybrid_prefix
@@ -120,9 +129,37 @@ class VerlRuntime:
 
         data = self.codec.generation_dataproto(requests)
         padded, pad_size = pad_dataproto_to_divisor(data, self.worker_group.world_size)
-        output = self.worker_group.generate_sequences(padded)
+        worker_started = time.perf_counter()
+        if self._rollout_session_active:
+            output = self.worker_group.generate_sequences_in_infoskill_session(padded)
+        else:
+            output = self.worker_group.generate_sequences(padded)
+        worker_seconds = time.perf_counter() - worker_started
         output = unpad_dataproto(output, pad_size=pad_size)
-        return self.codec.decode_generation(requests, output)
+        decoded = self.codec.decode_generation(requests, output)
+        self._generation_calls += 1
+        self._generation_requests += len(requests)
+        self._generation_worker_seconds += worker_seconds
+        self._generation_seconds += time.perf_counter() - generation_started
+        return decoded
+
+    @contextmanager
+    def rollout_session(self):
+        if not self.config.persistent_rollout_session:
+            yield
+            return
+        if self._rollout_session_active:
+            yield
+            return
+        self.worker_group.begin_infoskill_rollout_session()
+        self._rollout_session_active = True
+        try:
+            yield
+        finally:
+            try:
+                self.worker_group.end_infoskill_rollout_session()
+            finally:
+                self._rollout_session_active = False
 
     def update_policy(
         self,
@@ -131,13 +168,18 @@ class VerlRuntime:
         *,
         global_update: int,
     ) -> Mapping[str, float]:
+        policy_update_started = time.perf_counter()
+        stage_started = policy_update_started
         data = self.codec.training_dataproto(groups, advantages)
         real_sample_count = len(data)
         data, padding_count = pad_batch_to_divisor(
             data,
             self.worker_group.world_size,
         )
+        training_codec_seconds = time.perf_counter() - stage_started
+        stage_started = time.perf_counter()
         old = self.worker_group.compute_log_prob(data)
+        old_logprob_seconds = time.perf_counter() - stage_started
         alignment_metrics: dict[str, float] = {}
         if global_update == 0:
             real_data = data[:real_sample_count]
@@ -156,9 +198,13 @@ class VerlRuntime:
                 for key, value in alignment.items()
             }
         data = data.union(old)
+        stage_started = time.perf_counter()
         reference = self.worker_group.compute_ref_log_prob(data)
+        reference_logprob_seconds = time.perf_counter() - stage_started
         data = data.union(reference)
+        stage_started = time.perf_counter()
         result = self.worker_group.update_actor(data)
+        actor_update_seconds = time.perf_counter() - stage_started
         self._completed_updates = global_update + 1
         metrics = _reduce_metrics(result.meta_info.get("metrics", {}))
         metrics.update(
@@ -166,9 +212,23 @@ class VerlRuntime:
                 "runtime/training_sample_count": float(real_sample_count),
                 "runtime/training_padding_count": float(padding_count),
                 "runtime/training_padded_sample_count": float(len(data)),
+                "perf/rollout_generation_calls": float(self._generation_calls),
+                "perf/rollout_generation_requests": float(self._generation_requests),
+                "perf/rollout_generation_seconds": self._generation_seconds,
+                "perf/rollout_generation_worker_seconds": self._generation_worker_seconds,
+                "perf/training_codec_seconds": training_codec_seconds,
+                "perf/old_logprob_seconds": old_logprob_seconds,
+                "perf/reference_logprob_seconds": reference_logprob_seconds,
+                "perf/actor_update_seconds": actor_update_seconds,
+                "perf/runtime_policy_update_seconds": time.perf_counter()
+                - policy_update_started,
             }
         )
         metrics.update(alignment_metrics)
+        self._generation_calls = 0
+        self._generation_requests = 0
+        self._generation_seconds = 0.0
+        self._generation_worker_seconds = 0.0
         return metrics
 
     def update_auxiliary(
@@ -200,6 +260,11 @@ class VerlRuntime:
         self.worker_group.load_portable_checkpoint(str(directory / "actor"))
 
     def close(self) -> None:
+        if self._rollout_session_active:
+            try:
+                self.worker_group.end_infoskill_rollout_session()
+            finally:
+                self._rollout_session_active = False
         if ray.is_initialized():
             ray.shutdown()
 

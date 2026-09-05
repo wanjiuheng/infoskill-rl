@@ -7,6 +7,7 @@ from enum import Enum
 class TrainingProfile(str, Enum):
     SMOKE = "smoke"
     INTEGRATION = "integration"
+    BENCHMARK = "benchmark"
     PILOT = "pilot"
     FORMAL = "formal"
 
@@ -50,6 +51,19 @@ _REGISTERED_PLANS = {
         evaluation_every=25,
         evaluation_kind="none",
         include_monitor_tasks=False,
+    ),
+    # Performance-only probe: identical update geometry to FORMAL, but exactly
+    # one update and no evaluation. It must never be reported as an experiment.
+    TrainingProfile.BENCHMARK: TrainingPlan(
+        profile=TrainingProfile.BENCHMARK,
+        max_updates=1,
+        task_groups_per_update=8,
+        rollouts_per_task=8,
+        action_minibatch_size=256,
+        checkpoint_every=1,
+        evaluation_every=25,
+        evaluation_kind="none",
+        include_monitor_tasks=True,
     ),
     TrainingProfile.PILOT: TrainingPlan(
         profile=TrainingProfile.PILOT,

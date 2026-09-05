@@ -62,6 +62,12 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--num-gpus", type=int, required=True)
     train.add_argument("--run-name")
     train.add_argument("--resume")
+    train.add_argument(
+        "--persistent-rollout-session",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="keep vLLM awake across environment steps within one rollout update",
+    )
     train.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -96,6 +102,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "action_minibatch_size": plan.action_minibatch_size,
                     "evaluation_kind": plan.evaluation_kind,
                     "num_gpus": args.num_gpus,
+                    "persistent_rollout_session": args.persistent_rollout_session,
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "dry_run": True,
@@ -115,6 +122,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         num_gpus=args.num_gpus,
         run_name=args.run_name,
         resume=args.resume,
+        persistent_rollout_session=args.persistent_rollout_session,
     )
 
 

@@ -260,5 +260,43 @@ GPUS=0,1,2,3 PROFILE=formal RUN_NAME=m0-formal \
   bash scripts/run_alfworld.sh train no_skill
 ```
 
+### 正式批量形状的无损性能基准
+
+`benchmark` 只运行一个与正式训练相同形状的 update（8 个任务、每个任务 8
+条轨迹），不运行评测，也不能作为实验结果引用。它用于验证工程优化的速度和
+输出等价性，不替代 smoke、integration、pilot 或 formal 的任何验证。
+
+先运行旧式的“每个环境步都唤醒/休眠 vLLM”基线，再运行同任务、同随机种子的
+持久 rollout session：
+
+```bash
+GPUS=0,1,2,3 PROFILE=benchmark PERSISTENT_ROLLOUT_SESSION=0 \
+RUN_NAME=rollout-session-baseline \
+  bash scripts/run_alfworld.sh train no_skill
+
+GPUS=0,1,2,3 PROFILE=benchmark PERSISTENT_ROLLOUT_SESSION=1 \
+RUN_NAME=rollout-session-optimized \
+  bash scripts/run_alfworld.sh train no_skill
+```
+
+比较两份轨迹。门禁要求任务、生成 token、原始响应、动作、环境输出和奖励完全
+一致，rollout logprob 最大绝对误差不超过 `1e-3`：
+
+```bash
+BASELINE=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-rollout-session-baseline' | sort | tail -n 1)
+OPTIMIZED=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-rollout-session-optimized' | sort | tail -n 1)
+
+python scripts/compare_rollout_session_runs.py "$BASELINE" "$OPTIMIZED"
+```
+
+两份 `metrics.jsonl` 会额外记录 `perf/rollout_seconds`、
+`perf/rollout_generation_worker_seconds`、`perf/old_logprob_seconds`、
+`perf/reference_logprob_seconds`、`perf/actor_update_seconds` 和
+`perf/core_update_seconds`，用来区分生成、环境和训练张量阶段。只有比较结果
+`passed=true` 后，才允许在正式运行中使用默认的
+`PERSISTENT_ROLLOUT_SESSION=1`。
+
 `formal` 固定 445 个 update，并在 update 0、每 25 个 update 和训练结束后评测
 完整 `valid_seen`。正式训练不接受 `MAX_UPDATES` 的其他值。

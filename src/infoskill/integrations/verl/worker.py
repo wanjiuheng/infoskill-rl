@@ -12,6 +12,7 @@ from peft import PeftModel
 from safetensors.torch import load_file, save_file
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from verl.single_controller.base.decorator import Dispatch, register
+from verl.utils.device import get_torch_device
 from verl.utils.fsdp_utils import layered_summon_lora_params
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
 
@@ -23,6 +24,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
+        self._infoskill_rollout_session_active = False
         seed = int(self.config.model.get("initialization_seed", 0))
         random.seed(seed)
         np.random.seed(seed % (2**32))
@@ -30,6 +32,57 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
         return super().init_model()
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def begin_infoskill_rollout_session(self) -> None:
+        if self._infoskill_rollout_session_active:
+            raise RuntimeError("INFO-SKILL rollout session is already active")
+        self._infoskill_rollout_session_active = True
+        try:
+            self.rollout_sharding_manager.__enter__()
+        except Exception:
+            try:
+                self.rollout_sharding_manager.__exit__(None, None, None)
+            finally:
+                self._infoskill_rollout_session_active = False
+            raise
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def generate_sequences_in_infoskill_session(self, prompts):
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("INFO-SKILL rollout session is not active")
+        prompts = prompts.to(get_torch_device().current_device())
+        if not self._is_rollout:
+            raise RuntimeError("worker has no rollout engine")
+        prompts.meta_info.update(
+            {
+                "eos_token_id": (
+                    self.generation_config.eos_token_id
+                    if self.generation_config is not None
+                    else self.tokenizer.eos_token_id
+                ),
+                "pad_token_id": (
+                    self.generation_config.pad_token_id
+                    if self.generation_config is not None
+                    else self.tokenizer.pad_token_id
+                ),
+            }
+        )
+        prompts = self.rollout_sharding_manager.preprocess_data(prompts)
+        output = self.rollout.generate_sequences(prompts=prompts)
+        output = self.rollout_sharding_manager.postprocess_data(output)
+        output = output.to("cpu")
+        get_torch_device().empty_cache()
+        return output
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def end_infoskill_rollout_session(self) -> None:
+        if not self._infoskill_rollout_session_active:
+            return
+        try:
+            self.rollout_sharding_manager.__exit__(None, None, None)
+        finally:
+            self._infoskill_rollout_session_active = False
 
     def _build_rollout(self, trust_remote_code: bool = False):
         from verl.workers.rollout import vllm_rollout as rollout_package

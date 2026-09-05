@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import contextmanager
 
 from infoskill.conditioning import NoSkillConditioner
 from infoskill.domain.state import AgentHistoryEntry, CanonicalAgentState
@@ -59,8 +60,18 @@ class _FakeEnvironmentFactory:
 class _FakeRolloutBackend:
     def __init__(self) -> None:
         self.batch_sizes: list[int] = []
+        self.events: list[str] = []
+
+    @contextmanager
+    def rollout_session(self):
+        self.events.append("enter")
+        try:
+            yield
+        finally:
+            self.events.append("exit")
 
     def generate(self, requests: tuple[GenerationRequest, ...]) -> tuple[GenerationResult, ...]:
+        self.events.append("generate")
         self.batch_sizes.append(len(requests))
         results = []
         for request in requests:
@@ -103,6 +114,7 @@ class TrajectoryCollectorTests(unittest.TestCase):
         group = collector.collect_task_group(task, rollouts_per_task=2, master_seed=0)
 
         self.assertEqual(backend.batch_sizes, [2, 1])
+        self.assertEqual(backend.events, ["enter", "generate", "generate", "exit"])
         self.assertEqual(len(group.trajectories), 2)
         self.assertTrue(group.trajectories[0].won)
         self.assertEqual(group.trajectories[0].reward, 1.0)
@@ -135,6 +147,27 @@ class TrajectoryCollectorTests(unittest.TestCase):
 
         self.assertEqual(len(groups), 2)
         self.assertEqual(backend.batch_sizes, [4])
+
+    def test_nested_collections_share_one_backend_rollout_session(self) -> None:
+        backend = _FakeRolloutBackend()
+        collector = TrajectoryCollector(
+            environment_factory=_FakeEnvironmentFactory(),
+            conditioner=NoSkillConditioner(),
+            rollout_backend=backend,
+            max_steps=1,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+        )
+        task = TaskSpec("game-1", "train", "pick_and_place_simple", "look")
+
+        with collector.rollout_session():
+            collector.collect_task_group(task, rollouts_per_task=1, master_seed=0)
+            collector.collect_task_group(task, rollouts_per_task=1, master_seed=0)
+
+        self.assertEqual(
+            backend.events,
+            ["enter", "generate", "generate", "exit"],
+        )
 
 
 if __name__ == "__main__":
