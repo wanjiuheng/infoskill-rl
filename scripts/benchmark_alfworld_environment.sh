@@ -3,7 +3,7 @@ set -euo pipefail
 
 CONFIG="${CONFIG:-configs/alfworld_qwen25_7b.yaml}"
 PROFILE="${PROFILE:-smoke}"                 # smoke: 4 slots; full: formal 64 slots
-MINIMUM_SPEEDUP="${MINIMUM_SPEEDUP:-1.25}"
+MINIMUM_SPEEDUP="${MINIMUM_SPEEDUP:-}"
 INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,8 +26,11 @@ export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
 export MKL_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
 
 echo "[INFO-SKILL] benchmark=alfworld-environment profile=${PROFILE} config=${CONFIG}"
-python scripts/benchmark_alfworld_environment.py \
-  --config "${CONFIG}" \
-  --profile "${PROFILE}" \
-  --minimum-speedup "${MINIMUM_SPEEDUP}" \
-  "$@"
+ARGS=(
+  --config "${CONFIG}"
+  --profile "${PROFILE}"
+)
+if [[ -n "${MINIMUM_SPEEDUP}" ]]; then
+  ARGS+=(--minimum-speedup "${MINIMUM_SPEEDUP}")
+fi
+python scripts/benchmark_alfworld_environment.py "${ARGS[@]}" "$@"

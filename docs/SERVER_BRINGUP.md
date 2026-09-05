@@ -372,5 +372,5 @@ PROFILE=smoke bash scripts/benchmark_alfworld_environment.sh
 PROFILE=full bash scripts/benchmark_alfworld_environment.sh
 ```
 
-门要求 `semantic_exact=true` 且环境工作至少加速 `1.25x`。失败时返回非零退出码，
-不会改变正式训练入口；结果 JSON 写入 `runs/`。
+`smoke` 门只要求 `semantic_exact=true`；只有 `full` 门额外要求环境工作至少加速
+`1.25x`。失败时返回非零退出码，不会改变正式训练入口；结果 JSON 写入 `runs/`。

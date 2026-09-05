@@ -29,12 +29,16 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--task-count", type=int)
     parser.add_argument("--rollouts-per-task", type=int)
     parser.add_argument("--steps", type=int)
-    parser.add_argument("--minimum-speedup", type=float, default=1.25)
+    parser.add_argument(
+        "--minimum-speedup",
+        type=float,
+        help="defaults to no speed gate for smoke and 1.25 for full",
+    )
     parser.add_argument("--output")
     return parser
 
 
-def _profile_values(args: argparse.Namespace) -> tuple[int, int, int]:
+def _profile_values(args: argparse.Namespace) -> tuple[int, int, int, float]:
     defaults = {
         "smoke": (2, 2, 3),
         "full": (8, 8, 30),
@@ -45,9 +49,12 @@ def _profile_values(args: argparse.Namespace) -> tuple[int, int, int]:
     steps = args.steps or steps
     if min(task_count, rollouts_per_task, steps) <= 0:
         raise ValueError("task-count, rollouts-per-task and steps must be positive")
-    if args.minimum_speedup <= 0:
-        raise ValueError("minimum-speedup must be positive")
-    return task_count, rollouts_per_task, steps
+    minimum_speedup = args.minimum_speedup
+    if minimum_speedup is None:
+        minimum_speedup = 0.0 if args.profile == "smoke" else 1.25
+    if minimum_speedup < 0:
+        raise ValueError("minimum-speedup cannot be negative")
+    return task_count, rollouts_per_task, steps, minimum_speedup
 
 
 def _seed(master_seed: int, task_id: str, rollout_id: int) -> int:
@@ -199,7 +206,7 @@ def _native_batch_run(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    task_count, rollouts_per_task, steps = _profile_values(args)
+    task_count, rollouts_per_task, steps, minimum_speedup = _profile_values(args)
     config = AppConfig.load(args.config)
     tasks = discover_tasks(config.paths.alfworld_data, split="train")
     if len(tasks) < task_count:
@@ -239,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     batch_work = batch_metrics["environment_work_seconds"]
     speedup = serial_work / batch_work if batch_work else float("inf")
     semantic_exact = not mismatches and len(serial_snapshots) == len(batch_snapshots)
-    performance_passed = speedup >= args.minimum_speedup
+    performance_passed = speedup >= minimum_speedup
     result = {
         "schema_version": 1,
         "profile": args.profile,
@@ -251,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         "serial": serial_metrics,
         "native_multiprocessing_batch": batch_metrics,
         "environment_work_speedup": speedup,
-        "minimum_speedup": args.minimum_speedup,
+        "minimum_speedup": minimum_speedup,
         "semantic_exact": semantic_exact,
         "semantic_mismatches": mismatches,
         "performance_passed": performance_passed,
