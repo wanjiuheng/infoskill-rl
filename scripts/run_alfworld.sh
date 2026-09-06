@@ -14,6 +14,8 @@ RESUME="${RESUME:-}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
+# Conservative default; set to 0 only for the guarded empty-cache A/B probe.
+ROLLOUT_EMPTY_CACHE_BETWEEN_STEPS="${ROLLOUT_EMPTY_CACHE_BETWEEN_STEPS:-1}"
 # Used only by the individual backend; native_batch owns one process per slot.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
 # Validated by CPU differential, 64-trajectory A/B and two-update longevity gates.
@@ -107,6 +109,14 @@ case "${ACTION}" in
       0) TRAIN_ARGS+=(--no-persistent-rollout-session) ;;
       *)
         echo "PERSISTENT_ROLLOUT_SESSION must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
+    case "${ROLLOUT_EMPTY_CACHE_BETWEEN_STEPS}" in
+      1) TRAIN_ARGS+=(--rollout-empty-cache-between-steps) ;;
+      0) TRAIN_ARGS+=(--no-rollout-empty-cache-between-steps) ;;
+      *)
+        echo "ROLLOUT_EMPTY_CACHE_BETWEEN_STEPS must be 0 or 1" >&2
         exit 2
         ;;
     esac

@@ -409,3 +409,36 @@ TextWorld 1.7.0 的默认 `_ChildEnv.__del__` 会在正常 close 后仍对环境
 Ray SIGTERM 堆栈。INFO-SKILL 的 native batch 关闭路径先发送 TextWorld 原生 close
 控制消息并等待子进程正常退出，只在 2 秒总超时后强制终止。每次运行必须满足
 `perf/environment_forced_terminations=0`；非零表示真实的环境进程关闭故障，应阻止后续门。
+
+### rollout 逐步清缓存性能门
+
+持久 rollout session 当前在每次交互式生成后执行 `torch.cuda.empty_cache()`，这是
+保守的显存回收边界，但会同步 GPU，而且一个正式 update 最多重复 30 次。候选优化只
+关闭这一步缓存回收，不保留跨步 prefix cache，也不改变任务、请求、采样、训练张量或
+checkpoint。默认仍为 `1`；先运行一个相同 benchmark 候选：
+
+```bash
+GPUS=0,1,2,3 \
+PROFILE=benchmark \
+PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_BACKEND=native_batch \
+ENVIRONMENT_WORKERS=1 \
+ROLLOUT_EMPTY_CACHE_BETWEEN_STEPS=0 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=rollout-empty-cache-off-u1 \
+bash scripts/run_alfworld.sh train no_skill
+```
+
+使用同任务、同模型且保留默认清缓存的 native-batch benchmark 作为基线：
+
+```bash
+python scripts/compare_rollout_session_runs.py \
+  /absolute/path/to/native-batch-baseline \
+  /absolute/path/to/rollout-empty-cache-off-u1 \
+  --comparison-mode rollout-empty-cache
+```
+
+比较器默认要求核心 update 至少加速 `1.03x`，并报告两侧显存高水位。只有结果
+`passed=true`、无 OOM，且后续两个连续 benchmark update 的显存高水位和
+`perf/environment_forced_terminations` 均正常，才可考虑修改默认值。否则继续保留
+逐步清缓存。

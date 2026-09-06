@@ -43,6 +43,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["num_gpus"], 4)
         self.assertEqual(payload["trajectories_per_full_update"], 2)
         self.assertTrue(payload["persistent_rollout_session"])
+        self.assertTrue(payload["rollout_empty_cache_between_steps"])
         self.assertEqual(payload["environment_workers"], 1)
         self.assertEqual(payload["environment_backend"], "native_batch")
         self.assertFalse(payload["verbose_runtime_logs"])
@@ -57,6 +58,21 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertFalse(json.loads(output.getvalue())["persistent_rollout_session"])
+
+    def test_rollout_empty_cache_allows_guarded_opt_out(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + [
+            "--no-rollout-empty-cache-between-steps"
+        ]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertFalse(
+            json.loads(output.getvalue())["rollout_empty_cache_between_steps"]
+        )
 
     def test_environment_worker_count_is_explicitly_configurable(self) -> None:
         output = io.StringIO()

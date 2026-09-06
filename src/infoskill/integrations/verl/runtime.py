@@ -41,6 +41,7 @@ class VerlRuntimeConfig:
     soft_prefix_length: int = 5
     master_seed: int = 0
     persistent_rollout_session: bool = True
+    rollout_empty_cache_between_steps: bool = True
     verbose_runtime_logs: bool = False
 
 
@@ -351,6 +352,9 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.rollout.seed = settings.master_seed
     with open_dict(actor_ref.rollout):
         actor_ref.rollout.infoskill_hybrid_prefix = settings.require_hybrid_prefix
+        actor_ref.rollout.infoskill_empty_cache_between_steps = (
+            settings.rollout_empty_cache_between_steps
+        )
         for name, value in vllm_action_stop_settings("</action>").items():
             setattr(actor_ref.rollout, name, value)
     actor_ref.ref.log_prob_micro_batch_size_per_gpu = 4

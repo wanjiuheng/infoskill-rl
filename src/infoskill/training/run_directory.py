@@ -64,6 +64,7 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         normalized_options = dict(runtime_options)
         normalized_options.setdefault("environment_workers", 1)
         normalized_options.setdefault("environment_backend", "individual")
+        normalized_options.setdefault("rollout_empty_cache_between_steps", True)
         normalized["runtime_options"] = normalized_options
     return normalized
 

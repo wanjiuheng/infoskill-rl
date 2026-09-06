@@ -206,6 +206,33 @@ def _runtime_options(run_directory: Path) -> dict[str, object]:
     return dict(options) if isinstance(options, dict) else {}
 
 
+def _training_performance(run_directory: Path) -> dict[str, float | None]:
+    records = [
+        json.loads(line)
+        for line in (run_directory / "metrics.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if line.strip()
+    ]
+    training = [record for record in records if record.get("phase") == "train"]
+    core = [float(record["perf/core_update_seconds"]) for record in training]
+    allocated = [
+        float(record["perf/max_memory_allocated_gb"])
+        for record in training
+        if record.get("perf/max_memory_allocated_gb") is not None
+    ]
+    reserved = [
+        float(record["perf/max_memory_reserved_gb"])
+        for record in training
+        if record.get("perf/max_memory_reserved_gb") is not None
+    ]
+    return {
+        "core_seconds": sum(core) if core else None,
+        "max_memory_allocated_gb": max(allocated) if allocated else None,
+        "max_memory_reserved_gb": max(reserved) if reserved else None,
+    }
+
+
 def _session_setting(options: dict[str, object]) -> bool | None:
     value = options.get("persistent_rollout_session")
     return value if isinstance(value, bool) else None
@@ -221,6 +248,11 @@ def _environment_backend_setting(options: dict[str, object]) -> str | None:
     return value if value in {"individual", "native_batch"} else None
 
 
+def _empty_cache_setting(options: dict[str, object]) -> bool | None:
+    value = options.get("rollout_empty_cache_between_steps", True)
+    return value if isinstance(value, bool) else None
+
+
 def _settings_are_valid(
     comparison_mode: str,
     *,
@@ -230,6 +262,8 @@ def _settings_are_valid(
     optimized_environment_workers: int | None,
     baseline_environment_backend: str | None = "individual",
     optimized_environment_backend: str | None = "individual",
+    baseline_empty_cache: bool | None = True,
+    optimized_empty_cache: bool | None = True,
 ) -> bool:
     if comparison_mode == "persistent-session":
         return baseline_session is False and optimized_session is True
@@ -252,7 +286,29 @@ def _settings_are_valid(
             and baseline_environment_backend == "individual"
             and optimized_environment_backend == "native_batch"
         )
+    if comparison_mode == "rollout-empty-cache":
+        return (
+            baseline_session is True
+            and optimized_session is True
+            and baseline_environment_workers == 1
+            and optimized_environment_workers == 1
+            and baseline_environment_backend == "native_batch"
+            and optimized_environment_backend == "native_batch"
+            and baseline_empty_cache is True
+            and optimized_empty_cache is False
+        )
     raise ValueError(f"unsupported comparison mode: {comparison_mode}")
+
+
+def _performance_is_valid(
+    comparison_mode: str,
+    *,
+    core_speedup: float | None,
+    minimum_core_speedup: float,
+) -> bool:
+    if comparison_mode != "rollout-empty-cache":
+        return True
+    return core_speedup is not None and core_speedup >= minimum_core_speedup
 
 
 def main() -> int:
@@ -260,9 +316,15 @@ def main() -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("optimized", type=Path)
     parser.add_argument("--logprob-tolerance", type=float, default=1e-3)
+    parser.add_argument("--minimum-core-speedup", type=float, default=1.03)
     parser.add_argument(
         "--comparison-mode",
-        choices=("persistent-session", "environment-workers", "native-batch"),
+        choices=(
+            "persistent-session",
+            "environment-workers",
+            "native-batch",
+            "rollout-empty-cache",
+        ),
         default="persistent-session",
     )
     args = parser.parse_args()
@@ -274,6 +336,19 @@ def main() -> int:
     optimized_environment_workers = _environment_worker_setting(optimized_options)
     baseline_environment_backend = _environment_backend_setting(baseline_options)
     optimized_environment_backend = _environment_backend_setting(optimized_options)
+    baseline_empty_cache = _empty_cache_setting(baseline_options)
+    optimized_empty_cache = _empty_cache_setting(optimized_options)
+    baseline_performance = _training_performance(args.baseline)
+    optimized_performance = _training_performance(args.optimized)
+    baseline_core = baseline_performance["core_seconds"]
+    optimized_core = optimized_performance["core_seconds"]
+    core_speedup = (
+        baseline_core / optimized_core
+        if baseline_core is not None
+        and optimized_core is not None
+        and optimized_core > 0.0
+        else None
+    )
     report = compare_records(
         _read_traces(args.baseline),
         _read_traces(args.optimized),
@@ -287,6 +362,13 @@ def main() -> int:
         optimized_environment_workers=optimized_environment_workers,
         baseline_environment_backend=baseline_environment_backend,
         optimized_environment_backend=optimized_environment_backend,
+        baseline_empty_cache=baseline_empty_cache,
+        optimized_empty_cache=optimized_empty_cache,
+    )
+    performance_valid = _performance_is_valid(
+        args.comparison_mode,
+        core_speedup=core_speedup,
+        minimum_core_speedup=args.minimum_core_speedup,
     )
     report.update(
         {
@@ -299,10 +381,19 @@ def main() -> int:
             "optimized_environment_workers": optimized_environment_workers,
             "baseline_environment_backend": baseline_environment_backend,
             "optimized_environment_backend": optimized_environment_backend,
+            "baseline_rollout_empty_cache_between_steps": baseline_empty_cache,
+            "optimized_rollout_empty_cache_between_steps": optimized_empty_cache,
+            "baseline_performance": baseline_performance,
+            "optimized_performance": optimized_performance,
+            "core_speedup": core_speedup,
+            "minimum_core_speedup": args.minimum_core_speedup,
+            "performance_valid": performance_valid,
             "settings_valid": settings_valid,
         }
     )
-    report["passed"] = bool(report["passed"] and settings_valid)
+    report["passed"] = bool(
+        report["passed"] and settings_valid and performance_valid
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report["passed"] else 1
 
