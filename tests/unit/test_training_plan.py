@@ -38,7 +38,7 @@ class TrainingPlanTests(unittest.TestCase):
         )
         self.assertEqual(
             (pilot.max_updates, pilot.evaluation_kind),
-            (100, "train_monitor"),
+            (25, "train_monitor"),
         )
         self.assertEqual(
             (

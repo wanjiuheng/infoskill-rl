@@ -67,7 +67,10 @@ _REGISTERED_PLANS = {
     ),
     TrainingProfile.PILOT: TrainingPlan(
         profile=TrainingProfile.PILOT,
-        max_updates=100,
+        # One complete 25-update monitor/checkpoint cycle at the same
+        # per-update geometry as FORMAL. Longer learning evidence belongs to
+        # the fixed-budget formal run rather than a second 100-update pre-run.
+        max_updates=25,
         task_groups_per_update=8,
         rollouts_per_task=8,
         action_minibatch_size=256,

@@ -103,8 +103,9 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 RUN_NAME=m0-smoke \
 
 训练档位固定为 `smoke`、`integration`、`pilot`、`formal`。前三者允许用
 `MAX_UPDATES` 缩短联调；`formal` 固定 445 个 update，不能覆盖。推荐按
-`smoke(1 update) → smoke(2 updates) → integration(20 updates) → pilot(100 updates)`
-逐级推进，通过后再启动正式训练。`smoke`/`integration` 不评测，`pilot` 每 25
+`smoke(1 update) → smoke(2 updates) → pilot(25 updates)` 逐级推进，通过后再
+进入方法开发或冻结后的正式训练。`integration(20 updates)` 保留为中等形状的
+故障定位档位，不再是必经门禁。`smoke`/`integration` 不评测，`pilot` 每 25
 个 update 只评固定 train monitor，`formal` 每 25 个 update 评完整 140 条
 `valid_seen`。
 
@@ -142,6 +143,6 @@ Transformers 评测后端、ALFWorld/技能/INFO-SKILL 核心模块、M0 `no_ski
 GRPO 训练入口及可移植 LoRA checkpoint 已实现。M0 不使用 soft prefix，因此不受
 Qwen2.5-7B BF16 的 cross-backend Hybrid Prefix parity 结论阻塞。A800 上的真实
 smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植 checkpoint
-恢复已经通过；下一门是 M0 integration 稳定性运行。
+恢复已经通过；进入 M1 开发前的长稳门使用与正式训练相同形状的 25-update pilot。
 `raw_skill_prompt` 与 `infoskill` 训练当前保持 fail-fast；M1 正式训练仍受 Hybrid
 Prefix Input parity gate 约束。

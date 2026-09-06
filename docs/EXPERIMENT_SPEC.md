@@ -205,7 +205,7 @@ _Avoid_: non-divisible DataProto dispatch、silent sample duplication、padding 
 _Avoid_: 0.1-CPU default workers、nested CPU oversubscription、world-size-dependent global group batch
 
 **Formal Training Budget**:
-M0/M1 首版正式训练各自对 3,553 个 train 任务执行一次带种子完整遍历：每个完整 update 含 8 个任务组，共 444 个完整 batch 和最后 1 个单任务组部分 batch，合计 445 个 optimizer updates、28,424 条 G=8 训练轨迹；环境硬上限为每条 30 步。冒烟、集成和 Qwen2.5-7B pilot 分别默认 2/20/100 updates。扩展到两遍只能通过统一 `num_train_passes` 参数，并在三个基座及对应 M0/M1 对比中保持同一预算。
+M0/M1 首版正式训练各自对 3,553 个 train 任务执行一次带种子完整遍历：每个完整 update 含 8 个任务组，共 444 个完整 batch 和最后 1 个单任务组部分 batch，合计 445 个 optimizer updates、28,424 条 G=8 训练轨迹；环境硬上限为每条 30 步。冒烟、集成和 Qwen2.5-7B pilot 分别默认 2/20/25 updates。pilot 使用与正式训练相同的 8 个任务组、G=8 和动作 minibatch，并完整跨过一次 25-update train-monitor/checkpoint 周期；integration 只作为中等形状故障定位档位，不是 pilot 前的必经门禁。100-update 预运行不再作为默认要求，长期学习与资源稳定性由带 fail-fast、周期 checkpoint 和评测的固定 445-update 正式运行承担。扩展到两遍只能通过统一 `num_train_passes` 参数，并在三个基座及对应 M0/M1 对比中保持同一预算。
 _Avoid_: ambiguous total_epochs、dropped final task、method-specific update budget
 
 **Paired Base Initialization**:
