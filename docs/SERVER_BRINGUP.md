@@ -391,3 +391,9 @@ bash scripts/run_alfworld.sh train no_skill
 
 在完成 64 轨迹 benchmark 严格 A/B 前，不得把 `native_batch` 设为默认值。比较时使用
 `--comparison-mode native-batch`；旧 run 未记录该字段时按 `individual` 解释。
+
+TextWorld 1.7.0 的默认 `_ChildEnv.__del__` 会在正常 close 后仍对环境进程发送
+`SIGTERM`；如果进程从 Ray driver fork，会继承 Ray 的 signal handler 并打印误导性的
+Ray SIGTERM 堆栈。INFO-SKILL 的 native batch 关闭路径先发送 TextWorld 原生 close
+控制消息并等待子进程正常退出，只在 2 秒总超时后强制终止。每次运行必须满足
+`perf/environment_forced_terminations=0`；非零表示真实的环境进程关闭故障，应阻止后续门。

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Mapping
 
@@ -8,6 +9,62 @@ from infoskill.domain.state import AgentHistoryEntry, CanonicalAgentState
 from infoskill.episode import EnvironmentTransition, TaskSpec
 
 from .environment import _single_sequence, _split_initial_observation, _world_checksum
+
+
+def _install_guarded_child_finalizer(child_class: type) -> None:
+    if getattr(child_class, "_infoskill_graceful_finalizer", False):
+        return
+    original_finalizer = getattr(child_class, "__del__", None)
+
+    def guarded_finalizer(child: object) -> None:
+        if getattr(child, "_infoskill_closed", False):
+            return
+        if original_finalizer is not None:
+            original_finalizer(child)
+
+    child_class.__del__ = guarded_finalizer  # type: ignore[attr-defined]
+    child_class._infoskill_graceful_finalizer = True  # type: ignore[attr-defined]
+
+
+def _gracefully_stop_batch_workers(batch_environment: object, *, timeout: float = 2.0) -> int:
+    children = tuple(getattr(batch_environment, "envs", ()))
+    if not children:
+        return 0
+    for child in children:
+        _install_guarded_child_finalizer(type(child))
+
+    for child in children:
+        process = getattr(child, "_process", None)
+        pipe = getattr(child, "_pipe", None)
+        if process is None or pipe is None or not process.is_alive():
+            continue
+        try:
+            # TextWorld's private worker loop recognizes this control message and
+            # exits through its finally block, closing the wrapped environment.
+            pipe.send(("close", "", ()))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+
+    deadline = time.monotonic() + timeout
+    forced = 0
+    for child in children:
+        process = getattr(child, "_process", None)
+        if process is None:
+            continue
+        process.join(max(0.0, deadline - time.monotonic()))
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            forced += 1
+        pipe = getattr(child, "_pipe", None)
+        if pipe is not None:
+            pipe.close()
+        child._infoskill_closed = True
+
+    envs = getattr(batch_environment, "envs", None)
+    if hasattr(envs, "clear"):
+        envs.clear()
+    return forced
 
 
 def _batch_infos(raw_infos: object, *, batch_size: int) -> tuple[dict[str, object], ...]:
@@ -46,6 +103,8 @@ class AlfworldEnvironmentBatch:
         self._tasks = tasks
         self._states: list[CanonicalAgentState] = []
         self._last_infos: list[dict[str, object]] = []
+        self._closed = False
+        self.forced_worker_terminations = 0
 
         # TextworldBatchGymEnv normally shuffles its game pool during seed(). A rollout
         # batch needs a stable task/rollout slot mapping, so feed reset() the exact list
@@ -173,4 +232,12 @@ class AlfworldEnvironmentBatch:
         return tuple(transitions)
 
     def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        batch_environment = getattr(self._raw_environment, "batch_env", None)
         self._raw_environment.close()  # type: ignore[attr-defined]
+        if batch_environment is not None:
+            self.forced_worker_terminations = _gracefully_stop_batch_workers(
+                batch_environment
+            )

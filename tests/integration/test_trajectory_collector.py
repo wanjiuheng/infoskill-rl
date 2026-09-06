@@ -382,6 +382,12 @@ class TrajectoryCollectorTests(unittest.TestCase):
             native_collector.performance_metrics()["perf/native_environment_batch"],
             1.0,
         )
+        self.assertEqual(
+            native_collector.performance_metrics()[
+                "perf/environment_forced_terminations"
+            ],
+            0.0,
+        )
 
     def test_native_batch_backend_falls_back_for_one_evaluation_slot(self) -> None:
         factory = _FakeNativeBatchFactory(rollouts_per_task=1)

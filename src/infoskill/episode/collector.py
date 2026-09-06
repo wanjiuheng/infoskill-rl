@@ -158,6 +158,7 @@ class TrajectoryCollector:
         conditioning_seconds = 0.0
         backend_generate_seconds = 0.0
         action_resolution_seconds = 0.0
+        environment_forced_terminations = 0.0
         native_batch = None
         use_native_batch = (
             self._environment_backend == "native_batch"
@@ -442,6 +443,9 @@ class TrajectoryCollector:
                 stage_started = time.perf_counter()
                 if native_batch is not None:
                     native_batch.close()
+                    environment_forced_terminations = float(
+                        getattr(native_batch, "forced_worker_terminations", 0)
+                    )
                 else:
                     _ordered_map(executor, _close_environment, flat_environments)
                 environment_close_seconds = time.perf_counter() - stage_started
@@ -462,4 +466,5 @@ class TrajectoryCollector:
                     "perf/native_environment_batch": float(
                         use_native_batch
                     ),
+                    "perf/environment_forced_terminations": environment_forced_terminations,
                 }

@@ -49,6 +49,59 @@ class _RawBatchEnvironment:
         return None
 
 
+class _FakeProcess:
+    def __init__(self) -> None:
+        self.alive = True
+        self.terminated = False
+
+    def is_alive(self) -> bool:
+        return self.alive
+
+    def join(self, timeout: float | None = None) -> None:
+        del timeout
+        self.alive = False
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.alive = False
+
+
+class _FakePipe:
+    def __init__(self) -> None:
+        self.commands: list[object] = []
+        self.closed = False
+
+    def send(self, command: object) -> None:
+        self.commands.append(command)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeChild:
+    def __init__(self) -> None:
+        self._pipe = _FakePipe()
+        self._process = _FakeProcess()
+        self.original_finalizer_called = False
+
+    def __del__(self) -> None:
+        self.original_finalizer_called = True
+
+
+class _FakeAsyncBatch:
+    def __init__(self) -> None:
+        self.envs = [_FakeChild(), _FakeChild()]
+
+
+class _RawBatchWithWorkers(_RawBatchEnvironment):
+    def __init__(self, gamefiles: tuple[str, ...]) -> None:
+        super().__init__(gamefiles)
+        self.batch_env = _FakeAsyncBatch()
+
+    def close(self) -> None:
+        return None
+
+
 class AlfworldEnvironmentBatchTests(unittest.TestCase):
     def test_batch_preserves_slot_order_and_returns_canonical_transitions(self) -> None:
         tasks = tuple(
@@ -99,6 +152,30 @@ class AlfworldEnvironmentBatchTests(unittest.TestCase):
         self.assertIsNone(transitions[0])
         self.assertIsNotNone(transitions[1])
         self.assertEqual(raw.actions, [("look", "look")])
+
+    def test_close_asks_textworld_children_to_exit_without_sigterm(self) -> None:
+        tasks = tuple(
+            TaskSpec(
+                task_id=f"game-{index}",
+                split="train",
+                task_type="pick_and_place_simple",
+                goal="goal",
+                environment_path=f"/data/game-{index}.tw-pddl",
+            )
+            for index in range(2)
+        )
+        raw = _RawBatchWithWorkers(tuple(task.environment_path for task in tasks))
+        children = tuple(raw.batch_env.envs)
+        batch = AlfworldEnvironmentBatch(raw, tasks=tasks)
+
+        batch.close()
+
+        for child in children:
+            self.assertEqual(child._pipe.commands, [("close", "", ())])
+            self.assertTrue(child._pipe.closed)
+            self.assertFalse(child._process.terminated)
+            child.__del__()
+            self.assertFalse(child.original_finalizer_called)
 
 
 if __name__ == "__main__":
