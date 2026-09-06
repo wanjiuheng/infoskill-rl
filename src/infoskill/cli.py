@@ -104,7 +104,7 @@ def _parser() -> argparse.ArgumentParser:
         "--balance-policy-tokens-across-ranks",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="balance token load across FSDP ranks within each PPO minibatch",
+        help="balance token load across FSDP ranks within each GRPO minibatch",
     )
     train.add_argument("--dry-run", action="store_true")
     return parser

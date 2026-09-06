@@ -532,7 +532,7 @@ OOM、余量不足或收益不足均保持 `16384`。`POLICY_MAX_TOKENS_PER_GPU`
 基线每个 rank 都收到 423 行，但 token 总数分别为 232201、281087、277543 和
 254791，最大/最小比为 `1.211`。INFO-SKILL 顶层编排没有调用固定 VERL trainer
 已有的长度均衡步骤，因此同步 FSDP 计算可能等待最长 rank。候选复用固定 VERL 的
-Karmarkar–Karp 等行数分区算法，并按“同一个同步 PPO minibatch”分别重排：每次
+Karmarkar–Karp 等行数分区算法，并按“同一个同步 GRPO minibatch”分别重排：每次
 optimizer step 的全局样本集合、顺序边界和超参数不变，只改变样本所在 rank；padding
 位置被显式追踪，不进入首 update 的真实 logprob 门禁。
 
