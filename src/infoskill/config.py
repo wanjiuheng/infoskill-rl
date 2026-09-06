@@ -55,6 +55,10 @@ _VALID_SEEN_DENOMINATORS = (
     TaskDenominator("pick_heat_then_place_in_recep", 16),
 )
 
+_VALID_SEEN_MANIFEST_SHA256 = (
+    "935b09a7e79f0fe37010081e4cf60ff33d29e301bf2e49822a492c0c02eeacd3"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class EvaluationConfig:
@@ -62,6 +66,7 @@ class EvaluationConfig:
     every_updates: int = 25
     infrastructure_retries: int = 2
     denominators: tuple[TaskDenominator, ...] = _VALID_SEEN_DENOMINATORS
+    manifest_sha256: str = _VALID_SEEN_MANIFEST_SHA256
 
     @property
     def total_tasks(self) -> int:
@@ -106,3 +111,5 @@ class ExperimentConfig:
         actual = {item.task_type: item.count for item in self.evaluation.denominators}
         if actual != expected or self.evaluation.total_tasks != 140:
             raise ValueError("valid_seen denominators must match the registered 140-task manifest")
+        if self.evaluation.manifest_sha256 != _VALID_SEEN_MANIFEST_SHA256:
+            raise ValueError("valid_seen manifest SHA256 must match the registered manifest")

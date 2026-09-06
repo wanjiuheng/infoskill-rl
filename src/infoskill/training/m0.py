@@ -6,12 +6,12 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from infoskill.app_config import AppConfig
 from infoskill.conditioning import NoSkillConditioner
 from infoskill.config import EvaluationConfig
-from infoskill.episode import TrajectoryCollector
+from infoskill.episode import TaskSpec, TrajectoryCollector
 from infoskill.evaluation import (
     EvaluationCheckpointScore,
     EvaluationRunner,
@@ -94,6 +94,25 @@ def run_m0_training(
             f"{EXPECTED_TRAIN_TASKS}"
         )
     scheduled_tasks = all_train_tasks
+    valid_seen_tasks: tuple[TaskSpec, ...] = ()
+    valid_seen_manifest_sha256: str | None = None
+    evaluation_config = EvaluationConfig()
+    if plan.evaluation_kind == "valid_seen":
+        valid_seen_tasks = discover_tasks(
+            config.paths.alfworld_data,
+            split=evaluation_config.split,
+        )
+        if len(valid_seen_tasks) != evaluation_config.total_tasks:
+            raise RuntimeError(
+                f"valid_seen discovery returned {len(valid_seen_tasks)} tasks instead "
+                f"of {evaluation_config.total_tasks}"
+            )
+        valid_seen_manifest_sha256 = task_manifest_sha256(valid_seen_tasks)
+        if valid_seen_manifest_sha256 != evaluation_config.manifest_sha256:
+            raise RuntimeError(
+                "valid_seen task manifest SHA256 does not match the registered "
+                f"manifest: {valid_seen_manifest_sha256}"
+            )
     available_updates = math.ceil(
         len(scheduled_tasks) / plan.task_groups_per_update
     )
@@ -131,6 +150,15 @@ def run_m0_training(
                 balance_policy_tokens_across_ranks
             ),
         },
+        "evaluation_manifest": (
+            {
+                "split": evaluation_config.split,
+                "task_count": evaluation_config.total_tasks,
+                "sha256": valid_seen_manifest_sha256,
+            }
+            if valid_seen_manifest_sha256 is not None
+            else None
+        ),
     }
     resume_source_num_gpus: int | None = None
     if checkpoint_to_load is not None:
@@ -165,6 +193,7 @@ def run_m0_training(
         "train_task_count": len(all_train_tasks),
         "scheduled_task_count": len(scheduled_tasks),
         "train_task_manifest_sha256": task_manifest_sha256(all_train_tasks),
+        "valid_seen_task_manifest_sha256": valid_seen_manifest_sha256,
         "skillrl_expected_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
         "policy_model": policy_model_identity.as_dict(),
         "verbose_runtime_logs": verbose_runtime_logs,
@@ -305,6 +334,8 @@ def run_m0_training(
         evaluate = _evaluation_callback(
             config=config,
             plan=plan,
+            tasks=valid_seen_tasks,
+            task_manifest_sha256_value=valid_seen_manifest_sha256,
             collector=evaluation_collector,
             run_directory=run_directory,
             traces=traces,
@@ -397,6 +428,8 @@ def _evaluation_callback(
     *,
     config: AppConfig,
     plan: TrainingPlan,
+    tasks: Sequence[TaskSpec],
+    task_manifest_sha256_value: str | None,
     collector: TrajectoryCollector,
     run_directory: Path,
     traces: ZstdJsonlTraceWriter,
@@ -409,7 +442,8 @@ def _evaluation_callback(
         return None
     if plan.evaluation_kind != "valid_seen":
         raise ValueError(f"unsupported evaluation kind: {plan.evaluation_kind}")
-    tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
+    if task_manifest_sha256_value is None:
+        raise RuntimeError("valid_seen evaluation requires a registered manifest identity")
     evaluation_config = EvaluationConfig()
     phase = "valid_seen"
     valid_scores = _load_valid_scores(run_directory)
@@ -451,6 +485,7 @@ def _evaluation_callback(
             "mean_steps": summary.mean_steps,
             "incomplete_reasons": ";".join(summary.incomplete_reasons),
             "trace": str(trace_path),
+            "task_manifest_sha256": task_manifest_sha256_value,
         }
         values.update(
             {
@@ -484,6 +519,7 @@ def _evaluation_callback(
             {
                 "schema_version": 1,
                 "disclosure": "validation-selected performance on valid_seen",
+                "task_manifest_sha256": task_manifest_sha256_value,
                 "rule": [
                     "max_macro_success",
                     "max_overall_success",

@@ -177,7 +177,7 @@ pilot 和 formal 按上一条固定检查点，对完整 140 条 `valid_seen` �
 _Avoid_: final-only health check、valid-seen hyperparameter tuning、highest-score-only reporting
 
 **Complete Valid-Seen Denominators**:
-正式评测 manifest 固定包含 140 条本地 `valid_seen` 游戏：`pick_and_place_simple=35`、`pick_two_obj_and_place=24`、`look_at_obj_in_light=13`、`pick_clean_then_place_in_recep=27`、`pick_cool_then_place_in_recep=25`、`pick_heat_then_place_in_recep=16`。overall success 为成功总数除以 140；每类 success 使用对应固定分母；macro success 为六类 success 的不加权算术平均。`done=True, won=False`、30 步耗尽、非法输出或生成长度上限等模型行为属于正常失败并保留在分母。Ray worker 崩溃、CUDA OOM、环境初始化异常、游戏文件缺失或序列化错误等基础设施故障以相同任务、checkpoint 和确定性配置最多重试 2 次；仍失败则整次评测标记 `incomplete`，不得产生正式成功率、参与 `best-valid` 或删除该样本缩小分母。有效正式评测必须满足 `evaluated=140` 且六类计数逐项匹配 manifest。
+正式评测 manifest 固定包含 140 条本地 `valid_seen` 游戏，其 `(task_id, task_type, goal)` 规范序列 SHA-256 为 `935b09a7e79f0fe37010081e4cf60ff33d29e301bf2e49822a492c0c02eeacd3`：`pick_and_place_simple=35`、`pick_two_obj_and_place=24`、`look_at_obj_in_light=13`、`pick_clean_then_place_in_recep=27`、`pick_cool_then_place_in_recep=25`、`pick_heat_then_place_in_recep=16`。overall success 为成功总数除以 140；每类 success 使用对应固定分母；macro success 为六类 success 的不加权算术平均。`done=True, won=False`、30 步耗尽、非法输出或生成长度上限等模型行为属于正常失败并保留在分母。Ray worker 崩溃、CUDA OOM、环境初始化异常、游戏文件缺失或序列化错误等基础设施故障以相同任务、checkpoint 和确定性配置最多重试 2 次；仍失败则整次评测标记 `incomplete`，不得产生正式成功率、参与 `best-valid` 或删除该样本缩小分母。有效正式评测必须满足预注册 SHA-256、`evaluated=140` 且六类计数逐项匹配 manifest。
 _Avoid_: partial evaluation、dynamic denominator、infrastructure failure counted as loss、failed-game omission
 
 **Reference Hardware Profile**:

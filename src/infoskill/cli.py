@@ -207,21 +207,31 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
 
     from infoskill.builders import build_transformers_evaluation
     from infoskill.evaluation import EvaluationRunner
-    from infoskill.integrations.alfworld import discover_tasks
+    from infoskill.integrations.alfworld import discover_tasks, task_manifest_sha256
     from infoskill.persistence import MetricLogger, ZstdJsonlTraceWriter
 
     run_directory = _run_directory(config, args.run_name or f"eval-{mode.value}")
     logger = _configure_logging(run_directory)
     _write_json(run_directory / "resolved_config.json", config.as_dict())
     tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
-    if len(tasks) != 140:
-        raise RuntimeError(f"valid_seen discovery returned {len(tasks)} tasks instead of 140")
+    evaluation_config = EvaluationConfig()
+    if len(tasks) != evaluation_config.total_tasks:
+        raise RuntimeError(
+            f"valid_seen discovery returned {len(tasks)} tasks instead of "
+            f"{evaluation_config.total_tasks}"
+        )
+    valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
+    if valid_seen_manifest_sha256 != evaluation_config.manifest_sha256:
+        raise RuntimeError(
+            "valid_seen task manifest SHA256 does not match the registered "
+            f"manifest: {valid_seen_manifest_sha256}"
+        )
     logger.info("Loading local policy and environment for mode=%s", mode.value)
     collector = build_transformers_evaluation(config, mode=mode)
     progress = tqdm(total=len(tasks), desc=f"valid_seen/{mode.value}", unit="task", dynamic_ncols=True)
     runner = EvaluationRunner(
         collector_factory=lambda: collector,
-        config=EvaluationConfig(),
+        config=evaluation_config,
         task_batch_size=config.eval_batch_size,
         master_seed=config.master_seed,
         on_progress=progress.update,
@@ -243,12 +253,18 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "invalid_action_rate": summary.invalid_action_rate,
         "mean_steps": summary.mean_steps,
         "incomplete_reasons": ";".join(summary.incomplete_reasons),
+        "task_manifest_sha256": valid_seen_manifest_sha256,
     }
     values.update({f"success/{key}": value for key, value in summary.per_task_type_success.items()})
     metrics.log(step=args.checkpoint_step, phase="valid_seen", values=values)
-    _write_json(run_directory / "valid_seen_summary.json", _summary_payload(run))
+    summary_payload = _summary_payload(run)
+    summary_payload["task_manifest_sha256"] = valid_seen_manifest_sha256
+    _write_json(run_directory / "valid_seen_summary.json", summary_payload)
     logger.info("Structured trace: %s", trace_path)
-    logger.info("Evaluation summary:\n%s", json.dumps(_summary_payload(run), ensure_ascii=False, indent=2))
+    logger.info(
+        "Evaluation summary:\n%s",
+        json.dumps(summary_payload, ensure_ascii=False, indent=2),
+    )
     return 0 if summary.is_complete else 3
 
 

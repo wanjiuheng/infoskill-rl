@@ -16,6 +16,10 @@ class ExperimentConfigTests(unittest.TestCase):
         self.assertEqual(config.generation.max_response_tokens, 256)
         self.assertFalse(config.generation.eval_do_sample)
         self.assertEqual(config.evaluation.total_tasks, 140)
+        self.assertEqual(
+            config.evaluation.manifest_sha256,
+            "935b09a7e79f0fe37010081e4cf60ff33d29e301bf2e49822a492c0c02eeacd3",
+        )
         config.validate()
 
 
