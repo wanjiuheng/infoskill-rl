@@ -174,6 +174,12 @@ _Avoid_: per-update evaluation、355-task train monitor、validation examples in
 
 **Periodic Valid-Seen Evaluation**:
 pilot 和 formal 按上一条固定检查点，对完整 140 条 `valid_seen` 执行无梯度确定性评测（M1 `latent=mu`、策略 greedy）。评测记录六类 success、macro success、overall success、非法动作率和平均步数，但不得用于调整 loss、学习率或其他超参数。每次保留对应 checkpoint；formal 同时报告固定预算结束的 `last` 与按预注册规则选择的 `best-valid`：先最大化六类 macro success，再比较 overall success、较低非法动作率，最后选更早 checkpoint。使用同一集合跟踪趋势、选模并报告属于 validation-selected performance，必须明确披露；所有基座与对比方法采用相同频率和规则。
+
+同一条训练曲线的不同 checkpoint 必须使用成对评测随机协议：固定任务顺序、
+`master_seed`、每任务 rollout id 与环境种子。checkpoint update 仅作为 trace、指标和
+报告的标签，不得进入评测环境或生成随机数的派生。补测旧 checkpoint 时，update 0
+与目标 checkpoint 也必须走同一 VERL/vLLM rollout adapter；加载失败必须 fail-fast，
+不得改用 Transformers 或未加载 adapter 的基座结果替代。
 _Avoid_: final-only health check、valid-seen hyperparameter tuning、highest-score-only reporting
 
 **Complete Valid-Seen Denominators**:

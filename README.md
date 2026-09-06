@@ -89,6 +89,17 @@ GPUS=0 bash scripts/run_alfworld.sh eval raw_skill_prompt
 # 训练后的 LoRA + INFO-SKILL 模块；先在 YAML 中填写 checkpoint/adapter
 GPUS=0 bash scripts/run_alfworld.sh eval infoskill
 
+# 与 M0 训练完全相同的四卡 VERL/vLLM 路径，评测共同 SFT 起点（update 0）
+GPUS=0,1,2,3 EVAL_BACKEND=verl \
+  RUN_NAME=m0-valid-seen-update0 \
+  bash scripts/run_alfworld.sh eval no_skill
+
+# 同一路径加载一个已提交的 M0 可移植 checkpoint；step 会从 manifest 自动读取
+GPUS=0,1,2,3 EVAL_BACKEND=verl \
+  POLICY_CHECKPOINT=/absolute/run/checkpoints/step-000025 \
+  RUN_NAME=m0-valid-seen-update25 \
+  bash scripts/run_alfworld.sh eval no_skill
+
 # 生成 train-only 严格专家 grounding 数据
 GPUS=0 bash scripts/run_alfworld.sh grounding
 
@@ -137,6 +148,13 @@ GPUS=0,1 PROFILE=smoke MAX_UPDATES=2 \
 - `metrics.jsonl`、`metrics.csv`、`valid_seen_summary.json`：六类及总体成功率。
 
 正式结果只有在 140 条任务全部得到明确终态、六类固定分母一致且无基础设施失败时才标记 complete。
+
+补测已有 M0 checkpoint 时，推荐使用 `scripts/run_m0_valid_seen_pair.sh`。它先评测
+共同 SFT 起点，再在全新的运行时中加载指定 checkpoint；两侧固定使用相同的
+`valid_seen` manifest、任务顺序、环境种子、greedy 解码、prompt、最大步数和
+VERL/vLLM 调用链。checkpoint 的 update 号只用于输出标签，不参与随机数派生。
+checkpoint 不完整、不是 portable、训练模式或基座模型指纹不匹配时会直接停止，
+不会静默退回基座模型或 Transformers 后端。
 
 ## 当前实现边界
 

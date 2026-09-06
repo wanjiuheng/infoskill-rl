@@ -1,0 +1,9 @@
+{
+  "files": [
+    "runtime/actor/actor_manifest.json",
+    "runtime/actor/adapter_model.safetensors"
+  ],
+  "global_update": 25,
+  "portable": true,
+  "schema_version": 1
+}

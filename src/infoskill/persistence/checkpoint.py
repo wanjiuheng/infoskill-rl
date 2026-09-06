@@ -23,6 +23,54 @@ class TrainerCheckpointState:
     semantic_counters: Mapping[str, int]
 
 
+@dataclass(frozen=True, slots=True)
+class PortableCheckpoint:
+    directory: Path
+    runtime_directory: Path
+    global_update: int
+
+
+def resolve_portable_checkpoint(path: str | Path) -> PortableCheckpoint:
+    """Validate a committed checkpoint and locate its portable runtime state."""
+
+    directory = Path(path).expanduser().resolve()
+    payload = _validated_checkpoint_payload(directory)
+    if payload.get("portable") is not True:
+        raise RuntimeError(f"checkpoint is not portable: {directory}")
+    runtime_directory = directory / "runtime"
+    actor_directory = runtime_directory / "actor"
+    if not actor_directory.is_dir():
+        raise RuntimeError(f"checkpoint has no portable actor state: {directory}")
+    try:
+        global_update = int(payload["global_update"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(f"checkpoint has no valid global update: {directory}") from error
+    if global_update < 0:
+        raise RuntimeError(f"checkpoint has a negative global update: {directory}")
+    actor_manifest_path = actor_directory / "actor_manifest.json"
+    if not actor_manifest_path.is_file():
+        raise RuntimeError(f"checkpoint has no portable actor manifest: {directory}")
+    actor_manifest = json.loads(actor_manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(actor_manifest, dict):
+        raise RuntimeError(f"portable actor manifest is not an object: {directory}")
+    try:
+        actor_global_update = int(actor_manifest["global_step"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"portable actor manifest has no valid global step: {directory}"
+        ) from error
+    if actor_global_update != global_update:
+        raise RuntimeError(
+            "checkpoint and portable actor global updates differ: "
+            f"{global_update} != {actor_global_update}"
+        )
+    return PortableCheckpoint(
+        directory=directory,
+        runtime_directory=runtime_directory,
+        global_update=global_update,
+    )
+
+
 class CheckpointManager:
     """Commit rank-0 portable state last; incomplete directories are never resumable."""
 
@@ -93,15 +141,7 @@ class CheckpointManager:
         return destination
 
     def validate(self, path: str | Path) -> dict[str, object]:
-        directory = Path(path)
-        completion = directory / "checkpoint.complete.json"
-        if not completion.is_file():
-            raise RuntimeError(f"checkpoint is incomplete: {directory}")
-        payload = json.loads(completion.read_text(encoding="utf-8"))
-        for relative in payload.get("files", []):
-            if not (directory / relative).is_file():
-                raise RuntimeError(f"checkpoint file is missing: {relative}")
-        return payload
+        return _validated_checkpoint_payload(Path(path))
 
     def load_trainer_state(self, path: str | Path) -> TrainerCheckpointState:
         directory = Path(path)
@@ -135,3 +175,24 @@ class CheckpointManager:
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _validated_checkpoint_payload(directory: Path) -> dict[str, object]:
+    completion = directory / "checkpoint.complete.json"
+    if not completion.is_file():
+        raise RuntimeError(f"checkpoint is incomplete: {directory}")
+    payload = json.loads(completion.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"checkpoint completion manifest is not an object: {directory}")
+    files = payload.get("files")
+    if not isinstance(files, list) or not all(
+        isinstance(relative, str) for relative in files
+    ):
+        raise RuntimeError(f"checkpoint completion manifest has invalid files: {directory}")
+    for relative in files:
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise RuntimeError(f"checkpoint file path is unsafe: {relative}")
+        if not (directory / relative_path).is_file():
+            raise RuntimeError(f"checkpoint file is missing: {relative}")
+    return payload

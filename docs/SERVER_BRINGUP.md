@@ -285,6 +285,47 @@ GPUS=0,1,2,3 PROFILE=formal RUN_NAME=m0-formal \
   bash scripts/run_alfworld.sh train no_skill
 ```
 
+### 用固定 140 条 valid_seen 补测旧 M0 pilot
+
+旧版 pilot 若只保存了 train-monitor 结果，不需要重训即可补测。下面的包装脚本会
+依次评测共同 SFT 起点（update 0）和 portable checkpoint；两次均使用四卡
+VERL/vLLM、固定 140 条 `valid_seen` 与完全相同的确定性随机协议。它不会修改源
+checkpoint，但会占用指定 GPU，并在 `runs/` 新建两份完整评测目录。
+
+短任务可以前台运行：
+
+```bash
+GPUS=0,1,2,3 \
+POLICY_CHECKPOINT=/absolute/run/checkpoints/step-000025 \
+BASE_RUN_NAME=m0-pilot-valid-seen-update0 \
+CHECKPOINT_RUN_NAME=m0-pilot-valid-seen-update25 \
+bash scripts/run_m0_valid_seen_pair.sh
+```
+
+远程连接可能中断时使用 `nohup`。先创建日志目录并用时间戳保存日志和 PID；退出
+SSH 后进程会继续运行，风险是程序也会继续占用四张 GPU，停止时应只终止记录的 PID：
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/m0-valid-seen-pair-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  POLICY_CHECKPOINT=/absolute/run/checkpoints/step-000025 \
+  BASE_RUN_NAME=m0-pilot-valid-seen-update0 \
+  CHECKPOINT_RUN_NAME=m0-pilot-valid-seen-update25 \
+  bash scripts/run_m0_valid_seen_pair.sh \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+用 `tail -f "${LOG}"` 查看两个 140-task 进度条。每个结果目录都会保存
+`valid_seen_summary.json`、`metrics.{jsonl,csv}` 和包含模型原始响应、动作解析及
+ALFWorld 原始输出的 `traces/valid-seen-*.jsonl.zst`。只有 summary 完整、
+`evaluated=140` 且 manifest SHA-256 匹配，结果才可用于 update 0/25 对比。
+
 ### 正式批量形状的无损性能基准
 
 `benchmark` 只运行一个与正式训练相同形状的 update（8 个任务、每个任务 8

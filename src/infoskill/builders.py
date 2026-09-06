@@ -8,7 +8,12 @@ from infoskill.rollout import GenerationParameters, TransformersBackend
 from infoskill.skills import EmbeddingRetriever, FixedSkillLibrary, SentenceTransformerEncoder, TemplateRetriever
 
 
-def build_transformers_evaluation(config: AppConfig, *, mode: SkillMode):
+def build_transformers_evaluation(
+    config: AppConfig,
+    *,
+    mode: SkillMode,
+    environment_backend: str = "native_batch",
+):
     if TransformersBackend is None:
         raise RuntimeError("Transformers evaluation requires torch and transformers")
     backend = TransformersBackend.from_pretrained(
@@ -53,6 +58,42 @@ def build_transformers_evaluation(config: AppConfig, *, mode: SkillMode):
             top_p=1.0,
             max_new_tokens=config.max_response_tokens,
         ),
+        environment_workers=1,
+        environment_backend=environment_backend,  # type: ignore[arg-type]
+    )
+
+
+def build_verl_no_skill_evaluation(
+    config: AppConfig,
+    *,
+    backend: object,
+    environment_backend: str = "native_batch",
+):
+    """Build the same deterministic no-skill collector used during M0 training."""
+
+    factory = AlfworldEnvironmentFactory.from_paths(
+        alfworld_source=config.paths.alfworld_source,
+        config_path=config.paths.alfworld_config,
+        data_root=config.paths.alfworld_data,
+        max_steps=config.max_steps,
+    )
+    from infoskill.episode import TrajectoryCollector
+
+    return TrajectoryCollector(
+        environment_factory=factory,
+        conditioner=NoSkillConditioner(),
+        rollout_backend=backend,  # type: ignore[arg-type]
+        max_steps=config.max_steps,
+        history_limit=config.history_length,
+        invalid_action_penalty=0.01,
+        generation_parameters=GenerationParameters(
+            do_sample=False,
+            temperature=0.0,
+            top_p=1.0,
+            max_new_tokens=config.max_response_tokens,
+        ),
+        environment_workers=1,
+        environment_backend=environment_backend,  # type: ignore[arg-type]
     )
 
 

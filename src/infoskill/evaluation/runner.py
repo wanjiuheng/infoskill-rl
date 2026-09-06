@@ -33,11 +33,14 @@ class EvaluationRunner:
         self.on_progress = on_progress
 
     def run(self, tasks: Sequence[TaskSpec], *, checkpoint_step: int = 0) -> EvaluationRun:
+        # The checkpoint step is an output label, not part of evaluation
+        # randomness. Every checkpoint must see the same environment stream.
+        del checkpoint_step
         records: list[EpisodeEvaluation] = []
         all_groups: list[TrajectoryGroup] = []
         for start in range(0, len(tasks), self.task_batch_size):
             batch = tuple(tasks[start : start + self.task_batch_size])
-            batch_records, groups = self._run_batch(batch, checkpoint_step=checkpoint_step)
+            batch_records, groups = self._run_batch(batch)
             records.extend(batch_records)
             all_groups.extend(groups)
             if self.on_progress:
@@ -50,7 +53,7 @@ class EvaluationRunner:
         )
 
     def _run_batch(
-        self, tasks: tuple[TaskSpec, ...], *, checkpoint_step: int
+        self, tasks: tuple[TaskSpec, ...]
     ) -> tuple[list[EpisodeEvaluation], tuple[TrajectoryGroup, ...]]:
         last_error: Exception | None = None
         for _ in range(self.config.infrastructure_retries + 1):
@@ -60,7 +63,7 @@ class EvaluationRunner:
                     tasks,
                     rollouts_per_task=1,
                     master_seed=self.master_seed,
-                    global_update=checkpoint_step,
+                    global_update=0,
                 )
                 return [
                     EpisodeEvaluation(

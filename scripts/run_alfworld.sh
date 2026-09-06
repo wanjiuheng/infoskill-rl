@@ -8,6 +8,8 @@ CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 GPUS="${GPUS:-${4:-0}}"                       # examples: 0 or 0,1 or 0,1,2,3
 RUN_NAME="${RUN_NAME:-}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-0}"
+EVAL_BACKEND="${EVAL_BACKEND:-transformers}" # transformers | verl
+POLICY_CHECKPOINT="${POLICY_CHECKPOINT:-}"
 PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark | pilot | formal
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
@@ -81,11 +83,48 @@ case "${ACTION}" in
     python -m infoskill.cli validate --config "${CONFIG}" --mode "${MODE}"
     ;;
   eval)
-    python -m infoskill.cli eval \
-      --config "${CONFIG}" \
-      --mode "${MODE}" \
-      --checkpoint-step "${CHECKPOINT_STEP}" \
-      "${EXTRA_ARGS[@]}"
+    IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
+    if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
+      echo "GPUS must contain at least one physical GPU index" >&2
+      exit 2
+    fi
+    for gpu_id in "${GPU_IDS[@]}"; do
+      if [[ ! "${gpu_id}" =~ ^[0-9]+$ ]]; then
+        echo "Invalid GPU index in GPUS=${GPUS}: ${gpu_id}" >&2
+        exit 2
+      fi
+    done
+    EVAL_ARGS=(
+      --config "${CONFIG}"
+      --mode "${MODE}"
+      --checkpoint-step "${CHECKPOINT_STEP}"
+      --backend "${EVAL_BACKEND}"
+      --num-gpus "${#GPU_IDS[@]}"
+      --environment-backend "${ENVIRONMENT_BACKEND}"
+    )
+    if [[ -n "${RUN_NAME}" ]]; then
+      EVAL_ARGS+=(--run-name "${RUN_NAME}")
+    fi
+    if [[ -n "${POLICY_CHECKPOINT}" ]]; then
+      EVAL_ARGS+=(--policy-checkpoint "${POLICY_CHECKPOINT}")
+    fi
+    case "${PERSISTENT_ROLLOUT_SESSION}" in
+      1) EVAL_ARGS+=(--persistent-rollout-session) ;;
+      0) EVAL_ARGS+=(--no-persistent-rollout-session) ;;
+      *)
+        echo "PERSISTENT_ROLLOUT_SESSION must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
+    case "${VERBOSE_RUNTIME_LOGS}" in
+      0) ;;
+      1) EVAL_ARGS+=(--verbose-runtime-logs) ;;
+      *)
+        echo "VERBOSE_RUNTIME_LOGS must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
+    python -m infoskill.cli eval "${EVAL_ARGS[@]}"
     ;;
   grounding)
     python -m infoskill.cli grounding --config "${CONFIG}" "${EXTRA_ARGS[@]}"

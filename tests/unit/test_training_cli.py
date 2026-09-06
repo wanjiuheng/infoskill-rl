@@ -207,6 +207,33 @@ class TrainingCliTests(unittest.TestCase):
         )
         self.assertTrue(payload["resume_forked"])
 
+    def test_verl_evaluation_accepts_gpu_and_portable_checkpoint_options(self) -> None:
+        arguments = [
+            "eval",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--mode",
+            "no_skill",
+            "--backend",
+            "verl",
+            "--num-gpus",
+            "4",
+            "--policy-checkpoint",
+            "/runs/pilot/checkpoints/step-000025",
+        ]
+
+        with patch("infoskill.cli._evaluate", return_value=0) as evaluate:
+            result = main(arguments)
+
+        parsed = evaluate.call_args.args[1]
+        self.assertEqual(result, 0)
+        self.assertEqual(parsed.backend, "verl")
+        self.assertEqual(parsed.num_gpus, 4)
+        self.assertEqual(
+            parsed.policy_checkpoint,
+            "/runs/pilot/checkpoints/step-000025",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

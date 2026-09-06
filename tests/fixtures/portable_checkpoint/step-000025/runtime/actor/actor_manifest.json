@@ -1,0 +1,6 @@
+{
+  "base_weights_included": false,
+  "format": "infoskill-rank0-portable-v1",
+  "global_step": 25,
+  "schema_version": 1
+}

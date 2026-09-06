@@ -47,6 +47,24 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
     evaluate.add_argument("--run-name")
     evaluate.add_argument("--checkpoint-step", type=int, default=0)
+    evaluate.add_argument(
+        "--backend",
+        choices=("transformers", "verl"),
+        default="transformers",
+    )
+    evaluate.add_argument("--num-gpus", type=int, default=1)
+    evaluate.add_argument("--policy-checkpoint")
+    evaluate.add_argument(
+        "--environment-backend",
+        choices=("individual", "native_batch"),
+        default="native_batch",
+    )
+    evaluate.add_argument(
+        "--persistent-rollout-session",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    evaluate.add_argument("--verbose-runtime-logs", action="store_true")
     grounding = subparsers.add_parser("grounding", help="generate strict train-only expert labels")
     grounding.add_argument("--config", required=True)
     grounding.add_argument("--run-name")
@@ -198,21 +216,47 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     mode = SkillMode(args.mode)
+    if args.num_gpus <= 0:
+        raise ValueError("num_gpus must be positive")
+    if args.checkpoint_step < 0:
+        raise ValueError("checkpoint_step must be non-negative")
+    if args.backend == "transformers" and args.num_gpus != 1:
+        raise ValueError("the Transformers evaluation backend requires num_gpus=1")
+    if args.backend == "verl" and mode is not SkillMode.NO_SKILL:
+        raise NotImplementedError(
+            "VERL checkpoint evaluation currently supports only mode=no_skill"
+        )
+    if args.backend == "verl" and config.paths.policy_adapter is not None:
+        raise ValueError(
+            "VERL checkpoint evaluation loads portable state explicitly; "
+            "paths.policy_adapter must be null"
+        )
+    if args.backend != "verl" and args.policy_checkpoint is not None:
+        raise ValueError("policy_checkpoint requires backend=verl")
     _validate_paths(
         config,
         mode=mode,
         require_checkpoint=mode is SkillMode.INFO_SKILL,
+        require_training_runtime=args.backend == "verl",
     )
     from tqdm.auto import tqdm
 
-    from infoskill.builders import build_transformers_evaluation
+    from infoskill.builders import (
+        build_transformers_evaluation,
+        build_verl_no_skill_evaluation,
+    )
     from infoskill.evaluation import EvaluationRunner
     from infoskill.integrations.alfworld import discover_tasks, task_manifest_sha256
-    from infoskill.persistence import MetricLogger, ZstdJsonlTraceWriter
+    from infoskill.persistence import (
+        MetricLogger,
+        ZstdJsonlTraceWriter,
+        resolve_portable_checkpoint,
+    )
+    from infoskill.persistence.model_identity import (
+        provenance_matches_pinned_model,
+        verify_policy_model_identity,
+    )
 
-    run_directory = _run_directory(config, args.run_name or f"eval-{mode.value}")
-    logger = _configure_logging(run_directory)
-    _write_json(run_directory / "resolved_config.json", config.as_dict())
     tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
     evaluation_config = EvaluationConfig()
     if len(tasks) != evaluation_config.total_tasks:
@@ -226,22 +270,156 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             "valid_seen task manifest SHA256 does not match the registered "
             f"manifest: {valid_seen_manifest_sha256}"
         )
-    logger.info("Loading local policy and environment for mode=%s", mode.value)
-    collector = build_transformers_evaluation(config, mode=mode)
-    progress = tqdm(total=len(tasks), desc=f"valid_seen/{mode.value}", unit="task", dynamic_ncols=True)
-    runner = EvaluationRunner(
-        collector_factory=lambda: collector,
-        config=evaluation_config,
-        task_batch_size=config.eval_batch_size,
-        master_seed=config.master_seed,
-        on_progress=progress.update,
+    checkpoint = (
+        resolve_portable_checkpoint(args.policy_checkpoint)
+        if args.policy_checkpoint is not None
+        else None
     )
+    evaluation_step = args.checkpoint_step
+    if checkpoint is not None:
+        if evaluation_step not in {0, checkpoint.global_update}:
+            raise ValueError(
+                "checkpoint_step differs from the portable checkpoint global update"
+            )
+        evaluation_step = checkpoint.global_update
+    elif args.backend == "verl" and evaluation_step != 0:
+        raise ValueError(
+            "nonzero VERL checkpoint_step requires a portable policy_checkpoint"
+        )
+
+    policy_identity = None
+    if args.backend == "verl":
+        policy_identity = verify_policy_model_identity(
+            config.paths.policy_model,
+            model_id=config.policy_model_id,
+        )
+        if checkpoint is not None:
+            provenance_path = checkpoint.directory / "provenance.json"
+            if not provenance_path.is_file():
+                raise RuntimeError(
+                    f"portable checkpoint has no policy provenance: {provenance_path}"
+                )
+            checkpoint_provenance = json.loads(
+                provenance_path.read_text(encoding="utf-8")
+            )
+            if not isinstance(checkpoint_provenance, dict):
+                raise RuntimeError(
+                    f"portable checkpoint provenance is not an object: {provenance_path}"
+                )
+            if checkpoint_provenance.get("mode") != mode.value:
+                raise RuntimeError("portable checkpoint mode is not no_skill")
+            if not provenance_matches_pinned_model(
+                checkpoint_provenance,
+                model_id=config.policy_model_id or "",
+            ):
+                raise RuntimeError(
+                    "portable checkpoint policy provenance differs from the "
+                    "registered model"
+                )
+
+    run_directory = _run_directory(
+        config,
+        args.run_name
+        or f"eval-{mode.value}-{args.backend}-step-{evaluation_step:06d}",
+    )
+    logger = _configure_logging(run_directory)
+    resolved = config.as_dict()
+    resolved["evaluation_runtime"] = {
+        "backend": args.backend,
+        "num_gpus": args.num_gpus,
+        "environment_backend": args.environment_backend,
+        "persistent_rollout_session": args.persistent_rollout_session,
+        "policy_checkpoint": (
+            str(checkpoint.directory) if checkpoint is not None else None
+        ),
+        "checkpoint_step": evaluation_step,
+    }
+    resolved["evaluation_manifest"] = {
+        "split": evaluation_config.split,
+        "task_count": evaluation_config.total_tasks,
+        "sha256": valid_seen_manifest_sha256,
+    }
+    if policy_identity is not None:
+        resolved["policy_model_identity"] = policy_identity.as_dict()
+    _write_json(run_directory / "resolved_config.json", resolved)
+
+    runtime = None
     try:
-        run = runner.run(tasks, checkpoint_step=args.checkpoint_step)
+        if args.backend == "verl":
+            from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
+
+            if VerlRuntime is None or VerlRuntimeConfig is None:
+                raise RuntimeError("the pinned VERL runtime is unavailable")
+            logger.info(
+                "Initializing VERL/vLLM evaluation runtime on %d GPU(s); worker logs=%s",
+                args.num_gpus,
+                "verbose" if args.verbose_runtime_logs else "quiet",
+            )
+            runtime = VerlRuntime.start(
+                VerlRuntimeConfig(
+                    skillrl_source=config.paths.skillrl_source,
+                    model_path=config.paths.policy_model,
+                    num_gpus=args.num_gpus,
+                    num_cpus=96,
+                    max_prompt_tokens=config.max_prompt_tokens,
+                    max_response_tokens=config.max_response_tokens,
+                    total_training_steps=max(1, evaluation_step),
+                    action_minibatch_size=256,
+                    policy_max_tokens_per_gpu=16_384,
+                    gpu_memory_utilization=0.45,
+                    require_hybrid_prefix=False,
+                    master_seed=config.master_seed,
+                    persistent_rollout_session=args.persistent_rollout_session,
+                    verbose_runtime_logs=args.verbose_runtime_logs,
+                    cuda_memory_poll_interval_ms=0,
+                    balance_policy_tokens_across_ranks=True,
+                )
+            )
+            if checkpoint is not None:
+                runtime.load_portable_state(checkpoint.runtime_directory)
+                logger.info(
+                    "Loaded portable policy checkpoint: %s",
+                    checkpoint.directory,
+                )
+            collector = build_verl_no_skill_evaluation(
+                config,
+                backend=runtime,
+                environment_backend=args.environment_backend,
+            )
+        else:
+            logger.info(
+                "Loading Transformers policy and environment for mode=%s",
+                mode.value,
+            )
+            collector = build_transformers_evaluation(
+                config,
+                mode=mode,
+                environment_backend=args.environment_backend,
+            )
+
+        progress = tqdm(
+            total=len(tasks),
+            desc=f"valid_seen/{mode.value}@{evaluation_step}",
+            unit="task",
+            dynamic_ncols=True,
+        )
+        runner = EvaluationRunner(
+            collector_factory=lambda: collector,
+            config=evaluation_config,
+            task_batch_size=config.eval_batch_size,
+            master_seed=config.master_seed,
+            on_progress=progress.update,
+        )
+        try:
+            with collector.rollout_session():
+                run = runner.run(tasks, checkpoint_step=evaluation_step)
+        finally:
+            progress.close()
     finally:
-        progress.close()
+        if runtime is not None:
+            runtime.close()
     trace_path = ZstdJsonlTraceWriter(run_directory).write_evaluation(
-        checkpoint_step=args.checkpoint_step, run=run
+        checkpoint_step=evaluation_step, run=run
     )
     summary = run.summary
     metrics = MetricLogger(run_directory)
@@ -256,7 +434,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "task_manifest_sha256": valid_seen_manifest_sha256,
     }
     values.update({f"success/{key}": value for key, value in summary.per_task_type_success.items()})
-    metrics.log(step=args.checkpoint_step, phase="valid_seen", values=values)
+    metrics.log(step=evaluation_step, phase="valid_seen", values=values)
     summary_payload = _summary_payload(run)
     summary_payload["task_manifest_sha256"] = valid_seen_manifest_sha256
     _write_json(run_directory / "valid_seen_summary.json", summary_payload)
