@@ -237,7 +237,7 @@ _Avoid_: default training mode、untracked latent likelihood
 _Avoid_: sequential actions as group samples、cross-task normalization、fake padded environment steps
 
 **Clipped GRPO Policy Update**:
-INFO-SKILL 不使用 critic、value loss 或 GAE；advantage 只来自同任务 G=8 完整轨迹的组内标准化回报。策略更新使用 old/new action-token logprob ratio 与 `clip_low=clip_high=0.2` 的 clipped GRPO surrogate，加上既定 reference KL。每批 rollout 默认只做 `grpo_update_epochs=1`，动作响应 minibatch 为 256（不足时使用全部有效样本），启用动态 token batch、每 GPU 上限 16,384 tokens、minibatch shuffle、entropy coefficient 0.001，并用 `seq-mean-token-mean` 防止较长 `<think>` 自动获得更大权重。INFO-SKILL 配置、日志和文档统一使用 `grpo_*` 名称；只有 VERL Runtime Adapter 映射到其历史 `ppo_*` 字段。
+INFO-SKILL 不使用 critic、value loss 或 GAE；advantage 只来自同任务 G=8 完整轨迹的组内标准化回报。策略更新使用 old/new action-token logprob ratio 与 `clip_low=clip_high=0.2` 的 clipped GRPO surrogate，加上既定 reference KL。每批 rollout 默认只做 `grpo_update_epochs=1`，动作响应 minibatch 为 256（不足时使用全部有效样本），启用动态 token batch、每 GPU 上限 16,384 tokens、minibatch shuffle、entropy coefficient 0.001，并用 `seq-mean-token-mean` 防止较长 `<think>` 自动获得更大权重。INFO-SKILL 配置、日志和文档统一使用 `grpo_*` 名称；只有 VERL Runtime Adapter 映射到其历史 `ppo_*` 字段。同一个全局动作 minibatch 的成员与边界保持不变，但默认按序列 token 数把样本重新分配到 FSDP ranks，使同步 worker 的输入 token 最大/最小比不超过 `1.02`；该重排不改变任务、轨迹、优势、optimizer step 或全局样本集合，并保留显式关闭开关用于回滚。
 _Avoid_: PPO critic semantics、token-count-weighted reasoning、public ppo naming
 
 **RL Training Corpus**:

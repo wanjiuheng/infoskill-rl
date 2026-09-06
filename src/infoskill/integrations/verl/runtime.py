@@ -48,7 +48,7 @@ class VerlRuntimeConfig:
     persistent_rollout_session: bool = True
     verbose_runtime_logs: bool = False
     cuda_memory_poll_interval_ms: int = 0
-    balance_policy_tokens_across_ranks: bool = False
+    balance_policy_tokens_across_ranks: bool = True
 
 
 class VerlRuntime:

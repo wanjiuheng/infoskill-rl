@@ -27,9 +27,9 @@ CUDA_MEMORY_POLL_INTERVAL_MS="${CUDA_MEMORY_POLL_INTERVAL_MS:-0}"
 # Dynamic old/ref/actor micro-batch budget. This does not alter vLLM rollout
 # scheduling. Keep the validated default unless running a monitored A/B gate.
 POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-16384}"
-# Candidate only. Reassigns samples among ranks while preserving each global
-# PPO minibatch's membership.
-BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-0}"
+# Validated default. Reassigns samples among ranks while preserving each
+# global GRPO minibatch's membership; set to 0 for rollback.
+BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"

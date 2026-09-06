@@ -55,7 +55,7 @@ def run_m0_training(
     verbose_runtime_logs: bool = False,
     cuda_memory_poll_interval_ms: int = 0,
     policy_max_tokens_per_gpu: int = 16_384,
-    balance_policy_tokens_across_ranks: bool = False,
+    balance_policy_tokens_across_ranks: bool = True,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 

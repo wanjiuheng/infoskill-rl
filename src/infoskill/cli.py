@@ -103,7 +103,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--balance-policy-tokens-across-ranks",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=True,
         help="balance token load across FSDP ranks within each PPO minibatch",
     )
     train.add_argument("--dry-run", action="store_true")

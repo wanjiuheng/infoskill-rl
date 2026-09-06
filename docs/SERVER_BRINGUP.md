@@ -510,7 +510,7 @@ OOM、余量不足或收益不足均保持 `16384`。`POLICY_MAX_TOKENS_PER_GPU`
 `16384`，不再尝试更大的 policy token budget；`20480` 只保留为已拒绝候选的显式
 复现实验参数。
 
-### 跨 rank 策略 token 均衡候选
+### 跨 rank 策略 token 均衡
 
 基线每个 rank 都收到 423 行，但 token 总数分别为 232201、281087、277543 和
 254791，最大/最小比为 `1.211`。INFO-SKILL 顶层编排没有调用固定 VERL trainer
@@ -544,5 +544,14 @@ python scripts/compare_rollout_session_runs.py \
 ```
 
 门禁除语义、logprob、至少 `3%` core 提速和至少 `8 GiB` 物理余量外，还要求均衡后
-`perf/tokens/max_to_min_ratio <= 1.02`。只有 `passed=true` 才进入两 update 寿命验证；
-在此之前 `BALANCE_POLICY_TOKENS_ACROSS_RANKS=0` 仍是正式默认。
+`perf/tokens/max_to_min_ratio <= 1.02`。单 update A/B 达到 `passed=true`：core 从
+`400.10s` 降到 `366.99s`，policy 从 `185.76s` 降到 `149.27s`，轨迹和 rollout
+logprob 完全一致，policy 最差物理空闲显存从 `14.76 GiB` 增加到 `23.45 GiB`。
+
+随后两个连续正式形状 update 均完整提交 checkpoint。均衡前最大/最小 token 比依次为
+`1.211` 和 `1.376`，均衡后为 `1.000015` 和 `1.000022`；core 分别为 `376.86s`
+和 `239.88s`，CPU 内存稳定在约 `52.9 GiB`，无 worker、OOM 或环境关闭异常。因此
+`BALANCE_POLICY_TOKENS_ACROSS_RANKS=1` 已成为正式默认，`0` 只作为显式回滚开关。
+在该默认值启用前创建、且 resolved config 中没有该字段的历史 checkpoint 仍按
+`false` 解释；恢复这类 checkpoint 时必须显式设置
+`BALANCE_POLICY_TOKENS_ACROSS_RANKS=0`，系统不会在续训中静默改变样本分配。
