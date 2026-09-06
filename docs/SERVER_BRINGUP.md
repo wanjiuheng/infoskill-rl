@@ -59,6 +59,23 @@ cp configs/alfworld_qwen25_7b.yaml configs/alfworld_qwen25_7b.local.yaml
 export CONFIG=configs/alfworld_qwen25_7b.local.yaml
 ```
 
+`policy_model` 可以放在不同的绝对路径，但训练前必须验证它确实是约定的共同初始化，
+而不是另一个同名目录。下面的命令只读模型配置、tokenizer 与权重并输出组合 SHA-256，
+不会加载 GPU；首轮 7B 的 `sha256` 必须为
+`ede304d8ae0fb27df55a9bcf22482b8a7d83626a4711f9525e0388f7b3d39d99`：
+
+```bash
+PYTHONPATH=src python -m infoskill.persistence.model_identity \
+  /root/autodl-tmp/wjh/models/Alfworld-7B-SFT/checkpoint-140 \
+  --model-id alfworld-7b-sft-checkpoint-140
+```
+
+YAML 只保存 `policy_model_id`，可信 revision 与 SHA-256 独立登记在代码中，避免同时
+修改模型路径和本地指纹绕过校验。训练入口会在启动 Ray/GPU 前复算并 fail-fast；实际
+路径可以变化，内容不能静默变化。新增共同初始化模型必须通过代码评审加入注册表，不能
+只改机器专用 YAML。验证后的完整逐文件 manifest 会写入 run 和 checkpoint 的
+`provenance.json`。
+
 第一轮使用 0 卡校验：
 
 ```bash

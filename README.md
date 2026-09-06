@@ -145,6 +145,6 @@ Qwen2.5-7B BF16 的 cross-backend Hybrid Prefix parity 结论阻塞。A800 上�
 smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植 checkpoint
 恢复已经通过；进入 M1 开发前的长稳门使用与正式训练相同形状的 25-update pilot。
 首轮 Qwen2.5-7B 训练统一从配置中的 `Alfworld-7B-SFT/checkpoint-140` 完整模型
-独立初始化，M0、raw-skill control 与 M1 不互相 warm-start。
+独立初始化，M0、`raw_skill_prompt` 与 M1 不互相 warm-start。
 `raw_skill_prompt` 与 `infoskill` 训练当前保持 fail-fast；M1 正式训练仍受 Hybrid
 Prefix Input parity gate 约束。

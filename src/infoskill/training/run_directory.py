@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
+from infoskill.persistence.model_identity import provenance_matches_pinned_model
+
 
 _RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
@@ -46,6 +48,11 @@ def validate_resume_config(
 
     previous_without_gpus = _with_runtime_defaults(previous)
     current_without_gpus = _with_runtime_defaults(current)
+    matching_model_id = _matching_policy_model_id(previous, current)
+    if matching_model_id is not None:
+        _validate_checkpoint_policy_provenance(checkpoint_path, matching_model_id)
+        previous_without_gpus = _without_policy_model_path(previous_without_gpus)
+        current_without_gpus = _without_policy_model_path(current_without_gpus)
     previous_without_gpus.pop("num_gpus", None)
     current_without_gpus.pop("num_gpus", None)
     if previous_without_gpus != current_without_gpus:
@@ -68,6 +75,54 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         normalized_options.setdefault("policy_max_tokens_per_gpu", 16_384)
         normalized_options.setdefault("balance_policy_tokens_across_ranks", False)
         normalized["runtime_options"] = normalized_options
+    return normalized
+
+
+def _matching_policy_model_id(
+    previous: Mapping[str, object],
+    current: Mapping[str, object],
+) -> str | None:
+    previous_app = previous.get("app_config")
+    current_app = current.get("app_config")
+    if not isinstance(previous_app, Mapping) or not isinstance(current_app, Mapping):
+        return None
+    previous_id = previous_app.get("policy_model_id")
+    current_id = current_app.get("policy_model_id")
+    if (
+        isinstance(previous_id, str)
+        and bool(previous_id.strip())
+        and previous_id == current_id
+    ):
+        return previous_id
+    return None
+
+
+def _validate_checkpoint_policy_provenance(
+    checkpoint: Path,
+    model_id: str,
+) -> None:
+    path = checkpoint / "provenance.json"
+    if not path.is_file():
+        raise RuntimeError(f"resume checkpoint has no policy provenance: {path}")
+    provenance = json.loads(path.read_text(encoding="utf-8"))
+    if not provenance_matches_pinned_model(provenance, model_id=model_id):
+        raise RuntimeError(
+            "resume checkpoint policy provenance differs from the registered model"
+        )
+
+
+def _without_policy_model_path(config: Mapping[str, object]) -> dict[str, object]:
+    normalized = dict(config)
+    app_config = normalized.get("app_config")
+    if not isinstance(app_config, Mapping):
+        return normalized
+    normalized_app = dict(app_config)
+    paths = normalized_app.get("paths")
+    if isinstance(paths, Mapping):
+        normalized_paths = dict(paths)
+        normalized_paths.pop("policy_model", None)
+        normalized_app["paths"] = normalized_paths
+    normalized["app_config"] = normalized_app
     return normalized
 
 

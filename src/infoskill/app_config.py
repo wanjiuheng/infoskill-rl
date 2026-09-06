@@ -23,6 +23,7 @@ class RuntimePaths:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     paths: RuntimePaths
+    policy_model_id: str | None = None
     max_steps: int = 30
     history_length: int = 2
     max_prompt_tokens: int = 4096
@@ -57,6 +58,11 @@ class AppConfig:
             raise ValueError("runtime limits must be positive")
         if min(self.general_top_k, self.task_top_k, self.mistake_count) < 0:
             raise ValueError("retrieval counts cannot be negative")
+        if self.policy_model_id is not None:
+            if not self.policy_model_id.strip():
+                raise ValueError("policy_model_id cannot be empty")
+            if self.policy_model_id != self.policy_model_id.strip():
+                raise ValueError("policy_model_id cannot have surrounding whitespace")
 
     def as_dict(self) -> dict[str, object]:
         from dataclasses import asdict

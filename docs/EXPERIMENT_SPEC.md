@@ -209,7 +209,7 @@ M0/M1 首版正式训练各自对 3,553 个 train 任务执行一次带种子完
 _Avoid_: ambiguous total_epochs、dropped final task、method-specific update budget
 
 **Paired Base Initialization**:
-Qwen2.5-7B 首轮 M0、raw-skill control 与 M1 都从同一份 `Alfworld-7B-SFT/checkpoint-140` 完整模型权重独立开始，不叠加已有 policy adapter，并使用相同 LoRA 初始化种子、train 任务顺序、G、预算、奖励、解码与评测协议；该 SFT 起点属于三个方法共享的初始化条件，不计为任何一个方法的额外训练。M1 自有模块使用单独固定种子并记录 `initialization_manifest`。update-0 的共同 no-skill SFT 起点 `valid_seen` 结果只计算一次供对应比较引用；raw-skill 因文本输入不同需独立评测 update 0。M1 不允许从已训练 M0 warm-start；`init_from_m0` 若实现只能标记为额外继续训练实验，不能进入主对比。扩展到 Qwen2.5-3B-Instruct 与 Qwen3-1.7B-Instruct 前，必须为每个规模明确并记录可比的初始化来源；不得把 7B 的任务 SFT 起点与其他规模未经任务 SFT 的原始 instruct 权重直接解释为同一初始化条件。
+Qwen2.5-7B 首轮 M0、`raw_skill_prompt` 与 M1 都从同一份 `Alfworld-7B-SFT/checkpoint-140` 完整模型权重独立开始，不叠加已有 policy adapter，并使用相同 LoRA 初始化种子、train 任务顺序、G、预算、奖励、解码与评测协议；该 SFT 起点属于三个方法共享的初始化条件，不计为任何一个方法的额外训练。M1 自有模块使用单独固定种子并记录 `initialization_manifest`。update-0 的共同 no-skill SFT 起点 `valid_seen` 结果只计算一次供对应比较引用；`raw_skill_prompt` 因文本输入不同需独立评测 update 0。M1 不允许从已训练 M0 warm-start；`init_from_m0` 若实现只能标记为额外继续训练实验，不能进入主对比。扩展到 Qwen2.5-3B-Instruct 与 Qwen3-1.7B-Instruct 前，必须为每个规模明确并记录可比的初始化来源；不得把 7B 的任务 SFT 起点与其他规模未经任务 SFT 的原始 instruct 权重直接解释为同一初始化条件。
 _Avoid_: 890-vs-445 update comparison、different LoRA seeds、duplicated base evaluation
 
 **Paired Randomness Protocol**:

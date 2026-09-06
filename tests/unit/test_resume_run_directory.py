@@ -141,6 +141,108 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                     allow_gpu_change=False,
                 )
 
+    def test_registered_policy_model_may_move_without_changing_identity(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 4,
+            "app_config": {
+                "policy_model_id": "alfworld-7b-sft-checkpoint-140",
+                "paths": {"policy_model": "/old/model"},
+            },
+        }
+        current = {
+            "num_gpus": 4,
+            "app_config": {
+                "policy_model_id": "alfworld-7b-sft-checkpoint-140",
+                "paths": {"policy_model": "/new/model"},
+            },
+        }
+        provenance = {
+            "policy_model": {
+                "algorithm": "infoskill-policy-model-v2",
+                "model_id": "alfworld-7b-sft-checkpoint-140",
+                "revision": "Alfworld-7B-SFT/checkpoint-140",
+                "sha256": (
+                    "ede304d8ae0fb27df55a9bcf22482b8a7d83626a4711f9525e0388f7b3d39d99"
+                ),
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(
+                Path,
+                "read_text",
+                side_effect=(json.dumps(previous), json.dumps(provenance)),
+            ),
+        ):
+            self.assertEqual(
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                ),
+                4,
+            )
+
+    def test_registered_model_resume_rejects_changed_provenance(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        config = {
+            "num_gpus": 4,
+            "app_config": {
+                "policy_model_id": "alfworld-7b-sft-checkpoint-140",
+                "paths": {"policy_model": "/same/model"},
+            },
+        }
+        changed = {
+            "policy_model": {
+                "algorithm": "infoskill-policy-model-v2",
+                "model_id": "alfworld-7b-sft-checkpoint-140",
+                "revision": "Alfworld-7B-SFT/checkpoint-140",
+                "sha256": "0" * 64,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(
+                Path,
+                "read_text",
+                side_effect=(json.dumps(config), json.dumps(changed)),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "policy provenance differs"):
+                validate_resume_config(
+                    checkpoint,
+                    config,
+                    allow_gpu_change=False,
+                )
+
+    def test_policy_model_id_cannot_change_during_resume(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 4,
+            "app_config": {
+                "policy_model_id": "approved-a",
+                "paths": {"policy_model": "/same/model"},
+            },
+        }
+        current = {
+            "num_gpus": 4,
+            "app_config": {
+                "policy_model_id": "approved-b",
+                "paths": {"policy_model": "/same/model"},
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,10 @@ paths:
   # Required only for mode=infoskill. Point at the exported inference .pt file.
   infoskill_checkpoint: null
 
+# Selects the immutable shared 7B SFT initialization registered in code.
+# The local path may move, but training rejects any content mismatch.
+policy_model_id: alfworld-7b-sft-checkpoint-140
+
 max_steps: 30
 history_length: 2
 max_prompt_tokens: 4096

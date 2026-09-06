@@ -31,6 +31,7 @@ from infoskill.persistence import (
     TrainerCheckpointState,
     ZstdJsonlTraceWriter,
 )
+from infoskill.persistence.model_identity import verify_policy_model_identity
 from infoskill.rollout import GenerationParameters
 
 from .plan import TrainingPlan, TrainingProfile
@@ -82,6 +83,11 @@ def run_m0_training(
             "policy_max_tokens_per_gpu must be at least max_prompt_tokens + "
             f"max_response_tokens ({minimum_token_budget})"
         )
+
+    policy_model_identity = verify_policy_model_identity(
+        config.paths.policy_model,
+        model_id=config.policy_model_id,
+    )
 
     all_train_tasks = discover_tasks(config.paths.alfworld_data, split="train")
     if len(all_train_tasks) != EXPECTED_TRAIN_TASKS:
@@ -173,6 +179,7 @@ def run_m0_training(
         "scheduled_task_count": len(scheduled_tasks),
         "train_task_manifest_sha256": monitor.source_manifest_sha256,
         "skillrl_expected_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
+        "policy_model": policy_model_identity.as_dict(),
         "verbose_runtime_logs": verbose_runtime_logs,
     }
     if checkpoint_to_load is not None:
