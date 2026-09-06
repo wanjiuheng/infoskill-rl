@@ -69,8 +69,11 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--environment-backend",
         choices=("individual", "native_batch"),
-        default="individual",
-        help="individual batch_size=1 environments or TextWorld native multiprocessing batch",
+        default="native_batch",
+        help=(
+            "TextWorld native multiprocessing batch (default) or individual "
+            "batch_size=1 environments for rollback/diagnosis"
+        ),
     )
     train.add_argument("--run-name")
     train.add_argument("--resume")

@@ -51,7 +51,7 @@ def run_m0_training(
     resume: str | None,
     persistent_rollout_session: bool = True,
     environment_workers: int = 1,
-    environment_backend: str = "individual",
+    environment_backend: str = "native_batch",
     verbose_runtime_logs: bool = False,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""

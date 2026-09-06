@@ -14,10 +14,10 @@ RESUME="${RESUME:-}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
-# Experimental until the environment-concurrency semantic parity gate passes.
+# Used only by the individual backend; native_batch owns one process per slot.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
-# `native_batch` uses TextWorld's own process-per-slot AsyncBatchEnv.
-ENVIRONMENT_BACKEND="${ENVIRONMENT_BACKEND:-individual}" # individual | native_batch
+# Validated by CPU differential, 64-trajectory A/B and two-update longevity gates.
+ENVIRONMENT_BACKEND="${ENVIRONMENT_BACKEND:-native_batch}" # native_batch | individual (rollback)
 # Keep BLAS/OpenMP from multiplying threads inside each environment worker.
 INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
 # Default keeps only INFO-SKILL milestones, errors and progress bars in terminal.

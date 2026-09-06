@@ -44,7 +44,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["trajectories_per_full_update"], 2)
         self.assertTrue(payload["persistent_rollout_session"])
         self.assertEqual(payload["environment_workers"], 1)
-        self.assertEqual(payload["environment_backend"], "individual")
+        self.assertEqual(payload["environment_backend"], "native_batch")
         self.assertFalse(payload["verbose_runtime_logs"])
 
     def test_persistent_rollout_session_allows_explicit_opt_out(self) -> None:
@@ -60,7 +60,12 @@ class TrainingCliTests(unittest.TestCase):
 
     def test_environment_worker_count_is_explicitly_configurable(self) -> None:
         output = io.StringIO()
-        arguments = self._arguments() + ["--environment-workers", "64"]
+        arguments = self._arguments() + [
+            "--environment-backend",
+            "individual",
+            "--environment-workers",
+            "64",
+        ]
 
         with patch("pathlib.Path.exists", return_value=True):
             with redirect_stdout(output):
@@ -69,9 +74,9 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue())["environment_workers"], 64)
 
-    def test_native_environment_batch_is_explicitly_configurable(self) -> None:
+    def test_individual_environment_backend_is_available_for_rollback(self) -> None:
         output = io.StringIO()
-        arguments = self._arguments() + ["--environment-backend", "native_batch"]
+        arguments = self._arguments() + ["--environment-backend", "individual"]
 
         with patch("pathlib.Path.exists", return_value=True):
             with redirect_stdout(output):
@@ -79,7 +84,7 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(
-            json.loads(output.getvalue())["environment_backend"], "native_batch"
+            json.loads(output.getvalue())["environment_backend"], "individual"
         )
 
     def test_native_environment_batch_rejects_thread_worker_count(self) -> None:

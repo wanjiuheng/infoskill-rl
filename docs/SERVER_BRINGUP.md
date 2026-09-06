@@ -375,7 +375,7 @@ PROFILE=full bash scripts/benchmark_alfworld_environment.sh
 `smoke` 门只要求 `semantic_exact=true`；只有 `full` 门额外要求环境工作至少加速
 `1.25x`。失败时返回非零退出码，不会改变正式训练入口；结果 JSON 写入 `runs/`。
 
-两个 CPU 门通过后，只能通过显式开关把候选后端用于训练 smoke：
+两个 CPU 门通过后，通过显式开关把候选后端用于训练 smoke：
 
 ```bash
 GPUS=0,1,2,3 \
@@ -389,8 +389,20 @@ RUN_NAME=m0-sft-noskill-native-batch-smoke-u1 \
 bash scripts/run_alfworld.sh train no_skill
 ```
 
-在完成 64 轨迹 benchmark 严格 A/B 前，不得把 `native_batch` 设为默认值。比较时使用
-`--comparison-mode native-batch`；旧 run 未记录该字段时按 `individual` 解释。
+该后端已经依次通过 64 轨迹 benchmark 严格 A/B 和两个连续 benchmark update
+寿命门，因此训练入口默认使用 `native_batch`。A/B 比较使用
+`--comparison-mode native-batch`；旧 run 未记录该字段时仍按 `individual` 解释，
+从旧 checkpoint 恢复时不会静默切换后端。若要诊断或回退，可显式设置：
+
+```bash
+ENVIRONMENT_BACKEND=individual ENVIRONMENT_WORKERS=1 \
+  bash scripts/run_alfworld.sh train no_skill
+```
+
+默认后端的服务器验证结果是：64 条轨迹与 `individual` 的任务、token、logprob、动作、
+环境状态和奖励严格一致；单 update 核心耗时从约 `818s` 降到约 `408s`。连续两次
+benchmark update 均完成，`perf/environment_forced_terminations=0`，CPU 内存从
+约 `50.7 GiB` 增至 `52.9 GiB`，未观察到环境进程泄漏。
 
 TextWorld 1.7.0 的默认 `_ChildEnv.__del__` 会在正常 close 后仍对环境进程发送
 `SIGTERM`；如果进程从 Ray driver fork，会继承 Ray 的 signal handler 并打印误导性的

@@ -116,6 +116,31 @@ class ResumeRunDirectoryTests(unittest.TestCase):
 
         self.assertEqual(source_gpus, 4)
 
+    def test_historical_checkpoint_cannot_silently_adopt_native_batch(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 4,
+            "runtime_options": {"persistent_rollout_session": True},
+        }
+        current = {
+            "num_gpus": 4,
+            "runtime_options": {
+                "persistent_rollout_session": True,
+                "environment_workers": 1,
+                "environment_backend": "native_batch",
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
