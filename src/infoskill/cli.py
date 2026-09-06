@@ -100,6 +100,12 @@ def _parser() -> argparse.ArgumentParser:
         default=16_384,
         help="old/ref/actor dynamic micro-batch token budget per GPU",
     )
+    train.add_argument(
+        "--balance-policy-tokens-across-ranks",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="balance token load across FSDP ranks within each PPO minibatch",
+    )
     train.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -156,6 +162,9 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                         args.cuda_memory_poll_interval_ms
                     ),
                     "policy_max_tokens_per_gpu": args.policy_max_tokens_per_gpu,
+                    "balance_policy_tokens_across_ranks": (
+                        args.balance_policy_tokens_across_ranks
+                    ),
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "dry_run": True,
@@ -181,6 +190,9 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         verbose_runtime_logs=args.verbose_runtime_logs,
         cuda_memory_poll_interval_ms=args.cuda_memory_poll_interval_ms,
         policy_max_tokens_per_gpu=args.policy_max_tokens_per_gpu,
+        balance_policy_tokens_across_ranks=(
+            args.balance_policy_tokens_across_ranks
+        ),
     )
 
 

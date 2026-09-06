@@ -55,6 +55,7 @@ def run_m0_training(
     verbose_runtime_logs: bool = False,
     cuda_memory_poll_interval_ms: int = 0,
     policy_max_tokens_per_gpu: int = 16_384,
+    balance_policy_tokens_across_ranks: bool = False,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 
@@ -127,6 +128,9 @@ def run_m0_training(
             "environment_backend": environment_backend,
             "cuda_memory_poll_interval_ms": cuda_memory_poll_interval_ms,
             "policy_max_tokens_per_gpu": policy_max_tokens_per_gpu,
+            "balance_policy_tokens_across_ranks": (
+                balance_policy_tokens_across_ranks
+            ),
         },
     }
     resume_source_num_gpus: int | None = None
@@ -199,6 +203,9 @@ def run_m0_training(
             total_training_steps=plan.max_updates,
             action_minibatch_size=plan.action_minibatch_size,
             policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
+            balance_policy_tokens_across_ranks=(
+                balance_policy_tokens_across_ranks
+            ),
             gpu_memory_utilization=0.45,
             require_hybrid_prefix=False,
             master_seed=config.master_seed,

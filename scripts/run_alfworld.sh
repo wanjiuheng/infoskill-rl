@@ -27,6 +27,9 @@ CUDA_MEMORY_POLL_INTERVAL_MS="${CUDA_MEMORY_POLL_INTERVAL_MS:-0}"
 # Dynamic old/ref/actor micro-batch budget. This does not alter vLLM rollout
 # scheduling. Keep the validated default unless running a monitored A/B gate.
 POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-16384}"
+# Candidate only. Reassigns samples among ranks while preserving each global
+# PPO minibatch's membership.
+BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-0}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -56,6 +59,10 @@ if [[ ! "${CUDA_MEMORY_POLL_INTERVAL_MS}" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "${POLICY_MAX_TOKENS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
   echo "POLICY_MAX_TOKENS_PER_GPU must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "1" ]]; then
+  echo "BALANCE_POLICY_TOKENS_ACROSS_RANKS must be 0 or 1" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -117,6 +124,10 @@ case "${ACTION}" in
     if [[ "${DRY_RUN}" == "1" ]]; then
       TRAIN_ARGS+=(--dry-run)
     fi
+    case "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" in
+      0) TRAIN_ARGS+=(--no-balance-policy-tokens-across-ranks) ;;
+      1) TRAIN_ARGS+=(--balance-policy-tokens-across-ranks) ;;
+    esac
     case "${PERSISTENT_ROLLOUT_SESSION}" in
       1) TRAIN_ARGS+=(--persistent-rollout-session) ;;
       0) TRAIN_ARGS+=(--no-persistent-rollout-session) ;;

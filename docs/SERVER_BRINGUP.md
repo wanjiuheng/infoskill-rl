@@ -497,3 +497,47 @@ python scripts/compare_rollout_session_runs.py \
 OOM、余量不足或收益不足均保持 `16384`。`POLICY_MAX_TOKENS_PER_GPU` 会写入 resolved config，
 恢复时不得静默修改。物理采样本身只用于诊断，正式 run 仍设
 `CUDA_MEMORY_POLL_INTERVAL_MS=0`。
+
+真实 A/B 结果拒绝了 `20480`：轨迹与 logprob 完全一致，policy 从 `185.76s`
+降到 `173.53s`，但 rollout 波动到 `218.32s` 后，core 只从 `400.10s` 降到
+`391.85s`，仅提速 `2.1%`，未达到 `3%` 门限；policy 最差物理空闲显存同时从
+`14.76 GiB` 降到 `8.06 GiB`，只比安全线高约 `64 MiB`。因此正式默认继续固定
+`16384`，不再尝试更大的 policy token budget；`20480` 只保留为已拒绝候选的显式
+复现实验参数。
+
+### 跨 rank 策略 token 均衡候选
+
+基线每个 rank 都收到 423 行，但 token 总数分别为 232201、281087、277543 和
+254791，最大/最小比为 `1.211`。INFO-SKILL 顶层编排没有调用固定 VERL trainer
+已有的长度均衡步骤，因此同步 FSDP 计算可能等待最长 rank。候选复用固定 VERL 的
+Karmarkar–Karp 等行数分区算法，并按“同一个同步 PPO minibatch”分别重排：每次
+optimizer step 的全局样本集合、顺序边界和超参数不变，只改变样本所在 rank；padding
+位置被显式追踪，不进入首 update 的真实 logprob 门禁。
+
+```bash
+GPUS=0,1,2,3 \
+PROFILE=benchmark \
+MAX_UPDATES=1 \
+PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_BACKEND=native_batch \
+ENVIRONMENT_WORKERS=1 \
+CUDA_MEMORY_POLL_INTERVAL_MS=200 \
+POLICY_MAX_TOKENS_PER_GPU=16384 \
+BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=rank-token-balance-u1 \
+bash scripts/run_alfworld.sh train no_skill
+```
+
+仍使用 `20260906T071133Z-cuda-memory-physical-u1` 作为未均衡 baseline：
+
+```bash
+python scripts/compare_rollout_session_runs.py \
+  "$BASELINE" \
+  "$OPTIMIZED" \
+  --comparison-mode rank-token-balance
+```
+
+门禁除语义、logprob、至少 `3%` core 提速和至少 `8 GiB` 物理余量外，还要求均衡后
+`perf/tokens/max_to_min_ratio <= 1.02`。只有 `passed=true` 才进入两 update 寿命验证；
+在此之前 `BALANCE_POLICY_TOKENS_ACROSS_RANKS=0` 仍是正式默认。

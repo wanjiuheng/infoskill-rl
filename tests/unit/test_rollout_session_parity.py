@@ -117,6 +117,33 @@ class RolloutSessionParityTests(unittest.TestCase):
             )
         )
 
+    def test_rank_balance_gate_changes_only_the_balance_setting(self) -> None:
+        settings = {
+            "baseline_session": True,
+            "optimized_session": True,
+            "baseline_environment_workers": 1,
+            "optimized_environment_workers": 1,
+            "baseline_environment_backend": "native_batch",
+            "optimized_environment_backend": "native_batch",
+            "baseline_policy_max_tokens_per_gpu": 16_384,
+            "optimized_policy_max_tokens_per_gpu": 16_384,
+            "baseline_memory_poll_interval_ms": 200,
+            "optimized_memory_poll_interval_ms": 200,
+            "baseline_balance_policy_tokens": False,
+            "optimized_balance_policy_tokens": True,
+        }
+
+        self.assertTrue(_settings_are_valid("rank-token-balance", **settings))
+        self.assertFalse(
+            _settings_are_valid(
+                "rank-token-balance",
+                **{
+                    **settings,
+                    "optimized_policy_max_tokens_per_gpu": 20_480,
+                },
+            )
+        )
+
     def test_small_logprob_drift_with_identical_semantics_passes(self) -> None:
         report = compare_records(
             [_record(logprob=-0.5)],

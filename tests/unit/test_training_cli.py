@@ -48,6 +48,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertFalse(payload["verbose_runtime_logs"])
         self.assertEqual(payload["cuda_memory_poll_interval_ms"], 0)
         self.assertEqual(payload["policy_max_tokens_per_gpu"], 16_384)
+        self.assertFalse(payload["balance_policy_tokens_across_ranks"])
 
     def test_persistent_rollout_session_allows_explicit_opt_out(self) -> None:
         output = io.StringIO()
@@ -154,6 +155,21 @@ class TrainingCliTests(unittest.TestCase):
         with patch("pathlib.Path.exists", return_value=True):
             with self.assertRaisesRegex(ValueError, "must be at least"):
                 main(arguments)
+
+    def test_policy_rank_token_balance_is_explicitly_configurable(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + [
+            "--balance-policy-tokens-across-ranks"
+        ]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(
+            json.loads(output.getvalue())["balance_policy_tokens_across_ranks"]
+        )
 
     def test_no_skill_training_does_not_require_embedding_or_skill_files(self) -> None:
         output = io.StringIO()

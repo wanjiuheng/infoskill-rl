@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from infoskill.distributed import pad_batch_to_divisor
+from infoskill.distributed import pad_batch_to_divisor, policy_rank_balanced_order
 
 
 class _FakeBatch:
@@ -44,6 +44,39 @@ class DistributedPaddingTests(unittest.TestCase):
 
         self.assertIs(padded, original)
         self.assertEqual(padding_count, 0)
+
+    def test_rank_balance_preserves_each_synchronized_minibatch(self) -> None:
+        token_counts = [10, 8, 6, 4, 1, 3, 5, 7]
+
+        def balanced_pairs(lengths, partitions, equal_size):
+            self.assertEqual(len(lengths), 4)
+            self.assertEqual(partitions, 2)
+            self.assertTrue(equal_size)
+            return [[0, 2], [1, 3]]
+
+        order = policy_rank_balanced_order(
+            token_counts,
+            world_size=2,
+            global_minibatch_size=4,
+            partitioner=balanced_pairs,
+        )
+
+        self.assertEqual(order, (0, 4, 2, 6, 1, 5, 3, 7))
+        self.assertEqual(
+            sum(token_counts[index] for index in order[:4]),
+            sum(token_counts[index] for index in order[4:]),
+        )
+        self.assertEqual(set(order[0:2] + order[4:6]), {0, 1, 4, 5})
+        self.assertEqual(set(order[2:4] + order[6:8]), {2, 3, 6, 7})
+
+    def test_rank_balance_rejects_non_divisible_global_minibatch(self) -> None:
+        with self.assertRaisesRegex(ValueError, "divisible"):
+            policy_rank_balanced_order(
+                [1, 2, 3, 4],
+                world_size=2,
+                global_minibatch_size=3,
+                partitioner=lambda *_: [[0, 1], [2, 3]],
+            )
 
 
 if __name__ == "__main__":

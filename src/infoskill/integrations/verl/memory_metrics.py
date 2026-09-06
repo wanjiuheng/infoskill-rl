@@ -153,6 +153,8 @@ def summarize_cuda_memory_snapshots(
 def summarize_rank_token_load(
     token_counts: Sequence[int],
     world_size: int,
+    *,
+    prefix: str = "perf/tokens",
 ) -> dict[str, float]:
     """Report the contiguous equal-row partition used by DataProto.chunk()."""
 
@@ -172,21 +174,21 @@ def summarize_rank_token_load(
     ]
     mean = sum(totals) / world_size
     metrics = {
-        "perf/tokens/rank_count": float(world_size),
-        "perf/tokens/rows_per_rank": float(rows_per_rank),
-        "perf/tokens/input_tokens_min": float(min(totals)),
-        "perf/tokens/input_tokens_max": float(max(totals)),
-        "perf/tokens/input_tokens_mean": float(mean),
-        "perf/tokens/max_to_min_ratio": (
+        f"{prefix}/rank_count": float(world_size),
+        f"{prefix}/rows_per_rank": float(rows_per_rank),
+        f"{prefix}/input_tokens_min": float(min(totals)),
+        f"{prefix}/input_tokens_max": float(max(totals)),
+        f"{prefix}/input_tokens_mean": float(mean),
+        f"{prefix}/max_to_min_ratio": (
             float(max(totals) / min(totals)) if min(totals) else float("inf")
         ),
-        "perf/tokens/max_to_mean_ratio": (
+        f"{prefix}/max_to_mean_ratio": (
             float(max(totals) / mean) if mean else float("inf")
         ),
     }
     metrics.update(
         {
-            f"perf/tokens/rank_{rank}/input_tokens": float(total)
+            f"{prefix}/rank_{rank}/input_tokens": float(total)
             for rank, total in enumerate(totals)
         }
     )

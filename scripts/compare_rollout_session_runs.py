@@ -236,6 +236,16 @@ def _training_performance(run_directory: Path) -> dict[str, float | None]:
         for record in training
         if record.get("perf/cuda/rollout_physical_min_free_gb_min") is not None
     ]
+    rank_token_ratios = [
+        float(record["perf/tokens/max_to_min_ratio"])
+        for record in training
+        if record.get("perf/tokens/max_to_min_ratio") is not None
+    ]
+    rank_token_ratios_before_balance = [
+        float(record["perf/tokens_before_balance/max_to_min_ratio"])
+        for record in training
+        if record.get("perf/tokens_before_balance/max_to_min_ratio") is not None
+    ]
 
     def total(key: str) -> float | None:
         values = [
@@ -257,6 +267,14 @@ def _training_performance(run_directory: Path) -> dict[str, float | None]:
         "rollout_physical_min_free_gb": (
             min(rollout_physical_free) if rollout_physical_free else None
         ),
+        "rank_token_max_to_min_ratio": (
+            max(rank_token_ratios) if rank_token_ratios else None
+        ),
+        "rank_token_max_to_min_ratio_before_balance": (
+            max(rank_token_ratios_before_balance)
+            if rank_token_ratios_before_balance
+            else None
+        ),
     }
 
 
@@ -273,6 +291,16 @@ def _environment_worker_setting(options: dict[str, object]) -> int | None:
 def _environment_backend_setting(options: dict[str, object]) -> str | None:
     value = options.get("environment_backend", "individual")
     return value if value in {"individual", "native_batch"} else None
+
+
+def _boolean_setting(
+    options: dict[str, object],
+    name: str,
+    *,
+    historical_default: bool,
+) -> bool | None:
+    value = options.get(name, historical_default)
+    return value if isinstance(value, bool) else None
 
 
 def _positive_integer_setting(
@@ -316,6 +344,8 @@ def _settings_are_valid(
     optimized_policy_max_tokens_per_gpu: int | None = 16_384,
     baseline_memory_poll_interval_ms: int | None = 0,
     optimized_memory_poll_interval_ms: int | None = 0,
+    baseline_balance_policy_tokens: bool | None = False,
+    optimized_balance_policy_tokens: bool | None = False,
 ) -> bool:
     if comparison_mode == "persistent-session":
         return baseline_session is False and optimized_session is True
@@ -355,6 +385,23 @@ def _settings_are_valid(
             and optimized_memory_poll_interval_ms
             == baseline_memory_poll_interval_ms
         )
+    if comparison_mode == "rank-token-balance":
+        return (
+            baseline_session is True
+            and optimized_session is True
+            and baseline_environment_workers == 1
+            and optimized_environment_workers == 1
+            and baseline_environment_backend == "native_batch"
+            and optimized_environment_backend == "native_batch"
+            and baseline_policy_max_tokens_per_gpu == 16_384
+            and optimized_policy_max_tokens_per_gpu == 16_384
+            and baseline_memory_poll_interval_ms is not None
+            and baseline_memory_poll_interval_ms > 0
+            and optimized_memory_poll_interval_ms
+            == baseline_memory_poll_interval_ms
+            and baseline_balance_policy_tokens is False
+            and optimized_balance_policy_tokens is True
+        )
     raise ValueError(f"unsupported comparison mode: {comparison_mode}")
 
 
@@ -370,11 +417,13 @@ def main() -> int:
             "environment-workers",
             "native-batch",
             "token-budget",
+            "rank-token-balance",
         ),
         default="persistent-session",
     )
     parser.add_argument("--minimum-core-speedup", type=float, default=1.03)
     parser.add_argument("--minimum-physical-free-gb", type=float, default=8.0)
+    parser.add_argument("--maximum-rank-token-ratio", type=float, default=1.02)
     args = parser.parse_args()
     baseline_options = _runtime_options(args.baseline)
     optimized_options = _runtime_options(args.optimized)
@@ -404,6 +453,16 @@ def main() -> int:
         "cuda_memory_poll_interval_ms",
         historical_default=0,
     )
+    baseline_balance_policy_tokens = _boolean_setting(
+        baseline_options,
+        "balance_policy_tokens_across_ranks",
+        historical_default=False,
+    )
+    optimized_balance_policy_tokens = _boolean_setting(
+        optimized_options,
+        "balance_policy_tokens_across_ranks",
+        historical_default=False,
+    )
     baseline_performance = _training_performance(args.baseline)
     optimized_performance = _training_performance(args.optimized)
     baseline_core = baseline_performance["core_seconds"]
@@ -432,6 +491,8 @@ def main() -> int:
         optimized_policy_max_tokens_per_gpu=optimized_policy_max_tokens_per_gpu,
         baseline_memory_poll_interval_ms=baseline_memory_poll_interval_ms,
         optimized_memory_poll_interval_ms=optimized_memory_poll_interval_ms,
+        baseline_balance_policy_tokens=baseline_balance_policy_tokens,
+        optimized_balance_policy_tokens=optimized_balance_policy_tokens,
     )
     optimized_policy_free = optimized_performance["policy_physical_min_free_gb"]
     optimized_rollout_free = optimized_performance["rollout_physical_min_free_gb"]
@@ -449,6 +510,17 @@ def main() -> int:
         and optimized_physical_free is not None
         and optimized_physical_free >= args.minimum_physical_free_gb
     )
+    optimized_rank_token_ratio = optimized_performance[
+        "rank_token_max_to_min_ratio"
+    ]
+    rank_balance_valid = (
+        optimized_rank_token_ratio is not None
+        and optimized_rank_token_ratio <= args.maximum_rank_token_ratio
+    )
+    performance_gate_required = args.comparison_mode in {
+        "token-budget",
+        "rank-token-balance",
+    }
     report.update(
         {
             "baseline": str(args.baseline.resolve()),
@@ -472,15 +544,30 @@ def main() -> int:
             "optimized_cuda_memory_poll_interval_ms": (
                 optimized_memory_poll_interval_ms
             ),
+            "baseline_balance_policy_tokens_across_ranks": (
+                baseline_balance_policy_tokens
+            ),
+            "optimized_balance_policy_tokens_across_ranks": (
+                optimized_balance_policy_tokens
+            ),
             "baseline_performance": baseline_performance,
             "optimized_performance": optimized_performance,
             "core_speedup": core_speedup,
             "minimum_core_speedup": args.minimum_core_speedup,
             "optimized_physical_min_free_gb": optimized_physical_free,
             "minimum_physical_free_gb": args.minimum_physical_free_gb,
+            "optimized_rank_token_max_to_min_ratio": (
+                optimized_rank_token_ratio
+            ),
+            "maximum_rank_token_ratio": args.maximum_rank_token_ratio,
+            "rank_balance_valid": (
+                rank_balance_valid
+                if args.comparison_mode == "rank-token-balance"
+                else None
+            ),
             "performance_valid": (
                 performance_valid
-                if args.comparison_mode == "token-budget"
+                if performance_gate_required
                 else None
             ),
             "settings_valid": settings_valid,
@@ -491,7 +578,12 @@ def main() -> int:
         and settings_valid
         and (
             performance_valid
-            if args.comparison_mode == "token-budget"
+            and (
+                rank_balance_valid
+                if args.comparison_mode == "rank-token-balance"
+                else True
+            )
+            if performance_gate_required
             else True
         )
     )

@@ -11,7 +11,7 @@ from typing import Mapping
 
 import ray
 
-from infoskill.distributed import pad_batch_to_divisor
+from infoskill.distributed import pad_batch_to_divisor, policy_rank_balanced_order
 from infoskill.episode import TrajectoryGroup
 from infoskill.learning import require_logprob_alignment, summarize_logprob_alignment
 from infoskill.rollout import GenerationRequest, GenerationResult
@@ -48,6 +48,7 @@ class VerlRuntimeConfig:
     persistent_rollout_session: bool = True
     verbose_runtime_logs: bool = False
     cuda_memory_poll_interval_ms: int = 0
+    balance_policy_tokens_across_ranks: bool = False
 
 
 class VerlRuntime:
@@ -192,12 +193,44 @@ class VerlRuntime:
             data,
             self.worker_group.world_size,
         )
-        token_load_metrics = summarize_rank_token_load(
-            [
-                int(value)
-                for value in data.batch["attention_mask"].sum(dim=-1).tolist()
-            ],
-            self.worker_group.world_size,
+        token_counts = [
+            int(value)
+            for value in data.batch["attention_mask"].sum(dim=-1).tolist()
+        ]
+        token_load_metrics: dict[str, float] = {}
+        real_positions: list[int] | None = None
+        if self.config.balance_policy_tokens_across_ranks:
+            import torch
+
+            from verl.utils.seqlen_balancing import (
+                get_seqlen_balanced_partitions,
+            )
+
+            token_load_metrics.update(
+                summarize_rank_token_load(
+                    token_counts,
+                    self.worker_group.world_size,
+                    prefix="perf/tokens_before_balance",
+                )
+            )
+            order = policy_rank_balanced_order(
+                token_counts,
+                world_size=self.worker_group.world_size,
+                global_minibatch_size=self.config.action_minibatch_size,
+                partitioner=get_seqlen_balanced_partitions,
+            )
+            data.reorder(torch.tensor(order, dtype=torch.long))
+            token_counts = [token_counts[index] for index in order]
+            real_positions = [
+                position
+                for position, original_index in enumerate(order)
+                if original_index < real_sample_count
+            ]
+        token_load_metrics.update(
+            summarize_rank_token_load(
+                token_counts,
+                self.worker_group.world_size,
+            )
         )
         training_codec_seconds = time.perf_counter() - stage_started
         if self.config.cuda_memory_poll_interval_ms > 0:
@@ -207,8 +240,16 @@ class VerlRuntime:
         old_logprob_seconds = time.perf_counter() - stage_started
         alignment_metrics: dict[str, float] = {}
         if global_update == 0:
-            real_data = data[:real_sample_count]
-            real_old = old[:real_sample_count]
+            real_data = (
+                data[real_positions]
+                if real_positions is not None
+                else data[:real_sample_count]
+            )
+            real_old = (
+                old[real_positions]
+                if real_positions is not None
+                else old[:real_sample_count]
+            )
             response_width = int(real_data.batch["responses"].shape[-1])
             response_mask = real_data.batch["attention_mask"][:, -response_width:].bool()
             alignment = summarize_logprob_alignment(
