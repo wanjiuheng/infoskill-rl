@@ -337,6 +337,24 @@ class VerlRuntime:
     def load_portable_state(self, directory: Path) -> None:
         self.worker_group.load_portable_checkpoint(str(directory / "actor"))
 
+    def compare_portable_actor_state(
+        self, directory: Path
+    ) -> tuple[Mapping[str, object], ...]:
+        snapshots = self.worker_group.compare_infoskill_portable_actor(
+            str(directory / "actor")
+        )
+        return tuple(snapshots)
+
+    def vllm_lora_snapshot(self) -> tuple[Mapping[str, object], ...]:
+        if not self._rollout_session_active:
+            raise RuntimeError("vLLM LoRA snapshot requires an active rollout session")
+        return tuple(self.worker_group.infoskill_vllm_lora_snapshot())
+
+    def reset_rollout_prefix_cache(self) -> None:
+        if not self._rollout_session_active:
+            raise RuntimeError("prefix-cache reset requires an active rollout session")
+        self.worker_group.reset_infoskill_rollout_prefix_cache()
+
     def close(self) -> None:
         if self._rollout_session_active:
             try:

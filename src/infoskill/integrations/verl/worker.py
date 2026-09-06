@@ -17,6 +17,11 @@ from verl.utils.fsdp_utils import layered_summon_lora_params
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
 
 from infoskill.fsdp_checkpoint import load_peft_adapter_under_full_fsdp_state
+from infoskill.checkpoint_effect import (
+    compare_named_tensors,
+    flatten_lora_model_tensors,
+    summarize_named_tensors,
+)
 from infoskill.integrations.verl.memory_metrics import PhysicalMemorySampler
 
 
@@ -131,6 +136,63 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             "rollout": self._infoskill_rollout_memory_snapshot,
             "policy": policy,
         }
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def compare_infoskill_portable_actor(self, directory: str) -> dict[str, object]:
+        """Compare every live FSDP LoRA tensor with a portable checkpoint."""
+
+        if self._infoskill_rollout_session_active:
+            raise RuntimeError("actor comparison requires the rollout session to be closed")
+        source = Path(directory)
+        expected = load_file(
+            str(source / "adapter_model.safetensors"),
+            device="cpu",
+        )
+        actual = layered_summon_lora_params(self.actor_module_fsdp)
+        report = compare_named_tensors(expected, actual)
+        report["rank"] = dist.get_rank()
+        return report
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def infoskill_vllm_lora_snapshot(self) -> dict[str, object]:
+        """Inspect the active pinned-vLLM adapter after FSDP-to-vLLM sync."""
+
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("vLLM LoRA inspection requires an active rollout session")
+        sharding = self.rollout_sharding_manager
+        manager = getattr(sharding.model_runner, "lora_manager", None)
+        if manager is None:
+            raise RuntimeError("pinned vLLM model runner has no LoRA manager")
+        adapter_manager = getattr(manager, "_adapter_manager", None)
+        if adapter_manager is None:
+            raise RuntimeError("pinned vLLM LoRA manager has no adapter registry")
+        adapters = adapter_manager.list_adapters()
+        active_ids = sorted(
+            int(adapter_id)
+            for adapter_id in sharding.inference_engine.llm_engine.list_loras()
+        )
+        return {
+            "rank": dist.get_rank(),
+            "active_adapter_ids": active_ids,
+            "registered_adapter_ids": sorted(int(adapter_id) for adapter_id in adapters),
+            "adapters": {
+                str(adapter_id): {
+                    "rank": int(adapter.rank),
+                    "summary": summarize_named_tensors(
+                        flatten_lora_model_tensors(adapter)
+                    ),
+                }
+                for adapter_id, adapter in adapters.items()
+            },
+        }
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def reset_infoskill_rollout_prefix_cache(self) -> None:
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("prefix-cache reset requires an active rollout session")
+        reset = self.rollout_sharding_manager.inference_engine.reset_prefix_cache()
+        if reset is False:
+            raise RuntimeError("vLLM refused the checkpoint-effect prefix-cache reset")
 
     def _start_infoskill_cuda_memory_sampler(self) -> None:
         interval = self._infoskill_cuda_memory_poll_interval_ms

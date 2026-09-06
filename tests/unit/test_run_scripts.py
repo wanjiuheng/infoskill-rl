@@ -20,6 +20,19 @@ class RunScriptTests(unittest.TestCase):
             checkpoint_invocation,
         )
 
+    def test_checkpoint_effect_action_requires_checkpoint_and_forwards_probe_cap(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("checkpoint-effect)", script)
+        self.assertIn('if [[ -z "${POLICY_CHECKPOINT}" ]]', script)
+        self.assertIn(
+            '--max-new-tokens "${CHECKPOINT_EFFECT_MAX_NEW_TOKENS}"',
+            script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

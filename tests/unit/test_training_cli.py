@@ -234,6 +234,31 @@ class TrainingCliTests(unittest.TestCase):
             "/runs/pilot/checkpoints/step-000025",
         )
 
+    def test_checkpoint_effect_accepts_portable_checkpoint_and_gpu_count(self) -> None:
+        arguments = [
+            "checkpoint-effect",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--num-gpus",
+            "4",
+            "--policy-checkpoint",
+            "/runs/pilot/checkpoints/step-000025",
+            "--max-new-tokens",
+            "48",
+        ]
+
+        with patch("infoskill.cli._checkpoint_effect", return_value=0) as diagnose:
+            result = main(arguments)
+
+        parsed = diagnose.call_args.args[1]
+        self.assertEqual(result, 0)
+        self.assertEqual(parsed.num_gpus, 4)
+        self.assertEqual(parsed.max_new_tokens, 48)
+        self.assertEqual(
+            parsed.policy_checkpoint,
+            "/runs/pilot/checkpoints/step-000025",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

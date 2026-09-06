@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "eval":
         return _evaluate(config, args)
+    if args.command == "checkpoint-effect":
+        return _checkpoint_effect(config, args)
     if args.command == "grounding":
         return _grounding(config, args)
     if args.command == "train":
@@ -65,6 +67,16 @@ def _parser() -> argparse.ArgumentParser:
         default=True,
     )
     evaluate.add_argument("--verbose-runtime-logs", action="store_true")
+    checkpoint_effect = subparsers.add_parser(
+        "checkpoint-effect",
+        help="diagnose portable checkpoint propagation into FSDP and vLLM",
+    )
+    checkpoint_effect.add_argument("--config", required=True)
+    checkpoint_effect.add_argument("--policy-checkpoint", required=True)
+    checkpoint_effect.add_argument("--num-gpus", type=int, required=True)
+    checkpoint_effect.add_argument("--run-name")
+    checkpoint_effect.add_argument("--max-new-tokens", type=int, default=64)
+    checkpoint_effect.add_argument("--verbose-runtime-logs", action="store_true")
     grounding = subparsers.add_parser("grounding", help="generate strict train-only expert labels")
     grounding.add_argument("--config", required=True)
     grounding.add_argument("--run-name")
@@ -444,6 +456,174 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         json.dumps(summary_payload, ensure_ascii=False, indent=2),
     )
     return 0 if summary.is_complete else 3
+
+
+def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:
+    """Run one-runtime before/after probes across the portable-checkpoint seam."""
+
+    if args.num_gpus <= 0:
+        raise ValueError("num_gpus must be positive")
+    if args.max_new_tokens <= 0 or args.max_new_tokens > config.max_response_tokens:
+        raise ValueError(
+            "max_new_tokens must be positive and no greater than max_response_tokens"
+        )
+    if config.paths.policy_adapter is not None:
+        raise ValueError(
+            "checkpoint-effect loads portable state explicitly; "
+            "paths.policy_adapter must be null"
+        )
+    _validate_paths(
+        config,
+        mode=SkillMode.NO_SKILL,
+        require_checkpoint=False,
+        require_training_runtime=True,
+    )
+
+    from infoskill.checkpoint_effect import (
+        build_checkpoint_effect_probes,
+        classify_checkpoint_effect,
+        compare_generation_results,
+        compare_vllm_to_checkpoint_aggregate,
+    )
+    from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
+    from infoskill.persistence import resolve_portable_checkpoint
+    from infoskill.persistence.model_identity import (
+        provenance_matches_pinned_model,
+        verify_policy_model_identity,
+    )
+
+    checkpoint = resolve_portable_checkpoint(args.policy_checkpoint)
+    provenance_path = checkpoint.directory / "provenance.json"
+    if not provenance_path.is_file():
+        raise RuntimeError(
+            f"portable checkpoint has no policy provenance: {provenance_path}"
+        )
+    checkpoint_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    if not isinstance(checkpoint_provenance, dict):
+        raise RuntimeError(
+            f"portable checkpoint provenance is not an object: {provenance_path}"
+        )
+    if checkpoint_provenance.get("mode") != SkillMode.NO_SKILL.value:
+        raise RuntimeError("portable checkpoint mode is not no_skill")
+    policy_identity = verify_policy_model_identity(
+        config.paths.policy_model,
+        model_id=config.policy_model_id,
+    )
+    if not provenance_matches_pinned_model(
+        checkpoint_provenance,
+        model_id=config.policy_model_id or "",
+    ):
+        raise RuntimeError(
+            "portable checkpoint policy provenance differs from the registered model"
+        )
+    if VerlRuntime is None or VerlRuntimeConfig is None:
+        raise RuntimeError("the pinned VERL runtime is unavailable")
+
+    run_directory = _run_directory(
+        config,
+        args.run_name
+        or f"checkpoint-effect-step-{checkpoint.global_update:06d}",
+    )
+    logger = _configure_logging(run_directory)
+    probes = build_checkpoint_effect_probes(
+        master_seed=config.master_seed,
+        max_new_tokens=args.max_new_tokens,
+    )
+    resolved = config.as_dict()
+    resolved["checkpoint_effect"] = {
+        "policy_checkpoint": str(checkpoint.directory),
+        "checkpoint_step": checkpoint.global_update,
+        "num_gpus": args.num_gpus,
+        "probe_count": len(probes),
+        "max_new_tokens": args.max_new_tokens,
+    }
+    resolved["policy_model_identity"] = policy_identity.as_dict()
+    _write_json(run_directory / "resolved_config.json", resolved)
+
+    logger.info(
+        "Initializing one VERL/vLLM runtime for checkpoint-effect diagnosis on %d GPU(s)",
+        args.num_gpus,
+    )
+    runtime = VerlRuntime.start(
+        VerlRuntimeConfig(
+            skillrl_source=config.paths.skillrl_source,
+            model_path=config.paths.policy_model,
+            num_gpus=args.num_gpus,
+            num_cpus=96,
+            max_prompt_tokens=config.max_prompt_tokens,
+            max_response_tokens=config.max_response_tokens,
+            total_training_steps=max(1, checkpoint.global_update),
+            action_minibatch_size=256,
+            policy_max_tokens_per_gpu=16_384,
+            gpu_memory_utilization=0.45,
+            require_hybrid_prefix=False,
+            master_seed=config.master_seed,
+            persistent_rollout_session=True,
+            verbose_runtime_logs=args.verbose_runtime_logs,
+            cuda_memory_poll_interval_ms=0,
+            balance_policy_tokens_across_ranks=True,
+        )
+    )
+    try:
+        with runtime.rollout_session():
+            runtime.reset_rollout_prefix_cache()
+            baseline_vllm = runtime.vllm_lora_snapshot()
+            baseline_results = runtime.generate(probes)
+        runtime.load_portable_state(checkpoint.runtime_directory)
+        actor_comparison = runtime.compare_portable_actor_state(
+            checkpoint.runtime_directory
+        )
+        with runtime.rollout_session():
+            runtime.reset_rollout_prefix_cache()
+            checkpoint_vllm = runtime.vllm_lora_snapshot()
+            checkpoint_results = runtime.generate(probes)
+    finally:
+        runtime.close()
+
+    generation_comparison = compare_generation_results(
+        baseline_results,
+        checkpoint_results,
+    )
+    vllm_checkpoint_comparison = compare_vllm_to_checkpoint_aggregate(
+        actor_comparison,
+        checkpoint_vllm,
+        lora_scaling=runtime.config.lora_alpha / runtime.config.lora_rank,
+    )
+    verdict = classify_checkpoint_effect(
+        actor_snapshots=actor_comparison,
+        vllm_snapshots=checkpoint_vllm,
+        vllm_checkpoint_comparison=vllm_checkpoint_comparison,
+        generation_comparison=generation_comparison,
+    )
+    report = {
+        "schema_version": 1,
+        "checkpoint": {
+            "directory": str(checkpoint.directory),
+            "global_update": checkpoint.global_update,
+        },
+        "probe": {
+            "request_ids": [request.request_id for request in probes],
+            "max_new_tokens": args.max_new_tokens,
+            "deterministic": True,
+        },
+        "actor_checkpoint_comparison": list(actor_comparison),
+        "baseline_vllm_lora": list(baseline_vllm),
+        "checkpoint_vllm_lora": list(checkpoint_vllm),
+        "vllm_checkpoint_aggregate_comparison": vllm_checkpoint_comparison,
+        "generation_comparison": generation_comparison,
+        "verdict": verdict,
+    }
+    output = run_directory / "checkpoint_effect.json"
+    _write_json(output, report)
+    logger.info(
+        "checkpoint-effect classification=%s actor_match=%s vllm_match=%s output_effect=%s",
+        verdict["classification"],
+        verdict["actor_matches_checkpoint_on_all_ranks"],
+        verdict["vllm_matches_checkpoint_aggregate_on_all_ranks"],
+        verdict["generation_effect_visible"],
+    )
+    logger.info("Diagnostic report: %s", output)
+    return 0 if verdict["passed"] else 5
 
 
 def _grounding(config: AppConfig, args: argparse.Namespace) -> int:

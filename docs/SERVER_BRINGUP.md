@@ -614,3 +614,38 @@ logprob 完全一致，policy 最差物理空闲显存从 `14.76 GiB` 增加到 
 在该默认值启用前创建、且 resolved config 中没有该字段的历史 checkpoint 仍按
 `false` 解释；恢复这类 checkpoint 时必须显式设置
 `BALANCE_POLICY_TOKENS_ACROSS_RANKS=0`，系统不会在续训中静默改变样本分配。
+
+### portable checkpoint 推理效果诊断门
+
+如果同一份固定 `valid_seen` manifest 上，update 0 与非零 checkpoint 的 140 条轨迹、
+token 和 logprob 完全一致，先不要重跑完整评测，也不要修改学习率。运行下面的轻量门，
+在同一个 VERL/vLLM runtime 内依次生成基线和加载 checkpoint 后的 3 条固定
+ALFWorld 风格 prompt：
+
+```bash
+GPUS=0,1,2,3 \
+POLICY_CHECKPOINT=/root/autodl-tmp/wjh/alfworld_eval/infoskill/runs/20260906T103804Z-m0-sft-noskill-pilot-u25/checkpoints/step-000025 \
+CHECKPOINT_EFFECT_MAX_NEW_TOKENS=64 \
+RUN_NAME=m0-pilot-update25-checkpoint-effect \
+bash scripts/run_alfworld.sh checkpoint-effect no_skill
+```
+
+该命令不创建 ALFWorld 环境、不训练也不修改 checkpoint。它只加载一次 7B runtime，
+随后检查四个边界，并把完整结果写到对应 run 的 `checkpoint_effect.json`：
+
+1. 磁盘 `adapter_model.safetensors` 与每个 rank 当前 FSDP LoRA 是否逐张量完全相同；
+2. 每个 rank 的 vLLM 是否注册并激活了唯一的非零 LoRA；
+3. 同一批确定性 prompt 的生成 token 是否改变；
+4. 即使 token 没变，已选 token 的 logprob 是否出现大于 `1e-7` 的变化。
+
+终端只打印一行分类和 JSON 路径。分类含义如下：
+
+- `checkpoint_to_fsdp_mismatch`：portable checkpoint 没有完整进入 actor；
+- `fsdp_to_vllm_missing_or_zero`：actor 正确，但 rollout 侧未激活非零 LoRA；
+- `checkpoint_effect_below_probe_precision`：两段权重链路均正确，但 3 条探针在当前
+  BF16 推理精度下 token/logprob 均未变化；
+- `checkpoint_effect_visible`：checkpoint 已在 rollout 输出或概率上产生可测影响。
+
+前三种情况命令返回非零退出码 5，其中前两种属于工程错误；第三种不是加载错误，表示
+当前 25 updates 产生的 LoRA 更新太小，不能把旧 355 条不同随机流上的小幅成功率变化
+当作策略提升证据。只有最后一种返回 0。
