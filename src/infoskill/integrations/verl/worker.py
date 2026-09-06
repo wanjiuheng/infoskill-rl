@@ -66,6 +66,32 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                 self._infoskill_rollout_session_active = False
             raise
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def prepare_infoskill_portable_checkpoint_load(self) -> dict[str, object]:
+        """Finish dummy vLLM base sync before a restored LoRA can be consumed."""
+
+        if self._infoskill_rollout_session_active:
+            raise RuntimeError("portable load preparation requires no active rollout session")
+        sharding = self.rollout_sharding_manager
+        ready_before = bool(sharding.base_sync_done)
+        if not ready_before:
+            entered = False
+            try:
+                sharding.__enter__()
+                entered = True
+            finally:
+                if entered:
+                    sharding.__exit__(None, None, None)
+        ready_after = bool(sharding.base_sync_done)
+        if not ready_after:
+            raise RuntimeError("vLLM base sync remained incomplete before portable load")
+        return {
+            "rank": dist.get_rank(),
+            "base_sync_done_before": ready_before,
+            "base_sync_done_after": ready_after,
+            "warmup_performed": not ready_before,
+        }
+
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences_in_infoskill_session(self, prompts):
         if not self._infoskill_rollout_session_active:

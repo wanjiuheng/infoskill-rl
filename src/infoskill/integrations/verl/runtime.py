@@ -23,6 +23,7 @@ from .memory_metrics import (
     summarize_cuda_memory_snapshots,
     summarize_rank_token_load,
 )
+from .portable_load import load_portable_state_after_base_sync
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,7 +336,10 @@ class VerlRuntime:
         }
 
     def load_portable_state(self, directory: Path) -> None:
-        self.worker_group.load_portable_checkpoint(str(directory / "actor"))
+        load_portable_state_after_base_sync(
+            worker_group=self.worker_group,
+            actor_directory=directory / "actor",
+        )
 
     def compare_portable_actor_state(
         self, directory: Path

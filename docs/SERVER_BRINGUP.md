@@ -650,3 +650,9 @@ bash scripts/run_alfworld.sh checkpoint-effect no_skill
 前三种情况命令返回非零退出码 5，其中前两种属于工程错误；第三种不是加载错误，表示
 当前 25 updates 产生的 LoRA 更新太小，不能把旧 355 条不同随机流上的小幅成功率变化
 当作策略提升证据。只有最后一种返回 0。
+
+固定 SkillRL 的 `dummy_dtensor` rollout 在第一次 sharding session 只同步冻结基座，
+不会注册 LoRA。INFO-SKILL 因此在每次 portable checkpoint 加载前先执行一次不生成
+token 的基座同步，再恢复 FSDP LoRA；后续首次正式 rollout 才能直接注册恢复后的
+adapter。这个顺序同时适用于独立 checkpoint 评测和断点续训，禁止删除该 warm-up 或
+把 checkpoint 恢复提前到它之前。
