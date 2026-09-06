@@ -60,7 +60,10 @@ def run_m0_training(
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 
     if config.paths.policy_adapter is not None:
-        raise ValueError("formal M0 must start from the unmodified base policy")
+        raise ValueError(
+            "formal M0 must start from the shared full-model initialization; "
+            "policy_adapter must be null"
+        )
     if num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
     if environment_workers <= 0:

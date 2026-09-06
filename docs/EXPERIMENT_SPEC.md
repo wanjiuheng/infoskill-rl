@@ -145,11 +145,11 @@ M0/M1 默认在有效生成动作 token 上使用 `low_var_kl`，系数 `0.01`�
 _Avoid_: KL-shaped environment reward、different actor/reference prefixes、projector suppression by KL
 
 **Shared-Base Reference Execution**:
-不按现有 VERL 默认路径创建和 CPU-offload 第二套 7B reference model。`InfoSkillActorWorker` 在同一个 actor FSDP Module 上顺序计算 actor 与 reference logprob：actor 分支开启 LoRA；reference 分支在所有 rank 同步进入 PEFT adapter-disable context，以 `torch.no_grad()` 使用相同 token、position/attention mask 和同一个 detach 后的当前 soft prefix，随后无条件恢复 LoRA 与原 train/eval 状态。共享基座只在一次 policy update 内顺序访问，禁止 actor/reference 并发。正式训练前的契约测试必须将该 reference 输出与单独加载的原始 Qwen 基座逐 token 比较并固化数值容差，同时验证 reference 无梯度、context 退出后 actor 输出与状态不变、异常路径也能恢复 adapter、所有 rank 切换次序一致；任何一项失败都阻断正式训练并要求显式选择独立 reference 方案，不能静默创建或 offload 第二模型。M0、M1 和所有 control modes 使用相同实现。
+不按现有 VERL 默认路径创建和 CPU-offload 第二套 7B reference model。`InfoSkillActorWorker` 在同一个 actor FSDP Module 上顺序计算 actor 与 reference logprob：actor 分支开启 LoRA；reference 分支在所有 rank 同步进入 PEFT adapter-disable context，以 `torch.no_grad()` 使用相同 token、position/attention mask 和同一个 detach 后的当前 soft prefix，随后无条件恢复 LoRA 与原 train/eval 状态。共享基座只在一次 policy update 内顺序访问，禁止 actor/reference 并发。正式训练前的契约测试必须将该 reference 输出与单独加载的同一初始策略（首轮 7B 为 SFT）逐 token 比较并固化数值容差，同时验证 reference 无梯度、context 退出后 actor 输出与状态不变、异常路径也能恢复 adapter、所有 rank 切换次序一致；任何一项失败都阻断正式训练并要求显式选择独立 reference 方案，不能静默创建或 offload 第二模型。M0、M1 和所有 control modes 使用相同实现。
 _Avoid_: separately materialized reference、reference CPU swap、prefix mismatch、adapter-state leak、concurrent shared-module forward
 
 **Shared LoRA Policy Configuration**:
-M0/M1 和三个策略基座都冻结原始 Qwen 参数，并在 `q_proj/k_proj/v_proj/o_proj/gate_proj/up_proj/down_proj` 上使用相同 LoRA：`rank=16`、`alpha=32`、`dropout=0`、`bias=none`；embedding 与 `lm_head` 不训练。零 dropout 用于避免 rollout 与训练重算产生非参数更新导致的 logprob 随机差异。正式 checkpoint 保存 LoRA adapter、INFO-SKILL 模块、优化器/调度器、随机状态和完整配置，不复制基座权重；rank 8/32 仅作显式消融。
+M0/M1 和三个策略基座都冻结各自的共同初始策略参数（首轮 7B 为 `Alfworld-7B-SFT/checkpoint-140`），并在 `q_proj/k_proj/v_proj/o_proj/gate_proj/up_proj/down_proj` 上使用相同 LoRA：`rank=16`、`alpha=32`、`dropout=0`、`bias=none`；embedding 与 `lm_head` 不训练。零 dropout 用于避免 rollout 与训练重算产生非参数更新导致的 logprob 随机差异。正式 checkpoint 保存 LoRA adapter、INFO-SKILL 模块、优化器/调度器、随机状态和完整配置，不复制共同初始策略权重；rank 8/32 仅作显式消融。
 _Avoid_: full-backbone fine-tuning、LoRA dropout in policy ratio、different ranks across main baselines
 
 **Separated Optimizers**:
@@ -209,7 +209,7 @@ M0/M1 首版正式训练各自对 3,553 个 train 任务执行一次带种子完
 _Avoid_: ambiguous total_epochs、dropped final task、method-specific update budget
 
 **Paired Base Initialization**:
-每个基座的 M0 与 M1 都从同一份未经 ALFWorld 训练的原始 Qwen 权重独立开始，使用相同 LoRA 初始化种子、train 任务顺序、G、预算、奖励、解码与评测协议；M1 自有模块使用单独固定种子并记录 `initialization_manifest`。update-0 的共同基座 `valid_seen` 结果只计算一次供两者引用。M1 不允许从已训练 M0 warm-start；`init_from_m0` 若实现只能标记为额外继续训练实验，不能进入主对比。
+Qwen2.5-7B 首轮 M0、raw-skill control 与 M1 都从同一份 `Alfworld-7B-SFT/checkpoint-140` 完整模型权重独立开始，不叠加已有 policy adapter，并使用相同 LoRA 初始化种子、train 任务顺序、G、预算、奖励、解码与评测协议；该 SFT 起点属于三个方法共享的初始化条件，不计为任何一个方法的额外训练。M1 自有模块使用单独固定种子并记录 `initialization_manifest`。update-0 的共同 no-skill SFT 起点 `valid_seen` 结果只计算一次供对应比较引用；raw-skill 因文本输入不同需独立评测 update 0。M1 不允许从已训练 M0 warm-start；`init_from_m0` 若实现只能标记为额外继续训练实验，不能进入主对比。扩展到 Qwen2.5-3B-Instruct 与 Qwen3-1.7B-Instruct 前，必须为每个规模明确并记录可比的初始化来源；不得把 7B 的任务 SFT 起点与其他规模未经任务 SFT 的原始 instruct 权重直接解释为同一初始化条件。
 _Avoid_: 890-vs-445 update comparison、different LoRA seeds、duplicated base evaluation
 
 **Paired Randomness Protocol**:
