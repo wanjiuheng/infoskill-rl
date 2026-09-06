@@ -141,7 +141,7 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                     allow_gpu_change=False,
                 )
 
-    def test_historical_checkpoint_preserves_empty_cache_default(self) -> None:
+    def test_historical_checkpoint_preserves_gradient_checkpointing_default(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
         previous = {
             "num_gpus": 4,
@@ -155,7 +155,7 @@ class ResumeRunDirectoryTests(unittest.TestCase):
             "num_gpus": 4,
             "runtime_options": {
                 **previous["runtime_options"],
-                "rollout_empty_cache_between_steps": True,
+                "actor_gradient_checkpointing": True,
             },
         }
         with (

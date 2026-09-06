@@ -82,8 +82,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         output = self.rollout_sharding_manager.postprocess_data(output)
         output = output.to("cpu")
         self._infoskill_rollout_session_generation_count += 1
-        if bool(self.config.rollout.get("infoskill_empty_cache_between_steps", True)):
-            get_torch_device().empty_cache()
+        get_torch_device().empty_cache()
         return output
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)

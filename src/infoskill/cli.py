@@ -84,12 +84,12 @@ def _parser() -> argparse.ArgumentParser:
         help="keep vLLM awake across environment steps within one rollout update",
     )
     train.add_argument(
-        "--rollout-empty-cache-between-steps",
+        "--actor-gradient-checkpointing",
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "call torch.cuda.empty_cache after every interactive generation step; "
-            "disable only for the guarded performance experiment"
+            "checkpoint actor activations to reduce memory (default); disable only "
+            "for the guarded A800 performance experiment"
         ),
     )
     train.add_argument(
@@ -140,8 +140,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "environment_workers": args.environment_workers,
                     "environment_backend": args.environment_backend,
                     "persistent_rollout_session": args.persistent_rollout_session,
-                    "rollout_empty_cache_between_steps": (
-                        args.rollout_empty_cache_between_steps
+                    "actor_gradient_checkpointing": (
+                        args.actor_gradient_checkpointing
                     ),
                     "verbose_runtime_logs": args.verbose_runtime_logs,
                     "resume": args.resume,
@@ -164,7 +164,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         run_name=args.run_name,
         resume=args.resume,
         persistent_rollout_session=args.persistent_rollout_session,
-        rollout_empty_cache_between_steps=args.rollout_empty_cache_between_steps,
+        actor_gradient_checkpointing=args.actor_gradient_checkpointing,
         environment_workers=args.environment_workers,
         environment_backend=args.environment_backend,
         verbose_runtime_logs=args.verbose_runtime_logs,

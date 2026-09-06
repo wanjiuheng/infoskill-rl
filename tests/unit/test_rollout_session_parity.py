@@ -85,45 +85,45 @@ class RolloutSessionParityTests(unittest.TestCase):
             )
         )
 
-    def test_empty_cache_gate_requires_true_to_false_on_native_batch(self) -> None:
+    def test_gradient_checkpointing_gate_requires_true_to_false(self) -> None:
         self.assertTrue(
             _settings_are_valid(
-                "rollout-empty-cache",
+                "actor-gradient-checkpointing",
                 baseline_session=True,
                 optimized_session=True,
                 baseline_environment_workers=1,
                 optimized_environment_workers=1,
                 baseline_environment_backend="native_batch",
                 optimized_environment_backend="native_batch",
-                baseline_empty_cache=True,
-                optimized_empty_cache=False,
+                baseline_gradient_checkpointing=True,
+                optimized_gradient_checkpointing=False,
             )
         )
         self.assertFalse(
             _settings_are_valid(
-                "rollout-empty-cache",
+                "actor-gradient-checkpointing",
                 baseline_session=True,
                 optimized_session=True,
                 baseline_environment_workers=1,
                 optimized_environment_workers=1,
                 baseline_environment_backend="native_batch",
                 optimized_environment_backend="native_batch",
-                baseline_empty_cache=False,
-                optimized_empty_cache=False,
+                baseline_gradient_checkpointing=False,
+                optimized_gradient_checkpointing=False,
             )
         )
 
-    def test_empty_cache_gate_requires_a_material_speedup(self) -> None:
+    def test_gradient_checkpointing_gate_requires_a_material_speedup(self) -> None:
         self.assertTrue(
             _performance_is_valid(
-                "rollout-empty-cache",
+                "actor-gradient-checkpointing",
                 core_speedup=1.04,
                 minimum_core_speedup=1.03,
             )
         )
         self.assertFalse(
             _performance_is_valid(
-                "rollout-empty-cache",
+                "actor-gradient-checkpointing",
                 core_speedup=1.02,
                 minimum_core_speedup=1.03,
             )

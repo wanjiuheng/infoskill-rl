@@ -248,8 +248,8 @@ def _environment_backend_setting(options: dict[str, object]) -> str | None:
     return value if value in {"individual", "native_batch"} else None
 
 
-def _empty_cache_setting(options: dict[str, object]) -> bool | None:
-    value = options.get("rollout_empty_cache_between_steps", True)
+def _gradient_checkpointing_setting(options: dict[str, object]) -> bool | None:
+    value = options.get("actor_gradient_checkpointing", True)
     return value if isinstance(value, bool) else None
 
 
@@ -262,8 +262,8 @@ def _settings_are_valid(
     optimized_environment_workers: int | None,
     baseline_environment_backend: str | None = "individual",
     optimized_environment_backend: str | None = "individual",
-    baseline_empty_cache: bool | None = True,
-    optimized_empty_cache: bool | None = True,
+    baseline_gradient_checkpointing: bool | None = True,
+    optimized_gradient_checkpointing: bool | None = True,
 ) -> bool:
     if comparison_mode == "persistent-session":
         return baseline_session is False and optimized_session is True
@@ -286,7 +286,7 @@ def _settings_are_valid(
             and baseline_environment_backend == "individual"
             and optimized_environment_backend == "native_batch"
         )
-    if comparison_mode == "rollout-empty-cache":
+    if comparison_mode == "actor-gradient-checkpointing":
         return (
             baseline_session is True
             and optimized_session is True
@@ -294,8 +294,8 @@ def _settings_are_valid(
             and optimized_environment_workers == 1
             and baseline_environment_backend == "native_batch"
             and optimized_environment_backend == "native_batch"
-            and baseline_empty_cache is True
-            and optimized_empty_cache is False
+            and baseline_gradient_checkpointing is True
+            and optimized_gradient_checkpointing is False
         )
     raise ValueError(f"unsupported comparison mode: {comparison_mode}")
 
@@ -306,9 +306,128 @@ def _performance_is_valid(
     core_speedup: float | None,
     minimum_core_speedup: float,
 ) -> bool:
-    if comparison_mode != "rollout-empty-cache":
+    if comparison_mode != "actor-gradient-checkpointing":
         return True
     return core_speedup is not None and core_speedup >= minimum_core_speedup
+
+
+def _latest_actor_checkpoint(run_directory: Path) -> Path:
+    checkpoints = sorted(
+        path / "runtime" / "actor"
+        for path in (run_directory / "checkpoints").glob("step-*")
+        if (path / "checkpoint.complete.json").is_file()
+    )
+    if not checkpoints:
+        raise RuntimeError(f"no complete actor checkpoint under {run_directory}")
+    return checkpoints[-1]
+
+
+def _compare_nested_values(
+    baseline: object,
+    optimized: object,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, object]:
+    import torch
+
+    mismatches: list[str] = []
+    tensor_count = 0
+    max_abs_error = 0.0
+
+    def visit(left: object, right: object, path: str) -> None:
+        nonlocal tensor_count, max_abs_error
+        if len(mismatches) >= 20:
+            return
+        if isinstance(left, torch.Tensor) and isinstance(right, torch.Tensor):
+            tensor_count += 1
+            if left.shape != right.shape or left.dtype != right.dtype:
+                mismatches.append(
+                    f"{path}: tensor {tuple(left.shape)}/{left.dtype} != "
+                    f"{tuple(right.shape)}/{right.dtype}"
+                )
+                return
+            if left.numel():
+                difference = (
+                    left.detach().cpu().float()
+                    - right.detach().cpu().float()
+                ).abs()
+                max_abs_error = max(max_abs_error, float(difference.max().item()))
+            if not torch.allclose(
+                left.detach().cpu(),
+                right.detach().cpu(),
+                atol=atol,
+                rtol=rtol,
+            ):
+                mismatches.append(f"{path}: tensor values exceed tolerance")
+            return
+        if isinstance(left, dict) and isinstance(right, dict):
+            if set(left) != set(right):
+                mismatches.append(f"{path}: mapping keys differ")
+                return
+            for key in sorted(left, key=str):
+                visit(left[key], right[key], f"{path}[{key!r}]")
+            return
+        if isinstance(left, (list, tuple)) and isinstance(right, type(left)):
+            if len(left) != len(right):
+                mismatches.append(f"{path}: sequence lengths differ")
+                return
+            for index, (left_item, right_item) in enumerate(zip(left, right)):
+                visit(left_item, right_item, f"{path}[{index}]")
+            return
+        if type(left) is not type(right) or left != right:
+            mismatches.append(f"{path}: non-tensor values differ")
+
+    visit(baseline, optimized, "$")
+    return {
+        "passed": not mismatches,
+        "tensor_count": tensor_count,
+        "max_abs_error": max_abs_error,
+        "atol": atol,
+        "rtol": rtol,
+        "mismatches": mismatches,
+    }
+
+
+def _compare_actor_checkpoints(
+    baseline_run: Path,
+    optimized_run: Path,
+    *,
+    atol: float,
+    rtol: float,
+) -> dict[str, object]:
+    import torch
+    from safetensors.torch import load_file
+
+    baseline = _latest_actor_checkpoint(baseline_run)
+    optimized = _latest_actor_checkpoint(optimized_run)
+    adapter = _compare_nested_values(
+        load_file(str(baseline / "adapter_model.safetensors"), device="cpu"),
+        load_file(str(optimized / "adapter_model.safetensors"), device="cpu"),
+        atol=atol,
+        rtol=rtol,
+    )
+    optimizer = _compare_nested_values(
+        torch.load(
+            baseline / "lora_optimizer_full.pt",
+            map_location="cpu",
+            weights_only=True,
+        ),
+        torch.load(
+            optimized / "lora_optimizer_full.pt",
+            map_location="cpu",
+            weights_only=True,
+        ),
+        atol=atol,
+        rtol=rtol,
+    )
+    return {
+        "passed": bool(adapter["passed"] and optimizer["passed"]),
+        "baseline_checkpoint": str(baseline),
+        "optimized_checkpoint": str(optimized),
+        "adapter": adapter,
+        "optimizer": optimizer,
+    }
 
 
 def main() -> int:
@@ -317,13 +436,15 @@ def main() -> int:
     parser.add_argument("optimized", type=Path)
     parser.add_argument("--logprob-tolerance", type=float, default=1e-3)
     parser.add_argument("--minimum-core-speedup", type=float, default=1.03)
+    parser.add_argument("--checkpoint-atol", type=float, default=1e-6)
+    parser.add_argument("--checkpoint-rtol", type=float, default=1e-5)
     parser.add_argument(
         "--comparison-mode",
         choices=(
             "persistent-session",
             "environment-workers",
             "native-batch",
-            "rollout-empty-cache",
+            "actor-gradient-checkpointing",
         ),
         default="persistent-session",
     )
@@ -336,8 +457,12 @@ def main() -> int:
     optimized_environment_workers = _environment_worker_setting(optimized_options)
     baseline_environment_backend = _environment_backend_setting(baseline_options)
     optimized_environment_backend = _environment_backend_setting(optimized_options)
-    baseline_empty_cache = _empty_cache_setting(baseline_options)
-    optimized_empty_cache = _empty_cache_setting(optimized_options)
+    baseline_gradient_checkpointing = _gradient_checkpointing_setting(
+        baseline_options
+    )
+    optimized_gradient_checkpointing = _gradient_checkpointing_setting(
+        optimized_options
+    )
     baseline_performance = _training_performance(args.baseline)
     optimized_performance = _training_performance(args.optimized)
     baseline_core = baseline_performance["core_seconds"]
@@ -362,13 +487,23 @@ def main() -> int:
         optimized_environment_workers=optimized_environment_workers,
         baseline_environment_backend=baseline_environment_backend,
         optimized_environment_backend=optimized_environment_backend,
-        baseline_empty_cache=baseline_empty_cache,
-        optimized_empty_cache=optimized_empty_cache,
+        baseline_gradient_checkpointing=baseline_gradient_checkpointing,
+        optimized_gradient_checkpointing=optimized_gradient_checkpointing,
     )
     performance_valid = _performance_is_valid(
         args.comparison_mode,
         core_speedup=core_speedup,
         minimum_core_speedup=args.minimum_core_speedup,
+    )
+    checkpoint_comparison = (
+        _compare_actor_checkpoints(
+            args.baseline,
+            args.optimized,
+            atol=args.checkpoint_atol,
+            rtol=args.checkpoint_rtol,
+        )
+        if args.comparison_mode == "actor-gradient-checkpointing"
+        else {"passed": True, "required": False}
     )
     report.update(
         {
@@ -381,18 +516,26 @@ def main() -> int:
             "optimized_environment_workers": optimized_environment_workers,
             "baseline_environment_backend": baseline_environment_backend,
             "optimized_environment_backend": optimized_environment_backend,
-            "baseline_rollout_empty_cache_between_steps": baseline_empty_cache,
-            "optimized_rollout_empty_cache_between_steps": optimized_empty_cache,
+            "baseline_actor_gradient_checkpointing": (
+                baseline_gradient_checkpointing
+            ),
+            "optimized_actor_gradient_checkpointing": (
+                optimized_gradient_checkpointing
+            ),
             "baseline_performance": baseline_performance,
             "optimized_performance": optimized_performance,
             "core_speedup": core_speedup,
             "minimum_core_speedup": args.minimum_core_speedup,
             "performance_valid": performance_valid,
+            "checkpoint_comparison": checkpoint_comparison,
             "settings_valid": settings_valid,
         }
     )
     report["passed"] = bool(
-        report["passed"] and settings_valid and performance_valid
+        report["passed"]
+        and settings_valid
+        and performance_valid
+        and checkpoint_comparison["passed"]
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report["passed"] else 1

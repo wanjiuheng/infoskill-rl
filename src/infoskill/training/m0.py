@@ -50,7 +50,7 @@ def run_m0_training(
     run_name: str | None,
     resume: str | None,
     persistent_rollout_session: bool = True,
-    rollout_empty_cache_between_steps: bool = True,
+    actor_gradient_checkpointing: bool = True,
     environment_workers: int = 1,
     environment_backend: str = "native_batch",
     verbose_runtime_logs: bool = False,
@@ -113,7 +113,7 @@ def run_m0_training(
         "training_plan": _plan_payload(plan),
         "runtime_options": {
             "persistent_rollout_session": persistent_rollout_session,
-            "rollout_empty_cache_between_steps": rollout_empty_cache_between_steps,
+            "actor_gradient_checkpointing": actor_gradient_checkpointing,
             "cross_step_prefix_cache": False,
             "environment_workers": environment_workers,
             "environment_backend": environment_backend,
@@ -192,7 +192,7 @@ def run_m0_training(
             require_hybrid_prefix=False,
             master_seed=config.master_seed,
             persistent_rollout_session=persistent_rollout_session,
-            rollout_empty_cache_between_steps=rollout_empty_cache_between_steps,
+            actor_gradient_checkpointing=actor_gradient_checkpointing,
             verbose_runtime_logs=verbose_runtime_logs,
         )
     )
