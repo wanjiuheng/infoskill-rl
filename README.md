@@ -105,9 +105,10 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 RUN_NAME=m0-smoke \
 `MAX_UPDATES` 缩短联调；`formal` 固定 445 个 update，不能覆盖。推荐按
 `smoke(1 update) → smoke(2 updates) → pilot(25 updates)` 逐级推进，通过后再
 进入方法开发或冻结后的正式训练。`integration(20 updates)` 保留为中等形状的
-故障定位档位，不再是必经门禁。`smoke`/`integration` 不评测，`pilot` 每 25
-个 update 只评固定 train monitor，`formal` 每 25 个 update 评完整 140 条
-`valid_seen`。
+故障定位档位，不再是必经门禁。`smoke`/`integration` 不评测；`pilot` 在
+update 0 和 25、`formal` 在 update 0、之后每 25 个 update 及训练结束时，均以
+确定性解码评完整固定 140 条 `valid_seen`。这些结果属于 validation-selected
+performance，不能当作独立隐藏测试集结果。
 
 断点恢复直接指向某个带 `checkpoint.complete.json` 的 `step-*` 目录。若保持原
 GPU 数，可不填写 `RUN_NAME` 并在源运行中继续；若把卡数从 4 改为 2，必须填写

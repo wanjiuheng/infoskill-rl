@@ -165,15 +165,15 @@ _Avoid_: double alpha1 scaling、length-dependent auxiliary weights、unlogged w
 _Avoid_: step-count-weighted trajectories、second online latent noise、multiple implicit aux steps per GRPO update
 
 **Auxiliary-Weight Tuning Rule**:
-首个端到端实现锁定 `fidelity/rate/ground = 1/0.001/0.1`。只有 raw/weighted loss、分支梯度范数、每维 KL、grounding Top-1 accuracy、fidelity 与 advantage 的相关性等训练诊断持续显示失衡时，才允许在固定 train-only 监控集上做单因素调整：`beta={1e-4,1e-3,1e-2}` 或 `grounding_weight={0.03,0.1,0.3}`，不默认执行完整网格搜索。禁止使用 140 条 `valid_seen` 选择权重；权重确定后，三个正式基座实验共用同一设置。
+首个端到端实现锁定 `fidelity/rate/ground = 1/0.001/0.1`。只有 raw/weighted loss、分支梯度范数、每维 KL、grounding Top-1 accuracy、fidelity 与 advantage 的相关性等 train-only 训练诊断持续显示失衡时，才允许做单因素调整：`beta={1e-4,1e-3,1e-2}` 或 `grounding_weight={0.03,0.1,0.3}`，不默认执行完整网格搜索。禁止使用 140 条 `valid_seen` 选择权重；权重确定后，三个正式基座实验共用同一设置。
 _Avoid_: validation-set tuning、simultaneous coefficient sweep、metric-free weight changes
 
-**Train-Only Monitor Split**:
-从六类 ALFWorld `train` 游戏中分别按相对路径稳定哈希排序选取 10%（约 355 条），固化为带源数据校验值的 `train_monitor_manifest.json`。开发与调参阶段该集合同时从 RL 更新和 grounding auxiliary batch 中排除，只用于确定性监控；超参数冻结后，正式训练重新纳入全部 3,553 条 `train` 游戏。该集合不是独立论文测试集，最终结果仍只报告 140 条 `valid_seen`。
-_Avoid_: random split per run、monitor examples in pilot gradients、reported monitor generalization
+**Unified Valid-Seen Checkpoint Evaluation**:
+pilot 与 formal 共用同一个固定 140 条 `valid_seen` manifest、确定性解码和六类分母。pilot 只在 update 0 和 25 评测；formal 在 update 0、之后每 25 个 optimizer updates 以及最终 update 445 评测。smoke、integration 与 benchmark 不执行周期评测。系统不再从 3,553 条 train 任务中派生 355 条 monitor，所有训练档位都从完整 train 清单按相同种子顺序取任务；`valid_seen` 始终无梯度且不进入训练。旧 pilot 的 train-monitor 数值仅保留为工程稳定性证据，不能与新曲线混合。
+_Avoid_: per-update evaluation、355-task train monitor、validation examples in gradients、mixed old/new curves
 
 **Periodic Valid-Seen Evaluation**:
-正式训练在 update 0、之后每 25 个 optimizer updates 以及训练结束时，对完整 140 条 `valid_seen` 执行无梯度确定性评测（M1 `latent=mu`、策略 greedy）。评测记录六类 success、macro success、overall success、非法动作率和平均步数，但不得用于调整 loss、学习率或其他超参数。每次保留对应 checkpoint，并同时报告固定预算结束的 `last` 与按预注册规则选择的 `best-valid`：先最大化六类 macro success，再比较 overall success、较低非法动作率，最后选更早 checkpoint。使用同一集合选模并报告属于 validation-selected performance，必须明确披露；所有基座与对比方法采用相同频率和规则。
+pilot 和 formal 按上一条固定检查点，对完整 140 条 `valid_seen` 执行无梯度确定性评测（M1 `latent=mu`、策略 greedy）。评测记录六类 success、macro success、overall success、非法动作率和平均步数，但不得用于调整 loss、学习率或其他超参数。每次保留对应 checkpoint；formal 同时报告固定预算结束的 `last` 与按预注册规则选择的 `best-valid`：先最大化六类 macro success，再比较 overall success、较低非法动作率，最后选更早 checkpoint。使用同一集合跟踪趋势、选模并报告属于 validation-selected performance，必须明确披露；所有基座与对比方法采用相同频率和规则。
 _Avoid_: final-only health check、valid-seen hyperparameter tuning、highest-score-only reporting
 
 **Complete Valid-Seen Denominators**:
@@ -205,7 +205,7 @@ _Avoid_: non-divisible DataProto dispatch、silent sample duplication、padding 
 _Avoid_: 0.1-CPU default workers、nested CPU oversubscription、world-size-dependent global group batch
 
 **Formal Training Budget**:
-M0/M1 首版正式训练各自对 3,553 个 train 任务执行一次带种子完整遍历：每个完整 update 含 8 个任务组，共 444 个完整 batch 和最后 1 个单任务组部分 batch，合计 445 个 optimizer updates、28,424 条 G=8 训练轨迹；环境硬上限为每条 30 步。冒烟、集成和 Qwen2.5-7B pilot 分别默认 2/20/25 updates。pilot 使用与正式训练相同的 8 个任务组、G=8 和动作 minibatch，并完整跨过一次 25-update train-monitor/checkpoint 周期；integration 只作为中等形状故障定位档位，不是 pilot 前的必经门禁。100-update 预运行不再作为默认要求，长期学习与资源稳定性由带 fail-fast、周期 checkpoint 和评测的固定 445-update 正式运行承担。扩展到两遍只能通过统一 `num_train_passes` 参数，并在三个基座及对应 M0/M1 对比中保持同一预算。
+M0/M1 首版正式训练各自对 3,553 个 train 任务执行一次带种子完整遍历：每个完整 update 含 8 个任务组，共 444 个完整 batch 和最后 1 个单任务组部分 batch，合计 445 个 optimizer updates、28,424 条 G=8 训练轨迹；环境硬上限为每条 30 步。冒烟、集成和 Qwen2.5-7B pilot 分别默认 2/20/25 updates。pilot 使用与正式训练相同的 8 个任务组、G=8 和动作 minibatch，并完整跨过一次 25-update valid-seen/checkpoint 周期；integration 只作为中等形状故障定位档位，不是 pilot 前的必经门禁。100-update 预运行不再作为默认要求，长期学习与资源稳定性由带 fail-fast、周期 checkpoint 和评测的固定 445-update 正式运行承担。扩展到两遍只能通过统一 `num_train_passes` 参数，并在三个基座及对应 M0/M1 对比中保持同一预算。
 _Avoid_: ambiguous total_epochs、dropped final task、method-specific update budget
 
 **Paired Base Initialization**:

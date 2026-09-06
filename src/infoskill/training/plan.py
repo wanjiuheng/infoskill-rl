@@ -22,7 +22,6 @@ class TrainingPlan:
     checkpoint_every: int
     evaluation_every: int
     evaluation_kind: str
-    include_monitor_tasks: bool
 
     @property
     def trajectories_per_full_update(self) -> int:
@@ -39,7 +38,6 @@ _REGISTERED_PLANS = {
         checkpoint_every=1,
         evaluation_every=25,
         evaluation_kind="none",
-        include_monitor_tasks=False,
     ),
     TrainingProfile.INTEGRATION: TrainingPlan(
         profile=TrainingProfile.INTEGRATION,
@@ -50,7 +48,6 @@ _REGISTERED_PLANS = {
         checkpoint_every=5,
         evaluation_every=25,
         evaluation_kind="none",
-        include_monitor_tasks=False,
     ),
     # Performance-only probe: identical update geometry to FORMAL, but exactly
     # one update and no evaluation. It must never be reported as an experiment.
@@ -63,11 +60,10 @@ _REGISTERED_PLANS = {
         checkpoint_every=1,
         evaluation_every=25,
         evaluation_kind="none",
-        include_monitor_tasks=True,
     ),
     TrainingProfile.PILOT: TrainingPlan(
         profile=TrainingProfile.PILOT,
-        # One complete 25-update monitor/checkpoint cycle at the same
+        # One complete 25-update valid_seen/checkpoint cycle at the same
         # per-update geometry as FORMAL. Longer learning evidence belongs to
         # the fixed-budget formal run rather than a second 100-update pre-run.
         max_updates=25,
@@ -76,8 +72,7 @@ _REGISTERED_PLANS = {
         action_minibatch_size=256,
         checkpoint_every=5,
         evaluation_every=25,
-        evaluation_kind="train_monitor",
-        include_monitor_tasks=False,
+        evaluation_kind="valid_seen",
     ),
     TrainingProfile.FORMAL: TrainingPlan(
         profile=TrainingProfile.FORMAL,
@@ -88,7 +83,6 @@ _REGISTERED_PLANS = {
         checkpoint_every=5,
         evaluation_every=25,
         evaluation_kind="valid_seen",
-        include_monitor_tasks=True,
     ),
 }
 

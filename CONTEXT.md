@@ -132,9 +132,9 @@ _Avoid_: executable validity、task success
 
 ## Data and Evaluation
 
-**Train-Only Monitor Split**:
-从训练集稳定派生、开发阶段不参与梯度更新的内部监控集合；它不是论文测试集。
-_Avoid_: validation set、reported benchmark split
+**Unified Valid-Seen Checkpoint Evaluation**:
+pilot 与 formal 在约定 checkpoint 上使用同一个固定 140 条 `valid_seen` manifest 做无梯度确定性评测；不再派生或保留 355 条 train monitor。该曲线用于训练趋势、选模和最终 valid-seen 报告，必须披露为 validation-selected performance，而不是独立隐藏测试。
+_Avoid_: per-update evaluation、train-monitor curve、hidden-test claim
 
 **Complete Benchmark Evaluation**:
 只有固定 manifest 中全部 140 条 `valid_seen` 游戏均产生可归类终态时才成立的正式评测；模型失败计入固定分母，基础设施故障则使整次评测无效。

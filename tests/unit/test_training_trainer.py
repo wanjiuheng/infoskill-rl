@@ -62,6 +62,28 @@ def _tasks() -> tuple[TaskSpec, ...]:
 
 
 class InfoSkillTrainerTests(unittest.TestCase):
+    def test_one_25_update_cycle_evaluates_only_at_start_and_end(self) -> None:
+        evaluation_calls: list[int] = []
+        tasks = tuple(
+            TaskSpec(str(index), "train", "kind", "goal") for index in range(25)
+        )
+        trainer = InfoSkillTrainer(
+            collector=_Collector(),  # type: ignore[arg-type]
+            runtime=_Runtime(),  # type: ignore[arg-type]
+            schedule=TaskSchedule(tasks, master_seed=0),
+            task_groups_per_update=1,
+            rollouts_per_task=2,
+            master_seed=0,
+            auxiliary_enabled=False,
+            on_evaluate=evaluation_calls.append,
+            checkpoint_every=5,
+            evaluate_every=25,
+        )
+
+        trainer.fit(max_updates=25)
+
+        self.assertEqual(evaluation_calls, [0, 25])
+
     def test_update_boundary_checkpoint_is_emitted_once_and_resume_skips_consumed_tasks(
         self,
     ) -> None:

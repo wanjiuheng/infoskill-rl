@@ -11,12 +11,7 @@ from .grounding_io import (
     write_grounding_artifacts,
 )
 from .handcoded_expert import load_handcoded_expert
-from .monitor import (
-    TrainMonitorManifest,
-    build_train_monitor_manifest,
-    write_train_monitor_manifest,
-)
-from .tasks import ALFWORLD_TASK_TYPES, discover_tasks
+from .tasks import ALFWORLD_TASK_TYPES, discover_tasks, task_manifest_sha256
 
 __all__ = [
     "ALFWORLD_TASK_TYPES",
@@ -27,12 +22,10 @@ __all__ = [
     "GroundingSample",
     "GroundingManifest",
     "StrictExpertReplay",
-    "TrainMonitorManifest",
     "build_grounding_manifest",
-    "build_train_monitor_manifest",
     "discover_tasks",
     "load_handcoded_expert",
     "sha256_file",
+    "task_manifest_sha256",
     "write_grounding_artifacts",
-    "write_train_monitor_manifest",
 ]

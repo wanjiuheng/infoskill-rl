@@ -43,3 +43,7 @@ INFO-SKILL 自己实现顶层 `InfoSkillTrainer`，统一拥有轨迹采集、�
 reference policy 不再按 VERL 默认方式创建并 CPU-offload 第二套 Qwen，而是在 actor 的同一 FSDP Module 上临时关闭 LoRA、以无梯度模式顺序计算。由于 Qwen 基座永久冻结，关闭 LoRA 后该模型在定义上就是固定 reference；M1 两分支还必须接收同一个 detach 后的当前 soft prefix。该选择消除第二份 7B 权重和反复 CPU/GPU 搬运，并让 checkpoint 无需持久化 reference，但要求严格的 adapter context 生命周期和全 rank 一致调用顺序。正式训练前必须证明共享实现与独立原始基座的逐 token reference logprob 在固化容差内一致，且异常退出也不会泄漏 adapter/train-mode 状态；若失败只能阻断并重新决策，不能静默退回独立 reference。
 
 由于 LoRA 处在 FSDP seam 内而 projector 处在 DDP seam 内，二者不放入同一个物理 optimizer state。INFO-SKILL 保留 Policy/Compressor 两个逻辑优化域，但以 `LoRAOptimizer`、`ProjectorOptimizer` 和 `AuxOptimizer` 三个 AdamW 状态实现；`PolicyUpdateCoordinator` 把前两者封装成一个原子策略更新，共享 update 与 scheduler 进度，合并计算不重复计数的跨 FSDP/DDP 全局梯度范数，并保证一起 step 或一起跳过。该内部拆分不改变两组 policy 参数各自的 Adam 数学更新，却显著简化 checkpoint、跨 world-size 重分片与故障恢复，且不会把分布式实现细节暴露给 `InfoSkillTrainer` Interface。
+
+## D010：pilot 与 formal 统一使用固定 valid_seen 评测
+
+取消从 ALFWorld train 派生的 355 条内部 monitor；所有训练档位都从完整 3,553 条 train 清单按同一规则取样。pilot 在 update 0 和 25、formal 在 update 0、每 25 个 update 及最终 update 445，使用同一个固定 140 条 `valid_seen` manifest、确定性解码和完整六类分母。这样缩短 pilot 的评测时间，并让 pilot 与正式曲线直接可比；代价是曲线、`best-valid` 和最终报告使用同一集合，因此必须标注为 validation-selected performance，且不得根据该曲线调整损失权重、学习率等超参数。旧 train-monitor pilot 只保留为工程稳定性证据，不与新曲线拼接。

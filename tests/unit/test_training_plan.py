@@ -32,23 +32,22 @@ class TrainingPlanTests(unittest.TestCase):
                 benchmark.rollouts_per_task,
                 benchmark.action_minibatch_size,
                 benchmark.evaluation_kind,
-                benchmark.include_monitor_tasks,
             ),
-            (1, 8, 8, 256, "none", True),
+            (1, 8, 8, 256, "none"),
         )
         self.assertEqual(
-            (pilot.max_updates, pilot.evaluation_kind),
-            (25, "train_monitor"),
+            (pilot.max_updates, pilot.evaluation_every, pilot.evaluation_kind),
+            (25, 25, "valid_seen"),
         )
         self.assertEqual(
             (
                 formal.max_updates,
                 formal.task_groups_per_update,
                 formal.rollouts_per_task,
+                formal.evaluation_every,
                 formal.evaluation_kind,
-                formal.include_monitor_tasks,
             ),
-            (445, 8, 8, "valid_seen", True),
+            (445, 8, 8, 25, "valid_seen"),
         )
 
     def test_only_development_profiles_allow_an_explicit_update_override(self) -> None:

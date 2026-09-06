@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+from typing import Sequence
 
 from infoskill.episode import TaskSpec
 
@@ -14,6 +16,17 @@ ALFWORLD_TASK_TYPES = (
     "pick_cool_then_place_in_recep",
     "pick_heat_then_place_in_recep",
 )
+
+
+def task_manifest_sha256(tasks: Sequence[TaskSpec]) -> str:
+    """Return an order-independent identity for an ALFWorld task manifest."""
+
+    digest = hashlib.sha256()
+    for task in sorted(tasks, key=lambda item: item.task_id):
+        digest.update(
+            f"{task.task_id}\0{task.task_type}\0{task.goal}\n".encode("utf-8")
+        )
+    return digest.hexdigest()
 
 
 def _read_json(path: Path) -> dict[str, object]:

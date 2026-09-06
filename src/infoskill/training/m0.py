@@ -5,14 +5,13 @@ import logging
 import math
 import sys
 import time
-from collections import Counter
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping
 
 from infoskill.app_config import AppConfig
 from infoskill.conditioning import NoSkillConditioner
-from infoskill.config import EvaluationConfig, TaskDenominator
-from infoskill.episode import TaskSpec, TrajectoryCollector
+from infoskill.config import EvaluationConfig
+from infoskill.episode import TrajectoryCollector
 from infoskill.evaluation import (
     EvaluationCheckpointScore,
     EvaluationRunner,
@@ -20,9 +19,8 @@ from infoskill.evaluation import (
 )
 from infoskill.integrations.alfworld import (
     AlfworldEnvironmentFactory,
-    build_train_monitor_manifest,
     discover_tasks,
-    write_train_monitor_manifest,
+    task_manifest_sha256,
 )
 from infoskill.learning import group_relative_advantages
 from infoskill.persistence import (
@@ -95,15 +93,7 @@ def run_m0_training(
             f"train discovery returned {len(all_train_tasks)} tasks instead of "
             f"{EXPECTED_TRAIN_TASKS}"
         )
-    monitor = build_train_monitor_manifest(
-        all_train_tasks, master_seed=config.master_seed
-    )
-    monitor_ids = set(monitor.monitor_task_ids)
-    scheduled_tasks = (
-        all_train_tasks
-        if plan.include_monitor_tasks
-        else tuple(task for task in all_train_tasks if task.task_id not in monitor_ids)
-    )
+    scheduled_tasks = all_train_tasks
     available_updates = math.ceil(
         len(scheduled_tasks) / plan.task_groups_per_update
     )
@@ -151,9 +141,6 @@ def run_m0_training(
         )
     if checkpoint_to_load is None or forked_resume:
         _write_json(run_directory / "resolved_config.json", resolved)
-        write_train_monitor_manifest(
-            run_directory / "train_monitor_manifest.json", monitor
-        )
 
     schedule = TaskSchedule(
         scheduled_tasks,
@@ -177,7 +164,7 @@ def run_m0_training(
         "mode": "no_skill",
         "train_task_count": len(all_train_tasks),
         "scheduled_task_count": len(scheduled_tasks),
-        "train_task_manifest_sha256": monitor.source_manifest_sha256,
+        "train_task_manifest_sha256": task_manifest_sha256(all_train_tasks),
         "skillrl_expected_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
         "policy_model": policy_model_identity.as_dict(),
         "verbose_runtime_logs": verbose_runtime_logs,
@@ -318,8 +305,6 @@ def run_m0_training(
         evaluate = _evaluation_callback(
             config=config,
             plan=plan,
-            all_train_tasks=all_train_tasks,
-            monitor_task_ids=monitor_ids,
             collector=evaluation_collector,
             run_directory=run_directory,
             traces=traces,
@@ -412,8 +397,6 @@ def _evaluation_callback(
     *,
     config: AppConfig,
     plan: TrainingPlan,
-    all_train_tasks: Sequence[TaskSpec],
-    monitor_task_ids: set[str],
     collector: TrajectoryCollector,
     run_directory: Path,
     traces: ZstdJsonlTraceWriter,
@@ -424,30 +407,12 @@ def _evaluation_callback(
 ):
     if plan.evaluation_kind == "none":
         return None
-    if plan.evaluation_kind == "valid_seen":
-        tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
-        evaluation_config = EvaluationConfig()
-        phase = "valid_seen"
-    elif plan.evaluation_kind == "train_monitor":
-        tasks = tuple(
-            task for task in all_train_tasks if task.task_id in monitor_task_ids
-        )
-        counts = Counter(task.task_type for task in tasks)
-        evaluation_config = EvaluationConfig(
-            split="train_monitor",
-            denominators=tuple(
-                TaskDenominator(task_type, count)
-                for task_type, count in sorted(counts.items())
-            ),
-        )
-        phase = "train_monitor"
-    else:
+    if plan.evaluation_kind != "valid_seen":
         raise ValueError(f"unsupported evaluation kind: {plan.evaluation_kind}")
-    valid_scores = (
-        _load_valid_scores(run_directory)
-        if phase == "valid_seen"
-        else []
-    )
+    tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
+    evaluation_config = EvaluationConfig()
+    phase = "valid_seen"
+    valid_scores = _load_valid_scores(run_directory)
 
     def evaluate(global_update: int) -> None:
         from tqdm.auto import tqdm
@@ -502,37 +467,36 @@ def _evaluation_callback(
             raise RuntimeError(
                 f"{phase} evaluation is incomplete: {summary.incomplete_reasons}"
             )
-        if phase == "valid_seen":
-            assert summary.macro_success is not None
-            assert summary.overall_success is not None
-            assert summary.invalid_action_rate is not None
-            valid_scores.append(
-                EvaluationCheckpointScore(
-                    step=global_update,
-                    macro_success=summary.macro_success,
-                    overall_success=summary.overall_success,
-                    invalid_action_rate=summary.invalid_action_rate,
-                )
+        assert summary.macro_success is not None
+        assert summary.overall_success is not None
+        assert summary.invalid_action_rate is not None
+        valid_scores.append(
+            EvaluationCheckpointScore(
+                step=global_update,
+                macro_success=summary.macro_success,
+                overall_success=summary.overall_success,
+                invalid_action_rate=summary.invalid_action_rate,
             )
-            best = select_best_valid(valid_scores)
-            _write_json(
-                run_directory / "checkpoint_selection.json",
-                {
-                    "schema_version": 1,
-                    "disclosure": "validation-selected performance on valid_seen",
-                    "rule": [
-                        "max_macro_success",
-                        "max_overall_success",
-                        "min_invalid_action_rate",
-                        "earliest_update",
-                    ],
-                    "evaluations": [
-                        _checkpoint_score_payload(score) for score in valid_scores
-                    ],
-                    "last": _checkpoint_score_payload(valid_scores[-1]),
-                    "best_valid": _checkpoint_score_payload(best),
-                },
-            )
+        )
+        best = select_best_valid(valid_scores)
+        _write_json(
+            run_directory / "checkpoint_selection.json",
+            {
+                "schema_version": 1,
+                "disclosure": "validation-selected performance on valid_seen",
+                "rule": [
+                    "max_macro_success",
+                    "max_overall_success",
+                    "min_invalid_action_rate",
+                    "earliest_update",
+                ],
+                "evaluations": [
+                    _checkpoint_score_payload(score) for score in valid_scores
+                ],
+                "last": _checkpoint_score_payload(valid_scores[-1]),
+                "best_valid": _checkpoint_score_payload(best),
+            },
+        )
         logger.info(
             "%s update=%d macro=%s overall=%s",
             phase,
@@ -605,7 +569,6 @@ def _plan_payload(plan: TrainingPlan) -> dict[str, object]:
         "checkpoint_every": plan.checkpoint_every,
         "evaluation_every": plan.evaluation_every,
         "evaluation_kind": plan.evaluation_kind,
-        "include_monitor_tasks": plan.include_monitor_tasks,
     }
 
 

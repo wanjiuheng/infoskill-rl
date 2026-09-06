@@ -209,9 +209,10 @@ GPUS=0,1,2,3 PROFILE=smoke RUN_NAME=m0-smoke-u2 \
   bash scripts/run_alfworld.sh train no_skill
 ```
 
-每次真实训练启动前都会要求 ALFWorld `train` 恰好发现 3553 条任务。开发档位从
-固定 10% train monitor 中排除任务；正式档位使用全部 3553 条，按每 update 8
-个任务组形成 445 个 update，最后一个 update 允许不足 8 组。
+每次真实训练启动前都会要求 ALFWorld `train` 恰好发现 3553 条任务。所有训练
+档位都从这份完整清单按相同种子顺序取任务；不再派生 355 条 train monitor。
+正式档位按每 update 8 个任务组形成 445 个 update，最后一个 update 允许不足
+8 组。
 
 一个 update 成功的最低检查项：
 
@@ -266,7 +267,7 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=2 \
 GPU 数变化。训练档位、预算、模型、数据及其他 resolved config 在两种方式下都
 必须与源 checkpoint 一致。分叉运行的 `provenance.json` 会记录源 checkpoint、
 源 GPU 数和 `resume_forked=true`。
-完成 smoke 与两种恢复检查后，运行一个与正式训练相同形状、覆盖完整监控周期的
+完成 smoke 与两种恢复检查后，运行一个与正式训练相同形状、覆盖完整评测周期的
 25-update pilot。`integration` 保留为需要用较小 G 和 batch 定位问题时的可选档位，
 不再与 pilot 串行作为必经门禁：
 
@@ -275,7 +276,7 @@ GPU 数变化。训练档位、预算、模型、数据及其他 resolved config
 GPUS=0,1,2,3 PROFILE=integration RUN_NAME=m0-integration \
   bash scripts/run_alfworld.sh train no_skill
 
-# 必需：默认即为 25 updates，命中 update 25 的 train-monitor
+# 必需：默认即为 25 updates，在 update 0 和 25 评完整 valid_seen 140 条
 GPUS=0,1,2,3 PROFILE=pilot RUN_NAME=m0-pilot \
   bash scripts/run_alfworld.sh train no_skill
 
