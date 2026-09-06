@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import contextmanager
+from pathlib import Path
 
 try:
     import torch
@@ -10,6 +12,7 @@ except ModuleNotFoundError:
 from infoskill.checkpoint_effect import (
     build_checkpoint_effect_probes,
     classify_checkpoint_effect,
+    collect_independent_checkpoint_effect_samples,
     compare_generation_results,
     compare_named_tensors,
     compare_vllm_to_checkpoint_aggregate,
@@ -171,6 +174,114 @@ class CheckpointEffectTests(unittest.TestCase):
         )
 
         self.assertTrue(report["all_ranks_match"])
+
+    def test_observed_bf16_quantization_is_within_default_aggregate_gate(self) -> None:
+        actor = ({
+            "rank": 0,
+            "expected_summary": {
+                "partitions": {
+                    "lora_a": {
+                        "tensor_count": 196,
+                        "element_count": 18120704,
+                        "nonzero_count": 18120704,
+                        "max_abs": 0.016795914620161057,
+                        "l2_squared": 1045.403272151947,
+                    },
+                    "lora_b": {
+                        "tensor_count": 196,
+                        "element_count": 22249472,
+                        "nonzero_count": 22249472,
+                        "max_abs": 9.853662049863487e-05,
+                        "l2_squared": 0.008097046680063613,
+                    },
+                }
+            },
+        },)
+        vllm = ({
+            "rank": 0,
+            "adapters": {
+                "1": {
+                    "summary": {
+                        "partitions": {
+                            "lora_a": {
+                                "tensor_count": 196,
+                                "element_count": 18120704,
+                                "nonzero_count": 18120704,
+                                "max_abs": 0.016845703125,
+                                "l2_squared": 1045.3974795341492,
+                            },
+                            "lora_b": {
+                                "tensor_count": 196,
+                                "element_count": 22249472,
+                                "nonzero_count": 22249472,
+                                "max_abs": 0.00019741058349609375,
+                                "l2_squared": 0.032388119302140694,
+                            },
+                        }
+                    }
+                }
+            },
+        },)
+
+        report = compare_vllm_to_checkpoint_aggregate(
+            actor,
+            vllm,
+            lora_scaling=2.0,
+        )
+
+        self.assertTrue(report["all_ranks_match"])
+
+    def test_checkpoint_runtime_loads_before_its_first_rollout(self) -> None:
+        events: list[str] = []
+
+        class Runtime:
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            def load_portable_state(self, path: Path) -> None:
+                events.append(f"{self.label}:load:{path.name}")
+
+            def compare_portable_actor_state(self, path: Path):
+                events.append(f"{self.label}:compare:{path.name}")
+                return ({"rank": 0, "exact": True},)
+
+            @contextmanager
+            def rollout_session(self):
+                events.append(f"{self.label}:session-enter")
+                try:
+                    yield
+                finally:
+                    events.append(f"{self.label}:session-exit")
+
+            def reset_rollout_prefix_cache(self) -> None:
+                events.append(f"{self.label}:reset")
+
+            def vllm_lora_snapshot(self):
+                events.append(f"{self.label}:snapshot")
+                return ({"rank": 0},)
+
+            def generate(self, probes):
+                events.append(f"{self.label}:generate")
+                return (_result("a", (1,), (-0.1,)),)
+
+            def close(self) -> None:
+                events.append(f"{self.label}:close")
+
+        labels = iter(("checkpoint", "baseline"))
+        collect_independent_checkpoint_effect_samples(
+            runtime_factory=lambda: Runtime(next(labels)),
+            checkpoint_runtime_directory=Path("runtime"),
+            probes=build_checkpoint_effect_probes(master_seed=0),
+        )
+
+        self.assertLess(
+            events.index("checkpoint:load:runtime"),
+            events.index("checkpoint:session-enter"),
+        )
+        self.assertGreater(
+            events.index("baseline:session-enter"),
+            events.index("checkpoint:close"),
+        )
 
     @unittest.skipUnless(torch is not None, "requires torch")
     def test_packed_vllm_lora_tensors_are_flattened(self) -> None:

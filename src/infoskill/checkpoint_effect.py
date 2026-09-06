@@ -2,9 +2,72 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
 
 from infoskill.domain.state import CanonicalAgentState, render_policy_message
 from infoskill.rollout import GenerationParameters, GenerationRequest, GenerationResult
+
+
+@dataclass(frozen=True, slots=True)
+class CheckpointEffectSamples:
+    actor_comparison: tuple[Mapping[str, object], ...]
+    baseline_vllm: tuple[Mapping[str, object], ...]
+    checkpoint_vllm: tuple[Mapping[str, object], ...]
+    baseline_results: tuple[GenerationResult, ...]
+    checkpoint_results: tuple[GenerationResult, ...]
+
+
+def collect_independent_checkpoint_effect_samples(
+    *,
+    runtime_factory: Callable[[], object],
+    checkpoint_runtime_directory: Path,
+    probes: tuple[GenerationRequest, ...],
+) -> CheckpointEffectSamples:
+    """Use a fresh load-first runtime and a separate baseline runtime."""
+
+    checkpoint_runtime = runtime_factory()
+    try:
+        checkpoint_runtime.load_portable_state(  # type: ignore[attr-defined]
+            checkpoint_runtime_directory
+        )
+        actor_comparison = tuple(
+            checkpoint_runtime.compare_portable_actor_state(  # type: ignore[attr-defined]
+                checkpoint_runtime_directory
+            )
+        )
+        with checkpoint_runtime.rollout_session():  # type: ignore[attr-defined]
+            checkpoint_runtime.reset_rollout_prefix_cache()  # type: ignore[attr-defined]
+            checkpoint_vllm = tuple(
+                checkpoint_runtime.vllm_lora_snapshot()  # type: ignore[attr-defined]
+            )
+            checkpoint_results = tuple(
+                checkpoint_runtime.generate(probes)  # type: ignore[attr-defined]
+            )
+    finally:
+        checkpoint_runtime.close()  # type: ignore[attr-defined]
+
+    baseline_runtime = runtime_factory()
+    try:
+        with baseline_runtime.rollout_session():  # type: ignore[attr-defined]
+            baseline_runtime.reset_rollout_prefix_cache()  # type: ignore[attr-defined]
+            baseline_vllm = tuple(
+                baseline_runtime.vllm_lora_snapshot()  # type: ignore[attr-defined]
+            )
+            baseline_results = tuple(
+                baseline_runtime.generate(probes)  # type: ignore[attr-defined]
+            )
+    finally:
+        baseline_runtime.close()  # type: ignore[attr-defined]
+
+    return CheckpointEffectSamples(
+        actor_comparison=actor_comparison,
+        baseline_vllm=baseline_vllm,
+        checkpoint_vllm=checkpoint_vllm,
+        baseline_results=baseline_results,
+        checkpoint_results=checkpoint_results,
+    )
 
 
 def build_checkpoint_effect_probes(
@@ -282,11 +345,15 @@ def compare_vllm_to_checkpoint_aggregate(
     vllm_snapshots: Sequence[Mapping[str, object]],
     *,
     lora_scaling: float,
+    max_abs_relative_tolerance: float = 5e-3,
+    l2_relative_tolerance: float = 1e-4,
 ) -> dict[str, object]:
     """Check vLLM's transformed LoRA against checkpoint aggregate statistics."""
 
     if lora_scaling <= 0:
         raise ValueError("lora_scaling must be positive")
+    if min(max_abs_relative_tolerance, l2_relative_tolerance) < 0:
+        raise ValueError("aggregate tolerances must be non-negative")
     actor_by_rank = {int(snapshot["rank"]): snapshot for snapshot in actor_snapshots}
     vllm_by_rank = {int(snapshot["rank"]): snapshot for snapshot in vllm_snapshots}
     missing_ranks = sorted(set(actor_by_rank) - set(vllm_by_rank))
@@ -315,6 +382,8 @@ def compare_vllm_to_checkpoint_aggregate(
                 expected if isinstance(expected, Mapping) else {},
                 actual if isinstance(actual, Mapping) else {},
                 scale=scale,
+                max_abs_relative_tolerance=max_abs_relative_tolerance,
+                l2_relative_tolerance=l2_relative_tolerance,
             )
         ranks.append(
             {
@@ -332,6 +401,8 @@ def compare_vllm_to_checkpoint_aggregate(
     return {
         "all_ranks_match": all_match,
         "lora_scaling_merged_into_vllm_b": lora_scaling,
+        "max_abs_relative_tolerance": max_abs_relative_tolerance,
+        "l2_relative_tolerance": l2_relative_tolerance,
         "missing_ranks": missing_ranks,
         "unexpected_ranks": unexpected_ranks,
         "ranks": ranks,
@@ -396,6 +467,8 @@ def _compare_partition_summary(
     actual: Mapping[str, object],
     *,
     scale: float,
+    max_abs_relative_tolerance: float,
+    l2_relative_tolerance: float,
 ) -> dict[str, object]:
     exact_fields = ("tensor_count", "element_count", "nonzero_count")
     exact = all(expected.get(field) == actual.get(field) for field in exact_fields)
@@ -406,12 +479,12 @@ def _compare_partition_summary(
     numeric = math.isclose(
         expected_max,
         actual_max,
-        rel_tol=1e-5,
+        rel_tol=max_abs_relative_tolerance,
         abs_tol=1e-8,
     ) and math.isclose(
         expected_l2_squared,
         actual_l2_squared,
-        rel_tol=1e-5,
+        rel_tol=l2_relative_tolerance,
         abs_tol=1e-8,
     )
     return {
@@ -444,8 +517,12 @@ def _summarize_tensor_sequence(tensors: Sequence[object]) -> dict[str, object]:
     nonzero_count = 0
     maximum = 0.0
     l2_squared = 0.0
+    dtype_counts: dict[str, int] = {}
     for value in tensors:
-        tensor = value.detach().float()  # type: ignore[attr-defined]
+        detached = value.detach()  # type: ignore[attr-defined]
+        dtype = str(detached.dtype)
+        dtype_counts[dtype] = dtype_counts.get(dtype, 0) + 1
+        tensor = detached.float()
         tensor_count += 1
         element_count += int(tensor.numel())
         if tensor.numel() == 0:
@@ -460,6 +537,7 @@ def _summarize_tensor_sequence(tensors: Sequence[object]) -> dict[str, object]:
         "max_abs": maximum,
         "l2_squared": l2_squared,
         "l2_norm": math.sqrt(l2_squared),
+        "dtype_counts": dict(sorted(dtype_counts.items())),
     }
 
 

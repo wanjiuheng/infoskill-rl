@@ -619,8 +619,8 @@ logprob 完全一致，policy 最差物理空闲显存从 `14.76 GiB` 增加到 
 
 如果同一份固定 `valid_seen` manifest 上，update 0 与非零 checkpoint 的 140 条轨迹、
 token 和 logprob 完全一致，先不要重跑完整评测，也不要修改学习率。运行下面的轻量门，
-在同一个 VERL/vLLM runtime 内依次生成基线和加载 checkpoint 后的 3 条固定
-ALFWorld 风格 prompt：
+用两个互相独立的 VERL/vLLM runtime 生成 3 条固定 ALFWorld 风格 prompt：checkpoint
+分支严格按正式评测顺序在第一次 rollout 之前加载 portable state，baseline 分支不加载：
 
 ```bash
 GPUS=0,1,2,3 \
@@ -630,11 +630,12 @@ RUN_NAME=m0-pilot-update25-checkpoint-effect \
 bash scripts/run_alfworld.sh checkpoint-effect no_skill
 ```
 
-该命令不创建 ALFWorld 环境、不训练也不修改 checkpoint。它只加载一次 7B runtime，
+该命令不创建 ALFWorld 环境、不训练也不修改 checkpoint。它依次加载两个 7B runtime，
 随后检查四个边界，并把完整结果写到对应 run 的 `checkpoint_effect.json`：
 
 1. 磁盘 `adapter_model.safetensors` 与每个 rank 当前 FSDP LoRA 是否逐张量完全相同；
-2. 每个 rank 的 vLLM 是否注册并激活了唯一的非零 LoRA；
+2. 每个 rank 的 vLLM 是否注册并激活了唯一的非零 LoRA，并在 BF16 量化容差内
+   匹配 checkpoint 的 A/B 聚合统计；
 3. 同一批确定性 prompt 的生成 token 是否改变；
 4. 即使 token 没变，已选 token 的 logprob 是否出现大于 `1e-7` 的变化。
 

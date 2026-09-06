@@ -482,6 +482,7 @@ def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:
     from infoskill.checkpoint_effect import (
         build_checkpoint_effect_probes,
         classify_checkpoint_effect,
+        collect_independent_checkpoint_effect_samples,
         compare_generation_results,
         compare_vllm_to_checkpoint_aggregate,
     )
@@ -540,58 +541,46 @@ def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:
     resolved["policy_model_identity"] = policy_identity.as_dict()
     _write_json(run_directory / "resolved_config.json", resolved)
 
+    runtime_settings = VerlRuntimeConfig(
+        skillrl_source=config.paths.skillrl_source,
+        model_path=config.paths.policy_model,
+        num_gpus=args.num_gpus,
+        num_cpus=96,
+        max_prompt_tokens=config.max_prompt_tokens,
+        max_response_tokens=config.max_response_tokens,
+        total_training_steps=max(1, checkpoint.global_update),
+        action_minibatch_size=256,
+        policy_max_tokens_per_gpu=16_384,
+        gpu_memory_utilization=0.45,
+        require_hybrid_prefix=False,
+        master_seed=config.master_seed,
+        persistent_rollout_session=True,
+        verbose_runtime_logs=args.verbose_runtime_logs,
+        cuda_memory_poll_interval_ms=0,
+        balance_policy_tokens_across_ranks=True,
+    )
     logger.info(
-        "Initializing one VERL/vLLM runtime for checkpoint-effect diagnosis on %d GPU(s)",
+        "Initializing independent checkpoint-first and baseline runtimes on %d GPU(s)",
         args.num_gpus,
     )
-    runtime = VerlRuntime.start(
-        VerlRuntimeConfig(
-            skillrl_source=config.paths.skillrl_source,
-            model_path=config.paths.policy_model,
-            num_gpus=args.num_gpus,
-            num_cpus=96,
-            max_prompt_tokens=config.max_prompt_tokens,
-            max_response_tokens=config.max_response_tokens,
-            total_training_steps=max(1, checkpoint.global_update),
-            action_minibatch_size=256,
-            policy_max_tokens_per_gpu=16_384,
-            gpu_memory_utilization=0.45,
-            require_hybrid_prefix=False,
-            master_seed=config.master_seed,
-            persistent_rollout_session=True,
-            verbose_runtime_logs=args.verbose_runtime_logs,
-            cuda_memory_poll_interval_ms=0,
-            balance_policy_tokens_across_ranks=True,
-        )
+    samples = collect_independent_checkpoint_effect_samples(
+        runtime_factory=lambda: VerlRuntime.start(runtime_settings),
+        checkpoint_runtime_directory=checkpoint.runtime_directory,
+        probes=probes,
     )
-    try:
-        with runtime.rollout_session():
-            runtime.reset_rollout_prefix_cache()
-            baseline_vllm = runtime.vllm_lora_snapshot()
-            baseline_results = runtime.generate(probes)
-        runtime.load_portable_state(checkpoint.runtime_directory)
-        actor_comparison = runtime.compare_portable_actor_state(
-            checkpoint.runtime_directory
-        )
-        with runtime.rollout_session():
-            runtime.reset_rollout_prefix_cache()
-            checkpoint_vllm = runtime.vllm_lora_snapshot()
-            checkpoint_results = runtime.generate(probes)
-    finally:
-        runtime.close()
 
     generation_comparison = compare_generation_results(
-        baseline_results,
-        checkpoint_results,
+        samples.baseline_results,
+        samples.checkpoint_results,
     )
     vllm_checkpoint_comparison = compare_vllm_to_checkpoint_aggregate(
-        actor_comparison,
-        checkpoint_vllm,
-        lora_scaling=runtime.config.lora_alpha / runtime.config.lora_rank,
+        samples.actor_comparison,
+        samples.checkpoint_vllm,
+        lora_scaling=runtime_settings.lora_alpha / runtime_settings.lora_rank,
     )
     verdict = classify_checkpoint_effect(
-        actor_snapshots=actor_comparison,
-        vllm_snapshots=checkpoint_vllm,
+        actor_snapshots=samples.actor_comparison,
+        vllm_snapshots=samples.checkpoint_vllm,
         vllm_checkpoint_comparison=vllm_checkpoint_comparison,
         generation_comparison=generation_comparison,
     )
@@ -605,10 +594,11 @@ def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:
             "request_ids": [request.request_id for request in probes],
             "max_new_tokens": args.max_new_tokens,
             "deterministic": True,
+            "runtime_topology": "independent_checkpoint_first_vs_baseline",
         },
-        "actor_checkpoint_comparison": list(actor_comparison),
-        "baseline_vllm_lora": list(baseline_vllm),
-        "checkpoint_vllm_lora": list(checkpoint_vllm),
+        "actor_checkpoint_comparison": list(samples.actor_comparison),
+        "baseline_vllm_lora": list(samples.baseline_vllm),
+        "checkpoint_vllm_lora": list(samples.checkpoint_vllm),
         "vllm_checkpoint_aggregate_comparison": vllm_checkpoint_comparison,
         "generation_comparison": generation_comparison,
         "verdict": verdict,
