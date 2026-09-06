@@ -4,7 +4,7 @@ import hashlib
 import time
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
-from typing import Callable, TypeVar
+from typing import Callable, Literal, TypeVar, cast
 
 from infoskill.conditioning import SkillConditioner
 from infoskill.domain.actions import resolve_action
@@ -76,11 +76,18 @@ class TrajectoryCollector:
         invalid_action_penalty: float,
         generation_parameters: GenerationParameters | None = None,
         environment_workers: int = 1,
+        environment_backend: Literal["individual", "native_batch"] = "individual",
     ) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
         if environment_workers <= 0:
             raise ValueError("environment_workers must be positive")
+        if environment_backend not in {"individual", "native_batch"}:
+            raise ValueError("environment_backend must be individual or native_batch")
+        if environment_backend == "native_batch" and environment_workers != 1:
+            raise ValueError(
+                "native_batch owns its process count; environment_workers must remain 1"
+            )
         self._environment_factory = environment_factory
         self._conditioner = conditioner
         self._rollout_backend = rollout_backend
@@ -89,6 +96,7 @@ class TrajectoryCollector:
         self._invalid_action_penalty = invalid_action_penalty
         self._generation_parameters = generation_parameters or GenerationParameters.training()
         self._environment_workers = environment_workers
+        self._environment_backend = environment_backend
         self._rollout_session_depth = 0
         self._last_performance_metrics: dict[str, float] = {}
 
@@ -150,23 +158,51 @@ class TrajectoryCollector:
         conditioning_seconds = 0.0
         backend_generate_seconds = 0.0
         action_resolution_seconds = 0.0
-        environments = tuple(
-            tuple(
-                self._environment_factory.create(
-                    task,
-                    rollout_id=rollout_id,
-                    seed=_semantic_seed(
-                        "environment",
-                        master_seed,
-                        task.task_id,
-                        rollout_id,
-                        global_update=global_update,
-                    ),
+        native_batch = None
+        use_native_batch = (
+            self._environment_backend == "native_batch"
+            and len(tasks) * rollouts_per_task > 1
+        )
+        if use_native_batch:
+            create_batch = getattr(self._environment_factory, "create_batch", None)
+            if not callable(create_batch):
+                raise TypeError(
+                    "native_batch requires an environment factory with create_batch()"
                 )
+            slot_tasks = tuple(
+                task for task in tasks for _ in range(rollouts_per_task)
+            )
+            slot_seeds = tuple(
+                _semantic_seed(
+                    "environment",
+                    master_seed,
+                    task.task_id,
+                    rollout_id,
+                    global_update=global_update,
+                )
+                for task in tasks
                 for rollout_id in range(rollouts_per_task)
             )
-            for task in tasks
-        )
+            native_batch = create_batch(slot_tasks, seeds=slot_seeds)
+            environments: tuple[tuple[Environment, ...], ...] = ()
+        else:
+            environments = tuple(
+                tuple(
+                    self._environment_factory.create(
+                        task,
+                        rollout_id=rollout_id,
+                        seed=_semantic_seed(
+                            "environment",
+                            master_seed,
+                            task.task_id,
+                            rollout_id,
+                            global_update=global_update,
+                        ),
+                    )
+                    for rollout_id in range(rollouts_per_task)
+                )
+                for task in tasks
+            )
         environment_create_seconds = time.perf_counter() - stage_started
         flat_environments = tuple(
             environment for group in environments for environment in group
@@ -187,11 +223,19 @@ class TrajectoryCollector:
             # mutable parse stacks are not thread-safe. Loading happens inside
             # reset(), so resets must remain serial even when already-loaded
             # environment steps are allowed to run concurrently.
-            flat_states = _ordered_map(
-                None,
-                _reset_environment,
-                flat_environments,
-            )
+            if native_batch is not None:
+                flat_states = tuple(native_batch.reset())
+            else:
+                flat_states = _ordered_map(
+                    None,
+                    _reset_environment,
+                    flat_environments,
+                )
+            expected_slots = len(tasks) * rollouts_per_task
+            if len(flat_states) != expected_slots:
+                raise RuntimeError(
+                    f"environment reset returned {len(flat_states)} slots; expected {expected_slots}"
+                )
             states = [
                 list(flat_states[offset : offset + rollouts_per_task])
                 for offset in range(0, len(flat_states), rollouts_per_task)
@@ -291,24 +335,54 @@ class TrajectoryCollector:
                         )
                     action_resolution_seconds += time.perf_counter() - stage_started
                     stage_started = time.perf_counter()
-                    transitions = _ordered_map(
-                        executor,
-                        _step_environment,
-                        tuple(
-                            (
-                                environments[task_index][rollout_id],
-                                action.executed_action,
+                    if native_batch is not None:
+                        slot_actions: list[str | None] = [
+                            None
+                        ] * (len(tasks) * rollouts_per_task)
+                        active_slots = []
+                        for (
+                            task_index,
+                            rollout_id,
+                            _,
+                            _,
+                            _,
+                            action,
+                        ) in resolved_steps:
+                            slot = task_index * rollouts_per_task + rollout_id
+                            slot_actions[slot] = action.executed_action
+                            active_slots.append(slot)
+                        all_transitions = tuple(native_batch.step(tuple(slot_actions)))
+                        if len(all_transitions) != len(slot_actions):
+                            raise RuntimeError(
+                                "native environment batch returned an unexpected slot count"
                             )
-                            for (
-                                task_index,
-                                rollout_id,
-                                _,
-                                _,
-                                _,
-                                action,
-                            ) in resolved_steps
-                        ),
-                    )
+                        transitions = tuple(
+                            cast(EnvironmentTransition, all_transitions[slot])
+                            for slot in active_slots
+                        )
+                        if any(transition is None for transition in transitions):
+                            raise RuntimeError(
+                                "native environment batch omitted an active transition"
+                            )
+                    else:
+                        transitions = _ordered_map(
+                            executor,
+                            _step_environment,
+                            tuple(
+                                (
+                                    environments[task_index][rollout_id],
+                                    action.executed_action,
+                                )
+                                for (
+                                    task_index,
+                                    rollout_id,
+                                    _,
+                                    _,
+                                    _,
+                                    action,
+                                ) in resolved_steps
+                            ),
+                        )
                     environment_step_seconds += time.perf_counter() - stage_started
 
                     next_active: list[tuple[int, int]] = []
@@ -366,7 +440,10 @@ class TrajectoryCollector:
         finally:
             try:
                 stage_started = time.perf_counter()
-                _ordered_map(executor, _close_environment, flat_environments)
+                if native_batch is not None:
+                    native_batch.close()
+                else:
+                    _ordered_map(executor, _close_environment, flat_environments)
                 environment_close_seconds = time.perf_counter() - stage_started
             finally:
                 if executor is not None:
@@ -382,4 +459,7 @@ class TrajectoryCollector:
                     "perf/rollout_backend_generate_seconds": backend_generate_seconds,
                     "perf/rollout_action_resolution_seconds": action_resolution_seconds,
                     "perf/environment_workers": float(self._environment_workers),
+                    "perf/native_environment_batch": float(
+                        use_native_batch
+                    ),
                 }

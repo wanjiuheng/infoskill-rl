@@ -16,6 +16,8 @@ DRY_RUN="${DRY_RUN:-0}"
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
 # Experimental until the environment-concurrency semantic parity gate passes.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
+# `native_batch` uses TextWorld's own process-per-slot AsyncBatchEnv.
+ENVIRONMENT_BACKEND="${ENVIRONMENT_BACKEND:-individual}" # individual | native_batch
 # Keep BLAS/OpenMP from multiplying threads inside each environment worker.
 INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
 # Default keeps only INFO-SKILL milestones, errors and progress bars in terminal.
@@ -33,6 +35,14 @@ export VLLM_USE_V1="${VLLM_USE_V1:-1}"
 export VLLM_ENABLE_V1_MULTIPROCESSING="${VLLM_ENABLE_V1_MULTIPROCESSING:-0}"
 if [[ ! "${INFO_SKILL_CPU_THREADS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "INFO_SKILL_CPU_THREADS must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${ENVIRONMENT_BACKEND}" != "individual" && "${ENVIRONMENT_BACKEND}" != "native_batch" ]]; then
+  echo "ENVIRONMENT_BACKEND must be individual or native_batch" >&2
+  exit 2
+fi
+if [[ "${ENVIRONMENT_BACKEND}" == "native_batch" && "${ENVIRONMENT_WORKERS}" != "1" ]]; then
+  echo "native_batch owns its process count; ENVIRONMENT_WORKERS must remain 1" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -78,6 +88,7 @@ case "${ACTION}" in
       --profile "${PROFILE}"
       --num-gpus "${#GPU_IDS[@]}"
       --environment-workers "${ENVIRONMENT_WORKERS}"
+      --environment-backend "${ENVIRONMENT_BACKEND}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
       TRAIN_ARGS+=(--max-updates "${MAX_UPDATES}")

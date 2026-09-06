@@ -63,6 +63,7 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
     if isinstance(runtime_options, Mapping):
         normalized_options = dict(runtime_options)
         normalized_options.setdefault("environment_workers", 1)
+        normalized_options.setdefault("environment_backend", "individual")
         normalized["runtime_options"] = normalized_options
     return normalized
 

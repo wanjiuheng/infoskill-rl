@@ -59,6 +59,50 @@ class _FakeEnvironmentFactory:
         return _FakeEnvironment(task, rollout_id)
 
 
+class _FakeEnvironmentBatch:
+    def __init__(self, environments: tuple[_FakeEnvironment, ...]) -> None:
+        self.environments = environments
+        self.actions: list[tuple[str | None, ...]] = []
+
+    def reset(self) -> tuple[CanonicalAgentState, ...]:
+        return tuple(environment.reset() for environment in self.environments)
+
+    def step(
+        self, actions: tuple[str | None, ...]
+    ) -> tuple[EnvironmentTransition | None, ...]:
+        self.actions.append(actions)
+        return tuple(
+            None if action is None else environment.step(action)
+            for environment, action in zip(self.environments, actions)
+        )
+
+    def close(self) -> None:
+        for environment in self.environments:
+            environment.close()
+
+
+class _FakeNativeBatchFactory(_FakeEnvironmentFactory):
+    def __init__(self, *, rollouts_per_task: int) -> None:
+        self.rollouts_per_task = rollouts_per_task
+        self.individual_create_calls = 0
+        self.batch: _FakeEnvironmentBatch | None = None
+
+    def create(self, task: TaskSpec, *, rollout_id: int, seed: int) -> _FakeEnvironment:
+        self.individual_create_calls += 1
+        return super().create(task, rollout_id=rollout_id, seed=seed)
+
+    def create_batch(
+        self, tasks: tuple[TaskSpec, ...], *, seeds: tuple[int, ...]
+    ) -> _FakeEnvironmentBatch:
+        self.batch = _FakeEnvironmentBatch(
+            tuple(
+                _FakeEnvironment(task, index % self.rollouts_per_task)
+                for index, task in enumerate(tasks)
+            )
+        )
+        return self.batch
+
+
 class _BarrierEnvironment(_FakeEnvironment):
     def __init__(self, task: TaskSpec, rollout_id: int, barrier: Barrier) -> None:
         super().__init__(task, rollout_id)
@@ -296,6 +340,72 @@ class TrajectoryCollectorTests(unittest.TestCase):
         )
 
         self.assertEqual(len(group.trajectories), 2)
+
+    def test_native_batch_backend_matches_individual_collector_semantics(self) -> None:
+        tasks = tuple(
+            TaskSpec(
+                f"game-{index}", "train", "pick_and_place_simple", "look"
+            )
+            for index in range(2)
+        )
+        baseline = TrajectoryCollector(
+            environment_factory=_FakeEnvironmentFactory(),
+            conditioner=NoSkillConditioner(),
+            rollout_backend=_FakeRolloutBackend(),
+            max_steps=2,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+        ).collect_task_groups(tasks, rollouts_per_task=2, master_seed=0)
+        native_factory = _FakeNativeBatchFactory(rollouts_per_task=2)
+        native_collector = TrajectoryCollector(
+            environment_factory=native_factory,
+            conditioner=NoSkillConditioner(),
+            rollout_backend=_FakeRolloutBackend(),
+            max_steps=2,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+            environment_backend="native_batch",
+        )
+
+        actual = native_collector.collect_task_groups(
+            tasks, rollouts_per_task=2, master_seed=0
+        )
+
+        self.assertEqual(actual, baseline)
+        self.assertEqual(native_factory.individual_create_calls, 0)
+        self.assertIsNotNone(native_factory.batch)
+        self.assertEqual(
+            native_factory.batch.actions[1],  # type: ignore[union-attr]
+            (None, "__invalid_action__", None, "__invalid_action__"),
+        )
+        self.assertEqual(
+            native_collector.performance_metrics()["perf/native_environment_batch"],
+            1.0,
+        )
+
+    def test_native_batch_backend_falls_back_for_one_evaluation_slot(self) -> None:
+        factory = _FakeNativeBatchFactory(rollouts_per_task=1)
+        collector = TrajectoryCollector(
+            environment_factory=factory,
+            conditioner=NoSkillConditioner(),
+            rollout_backend=_FakeRolloutBackend(),
+            max_steps=1,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+            environment_backend="native_batch",
+        )
+
+        groups = collector.collect_task_group(
+            TaskSpec("game-1", "train", "pick_and_place_simple", "look"),
+            rollouts_per_task=1,
+            master_seed=0,
+        )
+
+        self.assertEqual(len(groups.trajectories), 1)
+        self.assertEqual(factory.individual_create_calls, 1)
+        self.assertEqual(
+            collector.performance_metrics()["perf/native_environment_batch"], 0.0
+        )
 
 
 if __name__ == "__main__":

@@ -374,3 +374,20 @@ PROFILE=full bash scripts/benchmark_alfworld_environment.sh
 
 `smoke` 门只要求 `semantic_exact=true`；只有 `full` 门额外要求环境工作至少加速
 `1.25x`。失败时返回非零退出码，不会改变正式训练入口；结果 JSON 写入 `runs/`。
+
+两个 CPU 门通过后，只能通过显式开关把候选后端用于训练 smoke：
+
+```bash
+GPUS=0,1,2,3 \
+PROFILE=smoke \
+MAX_UPDATES=1 \
+PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_BACKEND=native_batch \
+ENVIRONMENT_WORKERS=1 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=m0-sft-noskill-native-batch-smoke-u1 \
+bash scripts/run_alfworld.sh train no_skill
+```
+
+在完成 64 轨迹 benchmark 严格 A/B 前，不得把 `native_batch` 设为默认值。比较时使用
+`--comparison-mode native-batch`；旧 run 未记录该字段时按 `individual` 解释。

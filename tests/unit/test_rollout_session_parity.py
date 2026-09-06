@@ -41,6 +41,8 @@ class RolloutSessionParityTests(unittest.TestCase):
                 optimized_session=True,
                 baseline_environment_workers=1,
                 optimized_environment_workers=64,
+                baseline_environment_backend="individual",
+                optimized_environment_backend="individual",
             )
         )
         self.assertFalse(
@@ -50,6 +52,32 @@ class RolloutSessionParityTests(unittest.TestCase):
                 optimized_session=True,
                 baseline_environment_workers=1,
                 optimized_environment_workers=64,
+                baseline_environment_backend="individual",
+                optimized_environment_backend="individual",
+            )
+        )
+
+    def test_native_batch_gate_requires_individual_to_native_batch(self) -> None:
+        self.assertTrue(
+            _settings_are_valid(
+                "native-batch",
+                baseline_session=True,
+                optimized_session=True,
+                baseline_environment_workers=1,
+                optimized_environment_workers=1,
+                baseline_environment_backend="individual",
+                optimized_environment_backend="native_batch",
+            )
+        )
+        self.assertFalse(
+            _settings_are_valid(
+                "native-batch",
+                baseline_session=True,
+                optimized_session=True,
+                baseline_environment_workers=1,
+                optimized_environment_workers=1,
+                baseline_environment_backend="native_batch",
+                optimized_environment_backend="native_batch",
             )
         )
 

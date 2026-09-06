@@ -101,6 +101,7 @@ class ResumeRunDirectoryTests(unittest.TestCase):
             "runtime_options": {
                 "persistent_rollout_session": True,
                 "environment_workers": 1,
+                "environment_backend": "individual",
             },
         }
         with (

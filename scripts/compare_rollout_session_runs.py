@@ -216,6 +216,11 @@ def _environment_worker_setting(options: dict[str, object]) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
+def _environment_backend_setting(options: dict[str, object]) -> str | None:
+    value = options.get("environment_backend", "individual")
+    return value if value in {"individual", "native_batch"} else None
+
+
 def _settings_are_valid(
     comparison_mode: str,
     *,
@@ -223,6 +228,8 @@ def _settings_are_valid(
     optimized_session: bool | None,
     baseline_environment_workers: int | None,
     optimized_environment_workers: int | None,
+    baseline_environment_backend: str | None = "individual",
+    optimized_environment_backend: str | None = "individual",
 ) -> bool:
     if comparison_mode == "persistent-session":
         return baseline_session is False and optimized_session is True
@@ -233,6 +240,17 @@ def _settings_are_valid(
             and baseline_environment_workers == 1
             and optimized_environment_workers is not None
             and optimized_environment_workers > 1
+            and baseline_environment_backend == "individual"
+            and optimized_environment_backend == "individual"
+        )
+    if comparison_mode == "native-batch":
+        return (
+            baseline_session is True
+            and optimized_session is True
+            and baseline_environment_workers == 1
+            and optimized_environment_workers == 1
+            and baseline_environment_backend == "individual"
+            and optimized_environment_backend == "native_batch"
         )
     raise ValueError(f"unsupported comparison mode: {comparison_mode}")
 
@@ -244,7 +262,7 @@ def main() -> int:
     parser.add_argument("--logprob-tolerance", type=float, default=1e-3)
     parser.add_argument(
         "--comparison-mode",
-        choices=("persistent-session", "environment-workers"),
+        choices=("persistent-session", "environment-workers", "native-batch"),
         default="persistent-session",
     )
     args = parser.parse_args()
@@ -254,6 +272,8 @@ def main() -> int:
     optimized_setting = _session_setting(optimized_options)
     baseline_environment_workers = _environment_worker_setting(baseline_options)
     optimized_environment_workers = _environment_worker_setting(optimized_options)
+    baseline_environment_backend = _environment_backend_setting(baseline_options)
+    optimized_environment_backend = _environment_backend_setting(optimized_options)
     report = compare_records(
         _read_traces(args.baseline),
         _read_traces(args.optimized),
@@ -265,6 +285,8 @@ def main() -> int:
         optimized_session=optimized_setting,
         baseline_environment_workers=baseline_environment_workers,
         optimized_environment_workers=optimized_environment_workers,
+        baseline_environment_backend=baseline_environment_backend,
+        optimized_environment_backend=optimized_environment_backend,
     )
     report.update(
         {
@@ -275,6 +297,8 @@ def main() -> int:
             "optimized_persistent_rollout_session": optimized_setting,
             "baseline_environment_workers": baseline_environment_workers,
             "optimized_environment_workers": optimized_environment_workers,
+            "baseline_environment_backend": baseline_environment_backend,
+            "optimized_environment_backend": optimized_environment_backend,
             "settings_valid": settings_valid,
         }
     )

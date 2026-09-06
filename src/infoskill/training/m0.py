@@ -51,6 +51,7 @@ def run_m0_training(
     resume: str | None,
     persistent_rollout_session: bool = True,
     environment_workers: int = 1,
+    environment_backend: str = "individual",
     verbose_runtime_logs: bool = False,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
@@ -61,6 +62,12 @@ def run_m0_training(
         raise ValueError("num_gpus must be positive")
     if environment_workers <= 0:
         raise ValueError("environment_workers must be positive")
+    if environment_backend not in {"individual", "native_batch"}:
+        raise ValueError("environment_backend must be individual or native_batch")
+    if environment_backend == "native_batch" and environment_workers != 1:
+        raise ValueError(
+            "native_batch owns its process count; environment_workers must remain 1"
+        )
 
     all_train_tasks = discover_tasks(config.paths.alfworld_data, split="train")
     if len(all_train_tasks) != EXPECTED_TRAIN_TASKS:
@@ -107,6 +114,7 @@ def run_m0_training(
             "persistent_rollout_session": persistent_rollout_session,
             "cross_step_prefix_cache": False,
             "environment_workers": environment_workers,
+            "environment_backend": environment_backend,
         },
     }
     resume_source_num_gpus: int | None = None
@@ -199,6 +207,7 @@ def run_m0_training(
             runtime=runtime,
             training=True,
             environment_workers=environment_workers,
+            environment_backend=environment_backend,
         )
         evaluation_collector = _collector(
             config,
@@ -206,6 +215,7 @@ def run_m0_training(
             runtime=runtime,
             training=False,
             environment_workers=environment_workers,
+            environment_backend=environment_backend,
         )
         if checkpoint_to_load is not None:
             runtime.load_portable_state(checkpoint_to_load / "runtime")
@@ -346,6 +356,7 @@ def _collector(
     runtime: object,
     training: bool,
     environment_workers: int,
+    environment_backend: str,
 ) -> TrajectoryCollector:
     parameters = GenerationParameters(
         do_sample=training,
@@ -362,6 +373,7 @@ def _collector(
         invalid_action_penalty=0.01,
         generation_parameters=parameters,
         environment_workers=environment_workers,
+        environment_backend=environment_backend,  # type: ignore[arg-type]
     )
 
 

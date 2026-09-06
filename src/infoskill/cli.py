@@ -66,6 +66,12 @@ def _parser() -> argparse.ArgumentParser:
         default=1,
         help="number of already-loaded ALFWorld step/close calls allowed in parallel",
     )
+    train.add_argument(
+        "--environment-backend",
+        choices=("individual", "native_batch"),
+        default="individual",
+        help="individual batch_size=1 environments or TextWorld native multiprocessing batch",
+    )
     train.add_argument("--run-name")
     train.add_argument("--resume")
     train.add_argument(
@@ -94,6 +100,10 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("num_gpus must be positive")
     if args.environment_workers <= 0:
         raise ValueError("environment_workers must be positive")
+    if args.environment_backend == "native_batch" and args.environment_workers != 1:
+        raise ValueError(
+            "native_batch owns its process count; environment_workers must remain 1"
+        )
     _validate_paths(
         config,
         mode=mode,
@@ -116,6 +126,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "evaluation_kind": plan.evaluation_kind,
                     "num_gpus": args.num_gpus,
                     "environment_workers": args.environment_workers,
+                    "environment_backend": args.environment_backend,
                     "persistent_rollout_session": args.persistent_rollout_session,
                     "verbose_runtime_logs": args.verbose_runtime_logs,
                     "resume": args.resume,
@@ -139,6 +150,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         resume=args.resume,
         persistent_rollout_session=args.persistent_rollout_session,
         environment_workers=args.environment_workers,
+        environment_backend=args.environment_backend,
         verbose_runtime_logs=args.verbose_runtime_logs,
     )
 
