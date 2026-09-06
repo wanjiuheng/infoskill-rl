@@ -94,6 +94,12 @@ def _parser() -> argparse.ArgumentParser:
         default=0,
         help="diagnostic physical CUDA memory polling interval; 0 disables polling",
     )
+    train.add_argument(
+        "--policy-max-tokens-per-gpu",
+        type=int,
+        default=16_384,
+        help="old/ref/actor dynamic micro-batch token budget per GPU",
+    )
     train.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -115,6 +121,12 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         )
     if args.cuda_memory_poll_interval_ms < 0:
         raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
+    minimum_token_budget = config.max_prompt_tokens + config.max_response_tokens
+    if args.policy_max_tokens_per_gpu < minimum_token_budget:
+        raise ValueError(
+            "policy_max_tokens_per_gpu must be at least max_prompt_tokens + "
+            f"max_response_tokens ({minimum_token_budget})"
+        )
     _validate_paths(
         config,
         mode=mode,
@@ -143,6 +155,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "cuda_memory_poll_interval_ms": (
                         args.cuda_memory_poll_interval_ms
                     ),
+                    "policy_max_tokens_per_gpu": args.policy_max_tokens_per_gpu,
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "dry_run": True,
@@ -167,6 +180,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         environment_backend=args.environment_backend,
         verbose_runtime_logs=args.verbose_runtime_logs,
         cuda_memory_poll_interval_ms=args.cuda_memory_poll_interval_ms,
+        policy_max_tokens_per_gpu=args.policy_max_tokens_per_gpu,
     )
 
 

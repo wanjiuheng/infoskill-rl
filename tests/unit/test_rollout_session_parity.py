@@ -84,6 +84,39 @@ class RolloutSessionParityTests(unittest.TestCase):
             )
         )
 
+    def test_token_budget_gate_requires_monitored_16384_to_larger_candidate(
+        self,
+    ) -> None:
+        settings = {
+            "baseline_session": True,
+            "optimized_session": True,
+            "baseline_environment_workers": 1,
+            "optimized_environment_workers": 1,
+            "baseline_environment_backend": "native_batch",
+            "optimized_environment_backend": "native_batch",
+            "baseline_policy_max_tokens_per_gpu": 16_384,
+            "optimized_policy_max_tokens_per_gpu": 20_480,
+            "baseline_memory_poll_interval_ms": 200,
+            "optimized_memory_poll_interval_ms": 200,
+        }
+
+        self.assertTrue(_settings_are_valid("token-budget", **settings))
+        self.assertFalse(
+            _settings_are_valid(
+                "token-budget",
+                **{
+                    **settings,
+                    "optimized_policy_max_tokens_per_gpu": 16_384,
+                },
+            )
+        )
+        self.assertFalse(
+            _settings_are_valid(
+                "token-budget",
+                **{**settings, "optimized_memory_poll_interval_ms": 0},
+            )
+        )
+
     def test_small_logprob_drift_with_identical_semantics_passes(self) -> None:
         report = compare_records(
             [_record(logprob=-0.5)],

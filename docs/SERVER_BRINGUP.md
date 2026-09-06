@@ -461,3 +461,39 @@ python scripts/report_cuda_memory.py "$RUN"
 任何超过 `policy_total_gb_min` 的 PyTorch allocator peak 都只是逻辑计数。取得有效基线
 前不暴露更大的 token budget；若余量不足则保持 `16384`，不通过缩 batch 或关闭梯度
 检查点为候选腾显存。
+
+当前 A800 基线的最差物理余量为 rollout `12.93 GiB`、policy `14.76 GiB`，四个
+rank 的训练 token 最大/最小比为 `1.211`。因此首个保守候选只把 old/ref/actor
+训练侧动态微批预算从 `16384` 提高到 `20480`，vLLM rollout 调度预算保持 `16384`，
+不同时改变两个变量，也不直接尝试 `24576/32768`。候选运行必须保留相同的 200ms
+物理显存采样：
+
+```bash
+GPUS=0,1,2,3 \
+PROFILE=benchmark \
+MAX_UPDATES=1 \
+PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_BACKEND=native_batch \
+ENVIRONMENT_WORKERS=1 \
+CUDA_MEMORY_POLL_INTERVAL_MS=200 \
+POLICY_MAX_TOKENS_PER_GPU=20480 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=token-budget-20480-u1 \
+bash scripts/run_alfworld.sh train no_skill
+```
+
+用本节 `16384` 物理采样 run 作为 baseline，执行：
+
+```bash
+python scripts/compare_rollout_session_runs.py \
+  "$BASELINE" \
+  "$OPTIMIZED" \
+  --comparison-mode token-budget
+```
+
+默认门禁同时要求轨迹语义完全一致、rollout logprob 最大绝对误差不超过 `1e-3`、
+完整 core update 至少提速 `3%`，并且 candidate 在 rollout 和 policy 两阶段的最差
+物理空闲显存都不低于 `8 GiB`。只有 `passed=true` 才允许把 `20480` 提升为正式默认；
+OOM、余量不足或收益不足均保持 `16384`。`POLICY_MAX_TOKENS_PER_GPU` 会写入 resolved config，
+恢复时不得静默修改。物理采样本身只用于诊断，正式 run 仍设
+`CUDA_MEMORY_POLL_INTERVAL_MS=0`。

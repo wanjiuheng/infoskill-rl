@@ -24,6 +24,9 @@ INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
 VERBOSE_RUNTIME_LOGS="${VERBOSE_RUNTIME_LOGS:-0}"
 # Diagnostic only. Zero avoids polling overhead in normal/formal runs.
 CUDA_MEMORY_POLL_INTERVAL_MS="${CUDA_MEMORY_POLL_INTERVAL_MS:-0}"
+# Dynamic old/ref/actor micro-batch budget. This does not alter vLLM rollout
+# scheduling. Keep the validated default unless running a monitored A/B gate.
+POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-16384}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -49,6 +52,10 @@ if [[ "${ENVIRONMENT_BACKEND}" == "native_batch" && "${ENVIRONMENT_WORKERS}" != 
 fi
 if [[ ! "${CUDA_MEMORY_POLL_INTERVAL_MS}" =~ ^[0-9]+$ ]]; then
   echo "CUDA_MEMORY_POLL_INTERVAL_MS must be a non-negative integer" >&2
+  exit 2
+fi
+if [[ ! "${POLICY_MAX_TOKENS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "POLICY_MAX_TOKENS_PER_GPU must be a positive integer" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -96,6 +103,7 @@ case "${ACTION}" in
       --environment-workers "${ENVIRONMENT_WORKERS}"
       --environment-backend "${ENVIRONMENT_BACKEND}"
       --cuda-memory-poll-interval-ms "${CUDA_MEMORY_POLL_INTERVAL_MS}"
+      --policy-max-tokens-per-gpu "${POLICY_MAX_TOKENS_PER_GPU}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
       TRAIN_ARGS+=(--max-updates "${MAX_UPDATES}")

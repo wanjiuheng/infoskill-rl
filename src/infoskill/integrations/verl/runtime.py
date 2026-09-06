@@ -38,7 +38,8 @@ class VerlRuntimeConfig:
     lora_alpha: int = 32
     actor_learning_rate: float = 1e-6
     action_minibatch_size: int = 256
-    max_tokens_per_gpu: int = 16_384
+    policy_max_tokens_per_gpu: int = 16_384
+    rollout_max_batched_tokens: int = 16_384
     gpu_memory_utilization: float = 0.50
     allow_unkeyed_vllm_sampling: bool = False
     require_hybrid_prefix: bool = False
@@ -343,7 +344,7 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.actor.optim.total_training_steps = settings.total_training_steps
     actor_ref.actor.ppo_mini_batch_size = settings.action_minibatch_size
     actor_ref.actor.ppo_micro_batch_size_per_gpu = 4
-    actor_ref.actor.ppo_max_token_len_per_gpu = settings.max_tokens_per_gpu
+    actor_ref.actor.ppo_max_token_len_per_gpu = settings.policy_max_tokens_per_gpu
     actor_ref.actor.use_dynamic_bsz = True
     actor_ref.actor.ppo_epochs = 1
     actor_ref.actor.shuffle = True
@@ -369,11 +370,13 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.rollout.max_model_len = settings.max_prompt_tokens + settings.max_response_tokens + 5
     actor_ref.rollout.tensor_model_parallel_size = 1
     actor_ref.rollout.gpu_memory_utilization = settings.gpu_memory_utilization
-    actor_ref.rollout.max_num_batched_tokens = settings.max_tokens_per_gpu
+    actor_ref.rollout.max_num_batched_tokens = settings.rollout_max_batched_tokens
     actor_ref.rollout.max_num_seqs = 512
     actor_ref.rollout.log_prob_micro_batch_size_per_gpu = 4
     actor_ref.rollout.log_prob_use_dynamic_bsz = True
-    actor_ref.rollout.log_prob_max_token_len_per_gpu = settings.max_tokens_per_gpu
+    actor_ref.rollout.log_prob_max_token_len_per_gpu = (
+        settings.policy_max_tokens_per_gpu
+    )
     actor_ref.rollout.enforce_eager = settings.require_hybrid_prefix
     actor_ref.rollout.free_cache_engine = False
     actor_ref.rollout.enable_chunked_prefill = True
@@ -384,7 +387,7 @@ def _actor_config(settings: VerlRuntimeConfig):
             setattr(actor_ref.rollout, name, value)
     actor_ref.ref.log_prob_micro_batch_size_per_gpu = 4
     actor_ref.ref.log_prob_use_dynamic_bsz = True
-    actor_ref.ref.log_prob_max_token_len_per_gpu = settings.max_tokens_per_gpu
+    actor_ref.ref.log_prob_max_token_len_per_gpu = settings.policy_max_tokens_per_gpu
     actor_ref.ref.fsdp_config.param_offload = False
     OmegaConf.resolve(config)
     return config

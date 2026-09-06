@@ -65,6 +65,7 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         normalized_options.setdefault("environment_workers", 1)
         normalized_options.setdefault("environment_backend", "individual")
         normalized_options.setdefault("cuda_memory_poll_interval_ms", 0)
+        normalized_options.setdefault("policy_max_tokens_per_gpu", 16_384)
         normalized["runtime_options"] = normalized_options
     return normalized
 

@@ -54,6 +54,7 @@ def run_m0_training(
     environment_backend: str = "native_batch",
     verbose_runtime_logs: bool = False,
     cuda_memory_poll_interval_ms: int = 0,
+    policy_max_tokens_per_gpu: int = 16_384,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 
@@ -71,6 +72,12 @@ def run_m0_training(
         )
     if cuda_memory_poll_interval_ms < 0:
         raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
+    minimum_token_budget = config.max_prompt_tokens + config.max_response_tokens
+    if policy_max_tokens_per_gpu < minimum_token_budget:
+        raise ValueError(
+            "policy_max_tokens_per_gpu must be at least max_prompt_tokens + "
+            f"max_response_tokens ({minimum_token_budget})"
+        )
 
     all_train_tasks = discover_tasks(config.paths.alfworld_data, split="train")
     if len(all_train_tasks) != EXPECTED_TRAIN_TASKS:
@@ -119,6 +126,7 @@ def run_m0_training(
             "environment_workers": environment_workers,
             "environment_backend": environment_backend,
             "cuda_memory_poll_interval_ms": cuda_memory_poll_interval_ms,
+            "policy_max_tokens_per_gpu": policy_max_tokens_per_gpu,
         },
     }
     resume_source_num_gpus: int | None = None
@@ -190,6 +198,7 @@ def run_m0_training(
             max_response_tokens=config.max_response_tokens,
             total_training_steps=plan.max_updates,
             action_minibatch_size=plan.action_minibatch_size,
+            policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
             gpu_memory_utilization=0.45,
             require_hybrid_prefix=False,
             master_seed=config.master_seed,
