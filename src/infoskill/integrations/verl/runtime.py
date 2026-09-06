@@ -19,7 +19,10 @@ from infoskill.rollout import GenerationRequest, GenerationResult
 from .codec import VerlBatchCodec
 from .compatibility import require_vllm_084_cachetools_compatibility
 from .hybrid_rollout import vllm_action_stop_settings
-from .memory_metrics import summarize_cuda_memory_snapshots
+from .memory_metrics import (
+    summarize_cuda_memory_snapshots,
+    summarize_rank_token_load,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +46,7 @@ class VerlRuntimeConfig:
     master_seed: int = 0
     persistent_rollout_session: bool = True
     verbose_runtime_logs: bool = False
+    cuda_memory_poll_interval_ms: int = 0
 
 
 class VerlRuntime:
@@ -187,7 +191,16 @@ class VerlRuntime:
             data,
             self.worker_group.world_size,
         )
+        token_load_metrics = summarize_rank_token_load(
+            [
+                int(value)
+                for value in data.batch["attention_mask"].sum(dim=-1).tolist()
+            ],
+            self.worker_group.world_size,
+        )
         training_codec_seconds = time.perf_counter() - stage_started
+        if self.config.cuda_memory_poll_interval_ms > 0:
+            self.worker_group.begin_infoskill_policy_memory_measurement()
         stage_started = time.perf_counter()
         old = self.worker_group.compute_log_prob(data)
         old_logprob_seconds = time.perf_counter() - stage_started
@@ -220,7 +233,10 @@ class VerlRuntime:
             summarize_cuda_memory_snapshots(
                 self.worker_group.infoskill_cuda_memory_snapshot()
             )
-            if self.config.persistent_rollout_session
+            if (
+                self.config.persistent_rollout_session
+                or self.config.cuda_memory_poll_interval_ms > 0
+            )
             else {}
         )
         self._completed_updates = global_update + 1
@@ -244,6 +260,7 @@ class VerlRuntime:
         )
         metrics.update(alignment_metrics)
         metrics.update(cuda_memory_metrics)
+        metrics.update(token_load_metrics)
         self._generation_calls = 0
         self._generation_requests = 0
         self._generation_seconds = 0.0
@@ -314,6 +331,9 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.model.trust_remote_code = True
     with open_dict(actor_ref.model):
         actor_ref.model.initialization_seed = settings.master_seed
+        actor_ref.model.infoskill_cuda_memory_poll_interval_ms = (
+            settings.cuda_memory_poll_interval_ms
+        )
     actor_ref.actor.strategy = "fsdp"
     actor_ref.actor.optim.lr = settings.actor_learning_rate
     actor_ref.actor.optim.weight_decay = 0.0

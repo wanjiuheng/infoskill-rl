@@ -22,6 +22,8 @@ ENVIRONMENT_BACKEND="${ENVIRONMENT_BACKEND:-native_batch}" # native_batch | indi
 INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
 # Default keeps only INFO-SKILL milestones, errors and progress bars in terminal.
 VERBOSE_RUNTIME_LOGS="${VERBOSE_RUNTIME_LOGS:-0}"
+# Diagnostic only. Zero avoids polling overhead in normal/formal runs.
+CUDA_MEMORY_POLL_INTERVAL_MS="${CUDA_MEMORY_POLL_INTERVAL_MS:-0}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -43,6 +45,10 @@ if [[ "${ENVIRONMENT_BACKEND}" != "individual" && "${ENVIRONMENT_BACKEND}" != "n
 fi
 if [[ "${ENVIRONMENT_BACKEND}" == "native_batch" && "${ENVIRONMENT_WORKERS}" != "1" ]]; then
   echo "native_batch owns its process count; ENVIRONMENT_WORKERS must remain 1" >&2
+  exit 2
+fi
+if [[ ! "${CUDA_MEMORY_POLL_INTERVAL_MS}" =~ ^[0-9]+$ ]]; then
+  echo "CUDA_MEMORY_POLL_INTERVAL_MS must be a non-negative integer" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -89,6 +95,7 @@ case "${ACTION}" in
       --num-gpus "${#GPU_IDS[@]}"
       --environment-workers "${ENVIRONMENT_WORKERS}"
       --environment-backend "${ENVIRONMENT_BACKEND}"
+      --cuda-memory-poll-interval-ms "${CUDA_MEMORY_POLL_INTERVAL_MS}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
       TRAIN_ARGS+=(--max-updates "${MAX_UPDATES}")

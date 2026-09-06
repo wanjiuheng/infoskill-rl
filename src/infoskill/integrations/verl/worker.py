@@ -17,6 +17,7 @@ from verl.utils.fsdp_utils import layered_summon_lora_params
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
 
 from infoskill.fsdp_checkpoint import load_peft_adapter_under_full_fsdp_state
+from infoskill.integrations.verl.memory_metrics import PhysicalMemorySampler
 
 
 class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
@@ -27,6 +28,12 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self._infoskill_rollout_session_active = False
         self._infoskill_rollout_session_generation_count = 0
         self._infoskill_rollout_memory_snapshot = None
+        self._infoskill_cuda_memory_sampler = None
+        self._infoskill_cuda_memory_poll_interval_ms = int(
+            self.config.model.get("infoskill_cuda_memory_poll_interval_ms", 0)
+        )
+        if self._infoskill_cuda_memory_poll_interval_ms < 0:
+            raise ValueError("CUDA memory polling interval must be non-negative")
         seed = int(self.config.model.get("initialization_seed", 0))
         random.seed(seed)
         np.random.seed(seed % (2**32))
@@ -43,10 +50,12 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self._infoskill_rollout_session_generation_count = 0
         self._infoskill_rollout_memory_snapshot = None
         get_torch_device().reset_peak_memory_stats()
+        self._start_infoskill_cuda_memory_sampler()
         try:
             self.rollout_sharding_manager.__enter__()
         except Exception:
             try:
+                self._stop_infoskill_cuda_memory_sampler()
                 self.rollout_sharding_manager.__exit__(None, None, None)
             finally:
                 self._infoskill_rollout_session_active = False
@@ -93,8 +102,13 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         if not self._infoskill_rollout_session_active:
             return
         try:
-            self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
-            self.rollout_sharding_manager.__exit__(None, None, None)
+            try:
+                self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
+                self._infoskill_rollout_memory_snapshot.update(
+                    self._stop_infoskill_cuda_memory_sampler()
+                )
+            finally:
+                self.rollout_sharding_manager.__exit__(None, None, None)
         finally:
             # Start a fresh peak window for old/ref logprob and actor update.
             get_torch_device().reset_peak_memory_stats()
@@ -102,12 +116,43 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             self._infoskill_rollout_session_generation_count = 0
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def begin_infoskill_policy_memory_measurement(self) -> None:
+        if self._infoskill_cuda_memory_sampler is not None:
+            raise RuntimeError("CUDA memory sampler is already active")
+        get_torch_device().reset_peak_memory_stats()
+        self._start_infoskill_cuda_memory_sampler()
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def infoskill_cuda_memory_snapshot(self) -> dict[str, object]:
+        policy = _cuda_memory_snapshot()
+        policy.update(self._stop_infoskill_cuda_memory_sampler())
         return {
             "rank": dist.get_rank(),
             "rollout": self._infoskill_rollout_memory_snapshot,
-            "policy": _cuda_memory_snapshot(),
+            "policy": policy,
         }
+
+    def _start_infoskill_cuda_memory_sampler(self) -> None:
+        interval = self._infoskill_cuda_memory_poll_interval_ms
+        if interval <= 0:
+            return
+        if self._infoskill_cuda_memory_sampler is not None:
+            raise RuntimeError("CUDA memory sampler is already active")
+        device = get_torch_device()
+        device_index = device.current_device()
+        sampler = PhysicalMemorySampler(
+            read_memory=lambda: device.mem_get_info(device_index),
+            interval_ms=interval,
+        )
+        sampler.start()
+        self._infoskill_cuda_memory_sampler = sampler
+
+    def _stop_infoskill_cuda_memory_sampler(self) -> dict[str, int]:
+        sampler = self._infoskill_cuda_memory_sampler
+        if sampler is None:
+            return {}
+        self._infoskill_cuda_memory_sampler = None
+        return sampler.stop()
 
     def _build_rollout(self, trust_remote_code: bool = False):
         from verl.workers.rollout import vllm_rollout as rollout_package

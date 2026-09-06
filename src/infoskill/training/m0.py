@@ -53,6 +53,7 @@ def run_m0_training(
     environment_workers: int = 1,
     environment_backend: str = "native_batch",
     verbose_runtime_logs: bool = False,
+    cuda_memory_poll_interval_ms: int = 0,
 ) -> int:
     """Run the token-only M0 vertical slice through the pinned VERL runtime."""
 
@@ -68,6 +69,8 @@ def run_m0_training(
         raise ValueError(
             "native_batch owns its process count; environment_workers must remain 1"
         )
+    if cuda_memory_poll_interval_ms < 0:
+        raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
 
     all_train_tasks = discover_tasks(config.paths.alfworld_data, split="train")
     if len(all_train_tasks) != EXPECTED_TRAIN_TASKS:
@@ -115,6 +118,7 @@ def run_m0_training(
             "cross_step_prefix_cache": False,
             "environment_workers": environment_workers,
             "environment_backend": environment_backend,
+            "cuda_memory_poll_interval_ms": cuda_memory_poll_interval_ms,
         },
     }
     resume_source_num_gpus: int | None = None
@@ -191,6 +195,7 @@ def run_m0_training(
             master_seed=config.master_seed,
             persistent_rollout_session=persistent_rollout_session,
             verbose_runtime_logs=verbose_runtime_logs,
+            cuda_memory_poll_interval_ms=cuda_memory_poll_interval_ms,
         )
     )
     logger.info("Runtime ready in %.1f seconds", time.perf_counter() - runtime_started)

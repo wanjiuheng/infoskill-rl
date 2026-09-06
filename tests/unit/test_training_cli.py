@@ -46,6 +46,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["environment_workers"], 1)
         self.assertEqual(payload["environment_backend"], "native_batch")
         self.assertFalse(payload["verbose_runtime_logs"])
+        self.assertEqual(payload["cuda_memory_poll_interval_ms"], 0)
 
     def test_persistent_rollout_session_allows_explicit_opt_out(self) -> None:
         output = io.StringIO()
@@ -109,6 +110,22 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertTrue(json.loads(output.getvalue())["verbose_runtime_logs"])
+
+    def test_cuda_memory_polling_is_explicitly_diagnostic(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + [
+            "--cuda-memory-poll-interval-ms",
+            "200",
+        ]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            json.loads(output.getvalue())["cuda_memory_poll_interval_ms"], 200
+        )
 
     def test_no_skill_training_does_not_require_embedding_or_skill_files(self) -> None:
         output = io.StringIO()

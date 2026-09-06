@@ -88,6 +88,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="forward verbose Ray/vLLM/FSDP worker logs to the terminal",
     )
+    train.add_argument(
+        "--cuda-memory-poll-interval-ms",
+        type=int,
+        default=0,
+        help="diagnostic physical CUDA memory polling interval; 0 disables polling",
+    )
     train.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -107,6 +113,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError(
             "native_batch owns its process count; environment_workers must remain 1"
         )
+    if args.cuda_memory_poll_interval_ms < 0:
+        raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
     _validate_paths(
         config,
         mode=mode,
@@ -132,6 +140,9 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "environment_backend": args.environment_backend,
                     "persistent_rollout_session": args.persistent_rollout_session,
                     "verbose_runtime_logs": args.verbose_runtime_logs,
+                    "cuda_memory_poll_interval_ms": (
+                        args.cuda_memory_poll_interval_ms
+                    ),
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "dry_run": True,
@@ -155,6 +166,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         environment_workers=args.environment_workers,
         environment_backend=args.environment_backend,
         verbose_runtime_logs=args.verbose_runtime_logs,
+        cuda_memory_poll_interval_ms=args.cuda_memory_poll_interval_ms,
     )
 
 
