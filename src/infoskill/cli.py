@@ -84,15 +84,6 @@ def _parser() -> argparse.ArgumentParser:
         help="keep vLLM awake across environment steps within one rollout update",
     )
     train.add_argument(
-        "--actor-gradient-checkpointing",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "checkpoint actor activations to reduce memory (default); disable only "
-            "for the guarded A800 performance experiment"
-        ),
-    )
-    train.add_argument(
         "--verbose-runtime-logs",
         action="store_true",
         help="forward verbose Ray/vLLM/FSDP worker logs to the terminal",
@@ -140,9 +131,6 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "environment_workers": args.environment_workers,
                     "environment_backend": args.environment_backend,
                     "persistent_rollout_session": args.persistent_rollout_session,
-                    "actor_gradient_checkpointing": (
-                        args.actor_gradient_checkpointing
-                    ),
                     "verbose_runtime_logs": args.verbose_runtime_logs,
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
@@ -164,7 +152,6 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         run_name=args.run_name,
         resume=args.resume,
         persistent_rollout_session=args.persistent_rollout_session,
-        actor_gradient_checkpointing=args.actor_gradient_checkpointing,
         environment_workers=args.environment_workers,
         environment_backend=args.environment_backend,
         verbose_runtime_logs=args.verbose_runtime_logs,

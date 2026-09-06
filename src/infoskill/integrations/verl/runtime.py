@@ -41,7 +41,6 @@ class VerlRuntimeConfig:
     soft_prefix_length: int = 5
     master_seed: int = 0
     persistent_rollout_session: bool = True
-    actor_gradient_checkpointing: bool = True
     verbose_runtime_logs: bool = False
 
 
@@ -301,9 +300,7 @@ def _actor_config(settings: VerlRuntimeConfig):
         "up_proj",
         "down_proj",
     ]
-    actor_ref.model.enable_gradient_checkpointing = (
-        settings.actor_gradient_checkpointing
-    )
+    actor_ref.model.enable_gradient_checkpointing = True
     actor_ref.model.use_remove_padding = True
     actor_ref.model.trust_remote_code = True
     with open_dict(actor_ref.model):

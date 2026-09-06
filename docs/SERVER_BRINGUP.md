@@ -410,40 +410,17 @@ Ray SIGTERM 堆栈。INFO-SKILL 的 native batch 关闭路径先发送 TextWorld
 控制消息并等待子进程正常退出，只在 2 秒总超时后强制终止。每次运行必须满足
 `perf/environment_forced_terminations=0`；非零表示真实的环境进程关闭故障，应阻止后续门。
 
-### Actor gradient checkpointing 性能门
+### 已拒绝的显存回收与激活优化候选
 
-关闭 rollout 每步 `torch.cuda.empty_cache()` 的候选已经被拒绝：轨迹和 logprob
-严格一致，但 core 从约 `407.90s` 增至 `412.08s`，显存高水位不变。正式路径继续
-执行逐步清缓存，也不再暴露该无收益开关。
+以下候选均不得用于正式实验：
 
-Actor gradient checkpointing 会用额外前向计算换取激活显存。A800 实测基线每卡
-显存高水位约为 `22–23 GiB`，因此可在不改变 batch、样本或目标函数的前提下测试关闭
-它是否能缩短反向更新。默认仍为开启；候选命令为：
+- 关闭 rollout step 之间的 `torch.cuda.empty_cache()`：语义轨迹和 rollout logprob
+  完全一致，但单个 benchmark update 从约 `407.90s` 增加到 `412.08s`，且峰值显存
+  没有下降。因此该候选没有性能收益。
+- 关闭 actor gradient checkpointing：runtime 可以正常启动，但第一次 actor update
+  在 Qwen MLP/LoRA 前向传播中发生真实 CUDA OOM。GPU 0 当时已使用约
+  `78.85/79.25 GiB`，下一次 `470 MiB` 分配失败。因此必须保持
+  `actor_ref.model.enable_gradient_checkpointing=true`。
 
-```bash
-GPUS=0,1,2,3 \
-PROFILE=benchmark \
-PERSISTENT_ROLLOUT_SESSION=1 \
-ENVIRONMENT_BACKEND=native_batch \
-ENVIRONMENT_WORKERS=1 \
-ACTOR_GRADIENT_CHECKPOINTING=0 \
-INFO_SKILL_CPU_THREADS=1 \
-RUN_NAME=actor-gradient-checkpointing-off-u1 \
-bash scripts/run_alfworld.sh train no_skill
-```
-
-使用同任务、同模型且保留默认 gradient checkpointing 的 native-batch benchmark
-作为基线：
-
-```bash
-python scripts/compare_rollout_session_runs.py \
-  /absolute/path/to/native-batch-baseline \
-  /absolute/path/to/actor-gradient-checkpointing-off-u1 \
-  --comparison-mode actor-gradient-checkpointing
-```
-
-比较器默认要求核心 update 至少加速 `1.03x`，并报告两侧显存高水位。只有结果
-`passed=true` 才表示轨迹/logprob 严格一致、训练后 adapter 与 optimizer tensor 通过
-默认 `atol=1e-6, rtol=1e-5` 数值门、加速达标且无 OOM。之后还要让两个连续 benchmark
-update 的显存高水位和 `perf/environment_forced_terminations` 均正常，才可考虑修改
-默认值。否则继续开启 gradient checkpointing。
+不要通过减少 rollout 数、任务组、token 上限、训练 batch，或调低 vLLM 显存比例来
+“救活”第二个候选；这些改动会改变正式实验定义或牺牲吞吐，不再是同条件工程优化。

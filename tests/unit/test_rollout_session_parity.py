@@ -3,7 +3,6 @@ from __future__ import annotations
 import unittest
 
 from scripts.compare_rollout_session_runs import (
-    _performance_is_valid,
     _settings_are_valid,
     compare_records,
 )
@@ -82,57 +81,6 @@ class RolloutSessionParityTests(unittest.TestCase):
                 optimized_environment_workers=1,
                 baseline_environment_backend="native_batch",
                 optimized_environment_backend="native_batch",
-            )
-        )
-
-    def test_gradient_checkpointing_gate_requires_true_to_false(self) -> None:
-        self.assertTrue(
-            _settings_are_valid(
-                "actor-gradient-checkpointing",
-                baseline_session=True,
-                optimized_session=True,
-                baseline_environment_workers=1,
-                optimized_environment_workers=1,
-                baseline_environment_backend="native_batch",
-                optimized_environment_backend="native_batch",
-                baseline_gradient_checkpointing=True,
-                optimized_gradient_checkpointing=False,
-            )
-        )
-        self.assertFalse(
-            _settings_are_valid(
-                "actor-gradient-checkpointing",
-                baseline_session=True,
-                optimized_session=True,
-                baseline_environment_workers=1,
-                optimized_environment_workers=1,
-                baseline_environment_backend="native_batch",
-                optimized_environment_backend="native_batch",
-                baseline_gradient_checkpointing=False,
-                optimized_gradient_checkpointing=False,
-            )
-        )
-
-    def test_gradient_checkpointing_gate_requires_a_material_speedup(self) -> None:
-        self.assertTrue(
-            _performance_is_valid(
-                "actor-gradient-checkpointing",
-                core_speedup=1.04,
-                minimum_core_speedup=1.03,
-            )
-        )
-        self.assertFalse(
-            _performance_is_valid(
-                "actor-gradient-checkpointing",
-                core_speedup=1.02,
-                minimum_core_speedup=1.03,
-            )
-        )
-        self.assertTrue(
-            _performance_is_valid(
-                "native-batch",
-                core_speedup=None,
-                minimum_core_speedup=1.03,
             )
         )
 

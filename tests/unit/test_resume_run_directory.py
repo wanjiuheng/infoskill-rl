@@ -141,35 +141,6 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                     allow_gpu_change=False,
                 )
 
-    def test_historical_checkpoint_preserves_gradient_checkpointing_default(self) -> None:
-        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
-        previous = {
-            "num_gpus": 4,
-            "runtime_options": {
-                "persistent_rollout_session": True,
-                "environment_workers": 1,
-                "environment_backend": "native_batch",
-            },
-        }
-        current = {
-            "num_gpus": 4,
-            "runtime_options": {
-                **previous["runtime_options"],
-                "actor_gradient_checkpointing": True,
-            },
-        }
-        with (
-            patch.object(Path, "is_file", return_value=True),
-            patch.object(Path, "read_text", return_value=json.dumps(previous)),
-        ):
-            source_gpus = validate_resume_config(
-                checkpoint,
-                current,
-                allow_gpu_change=False,
-            )
-
-        self.assertEqual(source_gpus, 4)
-
 
 if __name__ == "__main__":
     unittest.main()

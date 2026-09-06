@@ -14,8 +14,6 @@ RESUME="${RESUME:-}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
-# Conservative default; set to 0 only for the guarded A800 memory/speed A/B probe.
-ACTOR_GRADIENT_CHECKPOINTING="${ACTOR_GRADIENT_CHECKPOINTING:-1}"
 # Used only by the individual backend; native_batch owns one process per slot.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
 # Validated by CPU differential, 64-trajectory A/B and two-update longevity gates.
@@ -109,14 +107,6 @@ case "${ACTION}" in
       0) TRAIN_ARGS+=(--no-persistent-rollout-session) ;;
       *)
         echo "PERSISTENT_ROLLOUT_SESSION must be 0 or 1" >&2
-        exit 2
-        ;;
-    esac
-    case "${ACTOR_GRADIENT_CHECKPOINTING}" in
-      1) TRAIN_ARGS+=(--actor-gradient-checkpointing) ;;
-      0) TRAIN_ARGS+=(--no-actor-gradient-checkpointing) ;;
-      *)
-        echo "ACTOR_GRADIENT_CHECKPOINTING must be 0 or 1" >&2
         exit 2
         ;;
     esac
