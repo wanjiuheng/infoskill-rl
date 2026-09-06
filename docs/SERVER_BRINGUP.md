@@ -424,3 +424,37 @@ Ray SIGTERM 堆栈。INFO-SKILL 的 native batch 关闭路径先发送 TextWorld
 
 不要通过减少 rollout 数、任务组、token 上限、训练 batch，或调低 vLLM 显存比例来
 “救活”第二个候选；这些改动会改变正式实验定义或牺牲吞吐，不再是同条件工程优化。
+
+### 逐卡 CUDA 显存基线
+
+VERL 原有的 `perf/max_memory_allocated_gb` 会经过 worker 指标归并，不能解释为单卡
+显存峰值。INFO-SKILL 额外在每个持久 rollout session 开始时清零 PyTorch 峰值计数，
+分别记录 rollout 与 old/ref/actor policy 阶段的每个 rank 指标，并保留 session 结束
+及 actor update 结束时由 CUDA driver 返回的 device free/total。该监控不改变张量、
+随机数、batch 或模型状态。
+
+先按当前正式默认值运行一个完整形状 benchmark：
+
+```bash
+GPUS=0,1,2,3 \
+PROFILE=benchmark \
+PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_BACKEND=native_batch \
+ENVIRONMENT_WORKERS=1 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=cuda-memory-baseline-u1 \
+bash scripts/run_alfworld.sh train no_skill
+```
+
+汇总最后一个 train update：
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-cuda-memory-baseline-u1' | sort | tail -n 1)
+python scripts/report_cuda_memory.py "$RUN"
+```
+
+判断训练 token 动态装箱是否还有放大空间时，必须查看
+`policy_conservative_headroom_gb_min`，不能再用旧的聚合显存指标。取得基线前不暴露
+更大的 token budget；若余量不足则保持 `16384`，不通过缩 batch 或关闭梯度检查点
+为候选腾显存。

@@ -19,6 +19,7 @@ from infoskill.rollout import GenerationRequest, GenerationResult
 from .codec import VerlBatchCodec
 from .compatibility import require_vllm_084_cachetools_compatibility
 from .hybrid_rollout import vllm_action_stop_settings
+from .memory_metrics import summarize_cuda_memory_snapshots
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +216,13 @@ class VerlRuntime:
         stage_started = time.perf_counter()
         result = self.worker_group.update_actor(data)
         actor_update_seconds = time.perf_counter() - stage_started
+        cuda_memory_metrics = (
+            summarize_cuda_memory_snapshots(
+                self.worker_group.infoskill_cuda_memory_snapshot()
+            )
+            if self.config.persistent_rollout_session
+            else {}
+        )
         self._completed_updates = global_update + 1
         metrics = _reduce_metrics(result.meta_info.get("metrics", {}))
         metrics.update(
@@ -235,6 +243,7 @@ class VerlRuntime:
             }
         )
         metrics.update(alignment_metrics)
+        metrics.update(cuda_memory_metrics)
         self._generation_calls = 0
         self._generation_requests = 0
         self._generation_seconds = 0.0

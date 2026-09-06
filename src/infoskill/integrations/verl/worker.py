@@ -26,6 +26,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
     def init_model(self):
         self._infoskill_rollout_session_active = False
         self._infoskill_rollout_session_generation_count = 0
+        self._infoskill_rollout_memory_snapshot = None
         seed = int(self.config.model.get("initialization_seed", 0))
         random.seed(seed)
         np.random.seed(seed % (2**32))
@@ -40,6 +41,8 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             raise RuntimeError("INFO-SKILL rollout session is already active")
         self._infoskill_rollout_session_active = True
         self._infoskill_rollout_session_generation_count = 0
+        self._infoskill_rollout_memory_snapshot = None
+        get_torch_device().reset_peak_memory_stats()
         try:
             self.rollout_sharding_manager.__enter__()
         except Exception:
@@ -90,10 +93,21 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         if not self._infoskill_rollout_session_active:
             return
         try:
+            self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
             self.rollout_sharding_manager.__exit__(None, None, None)
         finally:
+            # Start a fresh peak window for old/ref logprob and actor update.
+            get_torch_device().reset_peak_memory_stats()
             self._infoskill_rollout_session_active = False
             self._infoskill_rollout_session_generation_count = 0
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def infoskill_cuda_memory_snapshot(self) -> dict[str, object]:
+        return {
+            "rank": dist.get_rank(),
+            "rollout": self._infoskill_rollout_memory_snapshot,
+            "policy": _cuda_memory_snapshot(),
+        }
 
     def _build_rollout(self, trust_remote_code: bool = False):
         from verl.workers.rollout import vllm_rollout as rollout_package
@@ -184,3 +198,17 @@ def _write_json(path: Path, payload: object) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _cuda_memory_snapshot() -> dict[str, int]:
+    device = get_torch_device()
+    device_index = device.current_device()
+    free_bytes, total_bytes = device.mem_get_info(device_index)
+    return {
+        "allocated_bytes": int(device.memory_allocated(device_index)),
+        "reserved_bytes": int(device.memory_reserved(device_index)),
+        "peak_allocated_bytes": int(device.max_memory_allocated(device_index)),
+        "peak_reserved_bytes": int(device.max_memory_reserved(device_index)),
+        "free_bytes": int(free_bytes),
+        "total_bytes": int(total_bytes),
+    }
