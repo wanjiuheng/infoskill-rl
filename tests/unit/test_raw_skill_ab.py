@@ -6,6 +6,7 @@ from collections import Counter
 from infoskill.diagnostics.raw_skill_ab import (
     RAW_SKILL_AB_VARIANTS,
     SKILLRL_RL_EXACT_VARIANT,
+    SKILLRL_SFT_EXACT_VARIANT,
     resolve_raw_skill_diagnostic_variants,
     select_stratified_tasks,
     summarize_probe_groups,
@@ -37,6 +38,17 @@ class RawSkillAbTests(unittest.TestCase):
         self.assertEqual(
             SKILLRL_RL_EXACT_VARIANT.prompt_format,
             "skillrl_rl_exact",
+        )
+
+    def test_skillrl_sft_exact_is_opt_in_and_resolves_alone(self) -> None:
+        self.assertNotIn(SKILLRL_SFT_EXACT_VARIANT, RAW_SKILL_AB_VARIANTS)
+
+        selected = resolve_raw_skill_diagnostic_variants(("skillrl-sft-exact",))
+
+        self.assertEqual(selected, (SKILLRL_SFT_EXACT_VARIANT,))
+        self.assertEqual(
+            SKILLRL_SFT_EXACT_VARIANT.prompt_format,
+            "skillrl_sft_exact",
         )
 
     def test_unknown_diagnostic_variant_is_rejected(self) -> None:

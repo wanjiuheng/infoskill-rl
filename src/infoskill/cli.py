@@ -91,6 +91,7 @@ def _parser() -> argparse.ArgumentParser:
             "template-full",
             "template-skillrl",
             "skillrl-rl-exact",
+            "skillrl-sft-exact",
         ),
         help=(
             "run only the selected diagnostic variants; omission preserves "
@@ -698,6 +699,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         audit_raw_skill_prompt_budget_for_model,
         build_raw_skill_setup,
         build_skillrl_grpo_prompt_setup,
+        build_skillrl_sft_prompt_setup,
         build_verl_policy_evaluation,
     )
     from infoskill.diagnostics import (
@@ -736,6 +738,8 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
     for variant in variants:
         if variant.prompt_format == "skillrl_rl_exact":
             setup = build_skillrl_grpo_prompt_setup(config)
+        elif variant.prompt_format == "skillrl_sft_exact":
+            setup = build_skillrl_sft_prompt_setup(config)
         else:
             setup = build_raw_skill_setup(
                 config,
@@ -869,6 +873,9 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
                 backend=runtime,
                 conditioner=setup.conditioner,
                 environment_backend=args.environment_backend,
+                history_limit=(
+                    5 if variant.prompt_format == "skillrl_sft_exact" else None
+                ),
             )
             rollout_started = time.perf_counter()
             groups = []

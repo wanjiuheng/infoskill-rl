@@ -52,7 +52,7 @@ class RunScriptTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("raw-skill-ab|skillrl-rl-exact)", script)
+        self.assertIn("raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact)", script)
         self.assertIn(
             '--tasks-per-type "${RAW_SKILL_AB_TASKS_PER_TYPE}"',
             script,
@@ -64,9 +64,21 @@ class RunScriptTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("raw-skill-ab|skillrl-rl-exact)", script)
+        self.assertIn("raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact)", script)
         self.assertIn(
             'RAW_SKILL_AB_ARGS+=(--variants skillrl-rl-exact)',
+            script,
+        )
+
+    def test_skillrl_sft_exact_action_selects_only_its_diagnostic_variant(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact)", script)
+        self.assertIn(
+            'RAW_SKILL_AB_ARGS+=(--variants skillrl-sft-exact)',
             script,
         )
 

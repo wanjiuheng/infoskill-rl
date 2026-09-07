@@ -54,6 +54,18 @@ GRPO 提示词与 episode-reset 静态 template 检索：step 0 使用独立 `NO
 general skills、检测类别中的全部 task skills 和 5 条 mistakes。该诊断仍使用本项目的
 确定性评测、30 步环境上限、动作解析器和只读技能库，不复现 SkillRL 的动态技能更新，
 因此只能称为 prompt 与初始静态检索复现，不能称为完整 SkillRL 算法复现。
+
+`skillrl-sft-exact` 是另一项互相独立的归因诊断。其参考物是发布的
+`Jianwen/SkillRL-SFT-Data` ALFWorld parquet（SHA-256
+`dfbbf265e19ac8087a54ec474727fcb400483a9a243eea6e977a02ae6ca85b94`）。完整审计
+得到 7,486 行、500 条轨迹、237 个唯一任务文本和 6 个不同技能块；每行均从 step 0
+注入技能，固定最近 5 步历史、6 条 general skills、检测类别中的全部 task skills、
+5 条 mistakes，并把 10 条 admissible actions 渲染为未加引号的逗号分隔列表。六类
+技能块与本项目当前固定技能库按该规则渲染的文本逐字一致。诊断复现 instruction
+结构与静态技能选择，但在线 ALFWorld 评测必须保留当前环境给出的完整动作集合，不能
+为追求训练数据表面一致而抽样到 10 条；因此 exact 的范围不包含 SFT 动作候选采样、
+轨迹采集策略或训练过程。该入口只运行固定 12 条归因任务，不参与正式 control、选模
+或 140 条 `valid_seen` 报告。
 _Avoid_: mode-specific base prompt、system-message drift、raw-skill truncation、admissible leakage into compression、manual special-token assembly
 
 **Frozen Semantic Feature Encoder**:

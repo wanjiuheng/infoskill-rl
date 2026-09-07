@@ -11,6 +11,7 @@ from .raw_skill import (
     EpisodeRetriever,
     RawSkillPromptConditioner,
     SkillRlGrpoPromptConditioner,
+    SkillRlSftPromptConditioner,
     format_raw_skill_block,
 )
 
@@ -32,6 +33,7 @@ __all__ = [
     "InfoSkillReplayTrace",
     "RawSkillPromptConditioner",
     "SkillRlGrpoPromptConditioner",
+    "SkillRlSftPromptConditioner",
     "SkillConditioner",
     "format_raw_skill_block",
 ]

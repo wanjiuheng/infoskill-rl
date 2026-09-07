@@ -67,6 +67,15 @@ prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动�
 `skillrl-rl-exact` 仅用于复现这套 GRPO prompt 与初始静态 template 检索；它仍使用
 本项目的确定性解码、30 步上限、动作解析和固定技能库，不属于第四个正式 control，
 也不代表完整复现 SkillRL 的动态技能更新或训练算法。
+
+对发布的 `Jianwen/SkillRL-SFT-Data` ALFWorld parquet 完整审计确认：文件包含
+7,486 行、500 条轨迹和 237 个唯一任务文本；每行从 step 0 起都显示技能，使用
+最近 5 步历史、6 条 general skills、当前类别全部 skills、5 条 mistakes，以及
+10 条未加引号的逗号分隔 admissible actions。六类静态技能块与当前固定技能库按
+上述规则渲染的结果逐字一致。新增 `skillrl-sft-exact` 只复现该 SFT instruction
+结构与静态技能选择，用于固定 12 条的归因诊断；在线评测仍保留环境当步提供的全部
+可执行动作，而不把动作空间人为抽样成 10 条，因此不得称为完整 SFT 数据生成复现，
+也不得作为第四个正式 control 或 140 条正式结果。
 _Avoid_: unrelated baseline、different evaluation pipeline
 
 ## Skills and State

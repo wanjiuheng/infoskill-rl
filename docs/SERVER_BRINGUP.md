@@ -576,6 +576,37 @@ echo "pid=${PID} log=${LOG}"
 prompt 文本与初始静态检索形状；评测继续使用本项目的 greedy 解码、30 步上限、
 动作解析和只读技能库，不复现 SkillRL 动态技能更新，不能作为正式 140 条结果。
 
+若要判断当前 SFT 模型是否只对其训练时的 instruction 结构敏感，再单独运行
+`skillrl-sft-exact`。它依据已审计的发布 SFT parquet，从 step 0 开始注入静态技能，
+使用最近 5 步历史、6 条 general skills、当前类别全部 task skills、5 条 mistakes，
+并采用发布数据的未加引号逗号分隔动作格式。该诊断仍保留在线环境提供的全部可执行
+动作，不将其人为缩减为发布数据中的 10 条，因此只称为 instruction/static-skill
+exact。它不加载 embedding 模型、不训练，也不保存新 checkpoint。
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/skillrl-sft-exact-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  RAW_SKILL_AB_TASKS_PER_TYPE=2 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=skillrl-sft-exact-valid-seen-12 \
+  bash scripts/run_alfworld.sh skillrl-sft-exact raw_skill_prompt \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+结果仍使用统一的 `raw_skill_ab_summary.json`、trace、metrics、`provenance.json` 和
+`checkpoint-load.json`，但只包含 `skillrl-sft-exact` 一项，并强制标记
+`diagnostic_only=true`、`reportable_as_valid_seen=false`。运行目录的 provenance
+同时记录参考 parquet 校验值、行数、轨迹数、history=5、step-0 技能注入，以及
+“在线完整动作池”这一有意保留的边界。
+
 ```bash
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)

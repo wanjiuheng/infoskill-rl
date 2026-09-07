@@ -177,6 +177,71 @@ class SkillRlGrpoPromptConditioner:
         return tuple(conditioned)
 
 
+class SkillRlSftPromptConditioner:
+    """Reproduce the released SkillRL ALFWorld SFT instruction shape.
+
+    The contract is derived from the published ``SkillRL-SFT-Data`` ALFWorld
+    parquet artifact.  Skills are visible from step zero, history is capped at
+    five entries and re-indexed within the visible window, and admissible
+    actions are rendered as the dataset's unquoted comma-separated list.
+    """
+
+    def __init__(
+        self,
+        retriever: EpisodeRetriever,
+        *,
+        history_length: int = 5,
+    ) -> None:
+        if history_length != 5:
+            raise ValueError("SkillRL SFT prompt requires history_length=5")
+        self._retriever = retriever
+        self._history_length = history_length
+
+    def prepare_group(self, initial_state: CanonicalAgentState) -> ConditioningContext:
+        retrieval = self._retriever.retrieve(initial_state.goal)
+        return ConditioningContext(
+            candidate_skill_ids=retrieval.skill_ids,
+            retrieval=retrieval,
+        )
+
+    def condition_batch(
+        self,
+        requests: tuple[ConditioningRequest, ...],
+        context: ConditioningContext,
+    ) -> tuple[ConditionedPolicyInput, ...]:
+        if context.retrieval is None:
+            raise ValueError("SkillRL SFT prompt requires an episode retrieval result")
+        skill_block = format_raw_skill_block(context.retrieval, style="skillrl")
+        conditioned = []
+        for request in requests:
+            state = request.state
+            history_limit = (
+                request.history_limit
+                if request.history_limit is not None
+                else self._history_length
+            )
+            recent = state.history[-history_limit:] if history_limit else ()
+            message = _render_skillrl_sft_message(
+                state,
+                skill_block=skill_block,
+                recent_history=recent,
+            )
+            omitted = max(0, len(state.history) - history_limit)
+            conditioned.append(
+                ConditionedPolicyInput(
+                    user_message=message,
+                    candidate_skill_ids=context.candidate_skill_ids,
+                    conditioning_trace={
+                        "prompt_protocol": "skillrl-sft-alfworld-v1",
+                        "skills_injected": True,
+                    },
+                    history_entries_omitted=omitted,
+                    history_entries_omitted_by_window=omitted,
+                )
+            )
+        return tuple(conditioned)
+
+
 def _skillrl_admissible_actions(state: CanonicalAgentState) -> str:
     return "\n ".join(
         f"'{command}'"
@@ -190,6 +255,57 @@ def _render_skillrl_history(entries: Sequence[AgentHistoryEntry]) -> str:
         f"[Observation {entry.step_index + 1}: '{entry.observation}', "
         f"Action {entry.step_index + 1}: '{entry.executed_action}']"
         for entry in entries
+    )
+
+
+def _render_skillrl_sft_history(entries: Sequence[AgentHistoryEntry]) -> str:
+    return "\n".join(
+        f"[Observation {index}: '{entry.observation}', "
+        f"Action {index}: '{entry.executed_action}']"
+        for index, entry in enumerate(entries, start=1)
+    )
+
+
+def _render_skillrl_sft_message(
+    state: CanonicalAgentState,
+    *,
+    skill_block: str,
+    recent_history: Sequence[AgentHistoryEntry],
+) -> str:
+    prefix = (
+        "You are an expert agent operating in the ALFRED Embodied Environment.\n"
+        f"Your task is to: {state.goal}\n\n"
+        "## Retrieved Relevant Experience\n\n"
+        f"{skill_block}\n\n"
+        "## Current Progress\n"
+    )
+    actions = ", ".join(state.admissible_commands)
+    if state.step_index == 0:
+        progress = (
+            f"Your current observation is: {state.observation}\n"
+            "Your admissible actions of the current situation are: "
+            f"[{actions}].\n\n"
+        )
+    else:
+        history = _render_skillrl_sft_history(recent_history)
+        progress = (
+            "\nPrior to this step, you have already taken "
+            f"{state.step_index} step(s). Below are the most recent "
+            f"{len(recent_history)} observations and the corresponding actions "
+            f"you took: {history}\n\n"
+            f"You are now at step {state.step_index + 1} and your current "
+            f"observation is: {state.observation}\n"
+            "Your admissible actions of the current situation are: "
+            f"[{actions}].\n\n"
+        )
+    return (
+        prefix
+        + progress
+        + "Now it's your turn to take an action.\n"
+        "You should first reason step-by-step about the current situation. This "
+        "reasoning process MUST be enclosed within <think> </think> tags.\n"
+        "Once you've finished your reasoning, you should choose an admissible "
+        "action for current step and present it within <action> </action> tags."
     )
 
 

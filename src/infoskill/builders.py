@@ -11,6 +11,7 @@ from infoskill.conditioning import (
     NoSkillConditioner,
     RawSkillPromptConditioner,
     SkillRlGrpoPromptConditioner,
+    SkillRlSftPromptConditioner,
     SkillConditioner,
     format_raw_skill_block,
 )
@@ -361,6 +362,104 @@ def build_skillrl_grpo_prompt_setup(config: AppConfig) -> RawSkillSetup:
     )
 
 
+def build_skillrl_sft_prompt_setup(config: AppConfig) -> RawSkillSetup:
+    """Build the prompt observed in the released ALFWorld SFT parquet.
+
+    This is a diagnostic control, not the registered ``raw_skill_prompt``
+    condition.  It keeps the live environment's complete admissible-action
+    pool while reproducing the released instruction layout and static skills.
+    """
+
+    expected_shape = (6, 5)
+    actual_shape = (config.general_top_k, config.mistake_count)
+    if actual_shape != expected_shape:
+        raise ValueError(
+            "SkillRL SFT prompt diagnostic requires general_top_k=6 and "
+            f"mistake_count=5; received {actual_shape}"
+        )
+
+    library = FixedSkillLibrary.load(config.paths.skill_bank)
+    skill_library_provenance = _load_skill_library_provenance(
+        library,
+        manifest_path=config.paths.skill_bank_manifest,
+    )
+    retriever = TemplateRetriever(
+        library,
+        general_count=config.general_top_k,
+        task_count=len(library.task_specific),
+        mistake_count=config.mistake_count,
+    )
+    category_probes = (
+        "put an object in a receptacle",
+        "look at an object under a lamp",
+        "examine an object with a lamp",
+        "clean an object",
+        "heat an object",
+        "cool an object",
+    )
+    representative_results = tuple(
+        retriever.retrieve(query) for query in category_probes
+    )
+    return RawSkillSetup(
+        conditioner=SkillRlSftPromptConditioner(
+            retriever,
+            history_length=5,
+        ),
+        library=library,
+        provenance={
+            "retrieval_schema_version": 1,
+            "retrieval_mode": "template",
+            "retrieval_query_source": "canonical_environment_goal_at_reset",
+            "prompt_format": "skillrl_sft_exact",
+            "prompt_reference": "Jianwen/SkillRL-SFT-Data ALFWorld parquet",
+            "sft_dataset_sha256": (
+                "dfbbf265e19ac8087a54ec474727fcb4"
+                "00483a9a243eea6e977a02ae6ca85b94"
+            ),
+            "sft_dataset_row_count": 7_486,
+            "sft_trajectory_count": 500,
+            "sft_unique_task_string_count": 237,
+            "sft_distinct_skill_block_count": 6,
+            "sft_admissible_action_count_per_row": 10,
+            "step_zero_skill_injection": True,
+            "semantic_model_identity": None,
+            "skill_library_provenance_id": skill_library_provenance[
+                "provenance_id"
+            ],
+            "skill_library_provenance": skill_library_provenance,
+            "retrieval_query_count": None,
+            "retrieval_plan_sha256": None,
+            "retrieval_plan": "episode-reset-canonical-goal",
+            "skill_bank_sha256": library.source_sha256,
+            "skill_count": (
+                len(library.general)
+                + len(library.task_specific)
+                + len(library.mistakes)
+            ),
+            "general_top_k": config.general_top_k,
+            "task_top_k": None,
+            "task_skill_selection": "all-detected-category",
+            "mistake_count": config.mistake_count,
+            "history_length": 5,
+            "policy_prompt_schema_version": "skillrl-sft-alfworld-v1",
+            "reference_scope": (
+                "released-sft-instruction-shape-and-static-skills-only"
+            ),
+            "admissible_action_rendering": "unquoted-comma-separated",
+            "evaluation_action_pool": "all-current-environment-commands",
+            "action_resolution": "infoskill-current",
+            "environment_max_steps": config.max_steps,
+            "diagnostic_only": True,
+        },
+        skill_blocks=tuple(
+            dict.fromkeys(
+                format_raw_skill_block(result, style="skillrl")
+                for result in representative_results
+            )
+        ),
+    )
+
+
 def _load_skill_library_provenance(
     library: FixedSkillLibrary,
     *,
@@ -511,6 +610,7 @@ def build_verl_policy_evaluation(
     backend: object,
     conditioner: SkillConditioner | None = None,
     environment_backend: str = "native_batch",
+    history_limit: int | None = None,
 ):
     """Build deterministic no-skill/raw-skill evaluation on the VERL backend."""
 
@@ -537,7 +637,7 @@ def build_verl_policy_evaluation(
         conditioner=conditioner,
         rollout_backend=backend,  # type: ignore[arg-type]
         max_steps=config.max_steps,
-        history_limit=config.history_length,
+        history_limit=(config.history_length if history_limit is None else history_limit),
         invalid_action_penalty=0.01,
         generation_parameters=GenerationParameters(
             do_sample=False,

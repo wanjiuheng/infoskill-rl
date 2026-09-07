@@ -9,12 +9,56 @@ from infoskill.builders import (
     audit_raw_skill_prompt_budget,
     build_raw_skill_setup,
     build_skillrl_grpo_prompt_setup,
+    build_skillrl_sft_prompt_setup,
 )
 from infoskill.conditioning import ConditioningRequest
 from infoskill.domain.state import CanonicalAgentState, render_state_views
 
 
 class RawSkillTrainingSetupTests(unittest.TestCase):
+    def test_skillrl_sft_setup_uses_dataset_observed_prompt_shape(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+        skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"
+        config = replace(
+            config,
+            paths=replace(
+                config.paths,
+                skill_bank=str(skill_bank),
+                skill_bank_manifest=str(skill_bank.with_name("skills.manifest.json")),
+            ),
+            retrieval_mode="embedding",
+            history_length=2,
+            task_top_k=0,
+        )
+
+        setup = build_skillrl_sft_prompt_setup(config)
+        state = CanonicalAgentState(
+            task_id="task",
+            split="valid_seen",
+            task_type="pick_clean_then_place_in_recep",
+            goal="put a clean apple in a receptacle",
+            step_index=0,
+            observation="Kitchen.",
+            history=(),
+            admissible_commands=("look",),
+        )
+        context = setup.conditioner.prepare_group(state)
+
+        self.assertEqual(
+            context.candidate_skill_ids,
+            ("gen_a", "gen_b", "clean_a", "err_a"),
+        )
+        self.assertEqual(setup.provenance["retrieval_mode"], "template")
+        self.assertEqual(setup.provenance["prompt_format"], "skillrl_sft_exact")
+        self.assertEqual(setup.provenance["history_length"], 5)
+        self.assertTrue(setup.provenance["step_zero_skill_injection"])
+        self.assertEqual(setup.provenance["sft_dataset_row_count"], 7_486)
+        self.assertEqual(setup.provenance["sft_trajectory_count"], 500)
+        self.assertEqual(
+            setup.provenance["sft_dataset_sha256"],
+            "dfbbf265e19ac8087a54ec474727fcb400483a9a243eea6e977a02ae6ca85b94",
+        )
+
     def test_skillrl_grpo_setup_is_template_only_and_episode_goal_driven(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
         skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"

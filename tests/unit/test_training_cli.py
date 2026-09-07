@@ -403,6 +403,23 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(probe.call_args.args[1].variants, ["skillrl-rl-exact"])
 
+    def test_raw_skill_ab_accepts_the_skillrl_sft_exact_variant(self) -> None:
+        arguments = [
+            "raw-skill-ab",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--num-gpus",
+            "4",
+            "--variants",
+            "skillrl-sft-exact",
+        ]
+
+        with patch("infoskill.cli._raw_skill_ab", return_value=0, create=True) as probe:
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(probe.call_args.args[1].variants, ["skillrl-sft-exact"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,12 @@ from infoskill.integrations.alfworld import ALFWORLD_TASK_TYPES
 class RawSkillAbVariant:
     name: str
     retrieval_mode: Literal["embedding", "template"]
-    prompt_format: Literal["full", "skillrl", "skillrl_rl_exact"]
+    prompt_format: Literal[
+        "full",
+        "skillrl",
+        "skillrl_rl_exact",
+        "skillrl_sft_exact",
+    ]
 
 
 RAW_SKILL_AB_VARIANTS = (
@@ -30,6 +35,12 @@ SKILLRL_RL_EXACT_VARIANT = RawSkillAbVariant(
     "skillrl_rl_exact",
 )
 
+SKILLRL_SFT_EXACT_VARIANT = RawSkillAbVariant(
+    "skillrl-sft-exact",
+    "template",
+    "skillrl_sft_exact",
+)
+
 
 def resolve_raw_skill_diagnostic_variants(
     names: Sequence[str] | None,
@@ -38,7 +49,11 @@ def resolve_raw_skill_diagnostic_variants(
         return RAW_SKILL_AB_VARIANTS
     available = {
         item.name: item
-        for item in (*RAW_SKILL_AB_VARIANTS, SKILLRL_RL_EXACT_VARIANT)
+        for item in (
+            *RAW_SKILL_AB_VARIANTS,
+            SKILLRL_RL_EXACT_VARIANT,
+            SKILLRL_SFT_EXACT_VARIANT,
+        )
     }
     unknown = tuple(name for name in names if name not in available)
     if unknown:
