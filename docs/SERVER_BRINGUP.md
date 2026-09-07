@@ -483,6 +483,38 @@ bash scripts/run_alfworld.sh train raw_skill_prompt
 smoke 通过后再运行 25-update pilot；它会在 update 0 和 25 各评一次固定 140 条
 `valid_seen`。长任务使用 `nohup`，断开 SSH 不会停止训练：
 
+在启动 pilot 前，先独立测一次 raw prompt 的 update-0 起点。这个评测不加载
+policy checkpoint，用于区分“raw prompt 本身的影响”和“训练后权重的影响”：
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/raw-skill-valid-seen-update0-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  EVAL_BACKEND=verl \
+  CHECKPOINT_STEP=0 \
+  POLICY_CHECKPOINT= \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  ENVIRONMENT_WORKERS=1 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=raw-skill-valid-seen-update0 \
+  bash scripts/run_alfworld.sh eval raw_skill_prompt \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+每次成功启动的 `eval` 都会写出 `provenance.json` 和
+`checkpoint-load.json`。update 0 的 checkpoint 状态应为 `not_requested`；加载
+portable checkpoint 的评测应为 `loaded`，并记录各 rank 的 base-sync 报告和加载
+耗时。`evaluation-timing.json`、`metrics.jsonl` 与
+`valid_seen_summary.json` 同时记录 task discovery、skill setup、后端初始化、
+checkpoint load、rollout、runtime close、trace write 和总耗时。终端只额外显示一行
+精简耗时汇总。
+
 ```bash
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)

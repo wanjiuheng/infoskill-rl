@@ -335,8 +335,10 @@ class VerlRuntime:
             "base_weights_included": False,
         }
 
-    def load_portable_state(self, directory: Path) -> None:
-        load_portable_state_after_base_sync(
+    def load_portable_state(
+        self, directory: Path
+    ) -> tuple[Mapping[str, object], ...]:
+        return load_portable_state_after_base_sync(
             worker_group=self.worker_group,
             actor_directory=directory / "actor",
         )

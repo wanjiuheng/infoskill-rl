@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import sys
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,6 +245,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
+    evaluation_started = time.perf_counter()
     mode = SkillMode(args.mode)
     if args.num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
@@ -276,7 +278,12 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         build_transformers_evaluation,
         build_verl_policy_evaluation,
     )
-    from infoskill.evaluation import EvaluationRunner
+    from infoskill.evaluation import (
+        EvaluationRunner,
+        write_checkpoint_load,
+        write_evaluation_provenance,
+        write_evaluation_timing,
+    )
     from infoskill.integrations.alfworld import discover_tasks, task_manifest_sha256
     from infoskill.persistence import (
         MetricLogger,
@@ -288,7 +295,9 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         verify_policy_model_identity,
     )
 
+    task_discovery_started = time.perf_counter()
     tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
+    task_discovery_seconds = time.perf_counter() - task_discovery_started
     evaluation_config = EvaluationConfig()
     if len(tasks) != evaluation_config.total_tasks:
         raise RuntimeError(
@@ -318,6 +327,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             "nonzero VERL checkpoint_step requires a portable policy_checkpoint"
         )
 
+    skill_setup_started = time.perf_counter()
     raw_skill_setup = (
         build_raw_skill_setup(
             config,
@@ -338,8 +348,10 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         if raw_skill_setup is not None
         else None
     )
+    skill_setup_seconds = time.perf_counter() - skill_setup_started
 
     policy_identity = None
+    checkpoint_provenance_sha256 = None
     if args.backend == "verl":
         policy_identity = verify_policy_model_identity(
             config.paths.policy_model,
@@ -354,6 +366,9 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             checkpoint_provenance = json.loads(
                 provenance_path.read_text(encoding="utf-8")
             )
+            checkpoint_provenance_sha256 = hashlib.sha256(
+                provenance_path.read_bytes()
+            ).hexdigest()
             if not isinstance(checkpoint_provenance, dict):
                 raise RuntimeError(
                     f"portable checkpoint provenance is not an object: {provenance_path}"
@@ -382,7 +397,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     )
     logger = _configure_logging(run_directory)
     resolved = config.as_dict()
-    resolved["evaluation_runtime"] = {
+    evaluation_runtime = {
         "backend": args.backend,
         "num_gpus": args.num_gpus,
         "environment_backend": args.environment_backend,
@@ -392,16 +407,50 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         "checkpoint_step": evaluation_step,
     }
-    resolved["evaluation_manifest"] = {
+    evaluation_manifest = {
         "split": evaluation_config.split,
         "task_count": evaluation_config.total_tasks,
         "sha256": valid_seen_manifest_sha256,
     }
+    resolved["evaluation_runtime"] = evaluation_runtime
+    resolved["evaluation_manifest"] = evaluation_manifest
     if raw_skill_provenance is not None:
         resolved["skill_conditioning"] = raw_skill_provenance
     if policy_identity is not None:
         resolved["policy_model_identity"] = policy_identity.as_dict()
     _write_json(run_directory / "resolved_config.json", resolved)
+    write_evaluation_provenance(
+        run_directory,
+        mode=mode.value,
+        evaluation_runtime=evaluation_runtime,
+        evaluation_manifest=evaluation_manifest,
+        policy_model=(
+            policy_identity.as_dict() if policy_identity is not None else None
+        ),
+        skill_conditioning=raw_skill_provenance,
+        checkpoint_provenance_sha256=checkpoint_provenance_sha256,
+    )
+    checkpoint_path = (
+        str(checkpoint.directory) if checkpoint is not None else None
+    )
+    write_checkpoint_load(
+        run_directory,
+        backend=args.backend,
+        checkpoint=checkpoint_path,
+        checkpoint_step=evaluation_step,
+        status=("pending" if checkpoint is not None else "not_requested"),
+    )
+
+    timing_seconds = {
+        "task_discovery_seconds": task_discovery_seconds,
+        "skill_setup_seconds": skill_setup_seconds,
+        "backend_initialize_seconds": 0.0,
+        "checkpoint_load_seconds": 0.0,
+        "collector_build_seconds": 0.0,
+        "rollout_seconds": 0.0,
+        "runtime_close_seconds": 0.0,
+        "trace_write_seconds": 0.0,
+    }
 
     runtime = None
     try:
@@ -415,6 +464,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                 args.num_gpus,
                 "verbose" if args.verbose_runtime_logs else "quiet",
             )
+            stage_started = time.perf_counter()
             runtime = VerlRuntime.start(
                 VerlRuntimeConfig(
                     skillrl_source=config.paths.skillrl_source,
@@ -435,12 +485,48 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     balance_policy_tokens_across_ranks=True,
                 )
             )
+            timing_seconds["backend_initialize_seconds"] = (
+                time.perf_counter() - stage_started
+            )
             if checkpoint is not None:
-                runtime.load_portable_state(checkpoint.runtime_directory)
+                stage_started = time.perf_counter()
+                try:
+                    worker_reports = (
+                        runtime.load_portable_state(checkpoint.runtime_directory) or ()
+                    )
+                except Exception as error:
+                    timing_seconds["checkpoint_load_seconds"] = (
+                        time.perf_counter() - stage_started
+                    )
+                    write_checkpoint_load(
+                        run_directory,
+                        backend=args.backend,
+                        checkpoint=checkpoint_path,
+                        checkpoint_step=evaluation_step,
+                        status="failed",
+                        duration_seconds=timing_seconds[
+                            "checkpoint_load_seconds"
+                        ],
+                        error=error,
+                    )
+                    raise
+                timing_seconds["checkpoint_load_seconds"] = (
+                    time.perf_counter() - stage_started
+                )
+                write_checkpoint_load(
+                    run_directory,
+                    backend=args.backend,
+                    checkpoint=checkpoint_path,
+                    checkpoint_step=evaluation_step,
+                    status="loaded",
+                    duration_seconds=timing_seconds["checkpoint_load_seconds"],
+                    worker_reports=worker_reports,
+                )
                 logger.info(
                     "Loaded portable policy checkpoint: %s",
                     checkpoint.directory,
                 )
+            stage_started = time.perf_counter()
             collector = build_verl_policy_evaluation(
                 config,
                 mode=mode,
@@ -452,11 +538,15 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                 ),
                 environment_backend=args.environment_backend,
             )
+            timing_seconds["collector_build_seconds"] = (
+                time.perf_counter() - stage_started
+            )
         else:
             logger.info(
                 "Loading Transformers policy and environment for mode=%s",
                 mode.value,
             )
+            stage_started = time.perf_counter()
             collector = build_transformers_evaluation(
                 config,
                 mode=mode,
@@ -466,6 +556,9 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     if raw_skill_setup is not None
                     else None
                 ),
+            )
+            timing_seconds["backend_initialize_seconds"] = (
+                time.perf_counter() - stage_started
             )
 
         progress = tqdm(
@@ -482,16 +575,28 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             on_progress=progress.update,
         )
         try:
+            stage_started = time.perf_counter()
             with collector.rollout_session():
                 run = runner.run(tasks, checkpoint_step=evaluation_step)
+            timing_seconds["rollout_seconds"] = (
+                time.perf_counter() - stage_started
+            )
         finally:
             progress.close()
     finally:
         if runtime is not None:
+            stage_started = time.perf_counter()
             runtime.close()
+            timing_seconds["runtime_close_seconds"] = (
+                time.perf_counter() - stage_started
+            )
+    stage_started = time.perf_counter()
     trace_path = ZstdJsonlTraceWriter(run_directory).write_evaluation(
         checkpoint_step=evaluation_step, run=run
     )
+    timing_seconds["trace_write_seconds"] = time.perf_counter() - stage_started
+    timing_seconds["total_seconds"] = time.perf_counter() - evaluation_started
+    write_evaluation_timing(run_directory, timing_seconds)
     summary = run.summary
     metrics = MetricLogger(run_directory)
     values: dict[str, float | int | str | bool | None] = {
@@ -504,12 +609,27 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "incomplete_reasons": ";".join(summary.incomplete_reasons),
         "task_manifest_sha256": valid_seen_manifest_sha256,
     }
+    values.update(
+        {f"perf/{key}": value for key, value in timing_seconds.items()}
+    )
     values.update({f"success/{key}": value for key, value in summary.per_task_type_success.items()})
     metrics.log(step=evaluation_step, phase="valid_seen", values=values)
     summary_payload = _summary_payload(run)
     summary_payload["task_manifest_sha256"] = valid_seen_manifest_sha256
+    summary_payload["timing_seconds"] = timing_seconds
     _write_json(run_directory / "valid_seen_summary.json", summary_payload)
     logger.info("Structured trace: %s", trace_path)
+    logger.info(
+        "Evaluation timing: setup=%.1fs runtime=%.1fs checkpoint=%.1fs "
+        "rollout=%.1fs close=%.1fs total=%.1fs",
+        timing_seconds["task_discovery_seconds"]
+        + timing_seconds["skill_setup_seconds"],
+        timing_seconds["backend_initialize_seconds"],
+        timing_seconds["checkpoint_load_seconds"],
+        timing_seconds["rollout_seconds"],
+        timing_seconds["runtime_close_seconds"],
+        timing_seconds["total_seconds"],
+    )
     logger.info(
         "Evaluation summary:\n%s",
         json.dumps(summary_payload, ensure_ascii=False, indent=2),

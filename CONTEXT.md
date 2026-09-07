@@ -46,6 +46,13 @@ _Avoid_: ordinary GRPO、skill-library evolution
 
 **Skill-Injection Control Mode**:
 共享同一训练评测框架、但改变技能信息如何进入策略的实验模式；首阶段包括 `no_skill`、`raw_skill_prompt` 和 `infoskill`。
+
+2026-09-07 的 `raw_skill_prompt` embedding smoke 完成工程链路，但其 step-1
+portable checkpoint 在固定 140 条 `valid_seen` 上为 0/140；全部任务跑满 30 步，
+轨迹以重复 `look` 和重复旧动作循环为主。该 smoke update 的组内 policy signal 为
+零，因此在改变已登记 prompt 设计前，必须先补测相同 raw prompt 的 update 0，区分
+prompt 条件效应和 checkpoint 效应。评测现已要求独立写出 provenance、结构化
+checkpoint-load 状态和分阶段耗时。
 _Avoid_: unrelated baseline、different evaluation pipeline
 
 ## Skills and State
