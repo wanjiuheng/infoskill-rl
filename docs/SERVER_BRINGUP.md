@@ -475,8 +475,9 @@ bash scripts/run_alfworld.sh train raw_skill_prompt
   223 条 train 轨迹来源 manifest、embedding 模型内容校验值、train 与固定 140 条
   `valid_seen` 的逐任务检索计划、Top-K 与 raw skill block token 统计；
 - trace 每条轨迹的 `candidate_skill_ids` 非空，同一 episode 的候选 ID 保持不变；
-- 最终 prompt 超限时只允许从最旧历史开始逐条移除，并在 trace 记录
-  `history_entries_omitted`；历史清空后仍超限则保存结构化错误并终止；
+- trace 用 `history_entries_omitted_by_window` 记录默认 H 窗口省略量，用
+  `history_entries_omitted_for_prompt_budget` 单独记录 prompt 超限后额外移除量；
+  `history_entries_omitted` 保留为两者之和；历史清空后仍超限则保存结构化错误并终止；
 - checkpoint 的 `mode` 与 skill conditioning 不匹配时，恢复和评测都必须拒绝。
 
 smoke 通过后再运行 25-update pilot；它会在 update 0 和 25 各评一次固定 140 条

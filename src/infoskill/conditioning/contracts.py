@@ -36,6 +36,8 @@ class ConditionedPolicyInput:
     soft_prefix: object | None = None
     conditioning_trace: object | None = None
     history_entries_omitted: int = 0
+    history_entries_omitted_by_window: int = 0
+    history_entries_omitted_for_prompt_budget: int = 0
 
 
 class SkillConditioner(Protocol):

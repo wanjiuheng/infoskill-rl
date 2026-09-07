@@ -119,6 +119,12 @@ def _trajectory_record(trajectory: object, *, advantage: float, global_update: i
                 "history_entries_omitted": (
                     step.conditioned_input.history_entries_omitted
                 ),
+                "history_entries_omitted_by_window": (
+                    step.conditioned_input.history_entries_omitted_by_window
+                ),
+                "history_entries_omitted_for_prompt_budget": (
+                    step.conditioned_input.history_entries_omitted_for_prompt_budget
+                ),
                 "action_resolution": _json_safe(step.action),
                 "environment_raw_output": {
                     "observation": step.transition.raw_observation,

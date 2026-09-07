@@ -264,6 +264,7 @@ class TrajectoryCollector:
                         break
                     prepared: list[tuple[int, int, CanonicalAgentState, object]] = []
                     history_limits: dict[tuple[int, int], int] = {}
+                    configured_history_limits: dict[tuple[int, int], int] = {}
                     for task_index in range(len(tasks)):
                         rollout_ids = [
                             rollout_id for index, rollout_id in active if index == task_index
@@ -278,6 +279,12 @@ class TrajectoryCollector:
                             for state in active_states
                         )
                         history_limits.update(
+                            {
+                                (task_index, rollout_id): limit
+                                for rollout_id, limit in zip(rollout_ids, limits)
+                            }
+                        )
+                        configured_history_limits.update(
                             {
                                 (task_index, rollout_id): limit
                                 for rollout_id, limit in zip(rollout_ids, limits)
@@ -320,6 +327,10 @@ class TrajectoryCollector:
                                 history_entries_omitted=(
                                     len(state.history) - limit
                                 ),
+                                history_entries_omitted_by_window=(
+                                    len(state.history) - limit
+                                ),
+                                history_entries_omitted_for_prompt_budget=0,
                             )
                             for state, limit, policy_input in zip(
                                 active_states,
@@ -384,6 +395,7 @@ class TrajectoryCollector:
                                 raise
                             next_limit = current_limit - 1
                             history_limits[key] = next_limit
+                            configured_limit = configured_history_limits[key]
                             view = render_state_views(
                                 state,
                                 history_limit=next_limit,
@@ -420,6 +432,12 @@ class TrajectoryCollector:
                                     policy_input,
                                     history_entries_omitted=(
                                         len(state.history) - next_limit
+                                    ),
+                                    history_entries_omitted_by_window=(
+                                        len(state.history) - configured_limit
+                                    ),
+                                    history_entries_omitted_for_prompt_budget=(
+                                        configured_limit - next_limit
                                     ),
                                 ),
                             )

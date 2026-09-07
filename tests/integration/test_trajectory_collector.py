@@ -265,7 +265,38 @@ class TrajectoryCollectorTests(unittest.TestCase):
         second = group.trajectories[0].steps[1].conditioned_input
         self.assertEqual(backend.calls, 3)
         self.assertEqual(second.history_entries_omitted, 1)
+        self.assertEqual(second.history_entries_omitted_by_window, 0)
+        self.assertEqual(second.history_entries_omitted_for_prompt_budget, 1)
         self.assertIn("corresponding actions you took:\nNone", second.user_message)
+
+    def test_history_window_omission_is_distinct_from_prompt_budget_omission(
+        self,
+    ) -> None:
+        collector = TrajectoryCollector(
+            environment_factory=_FakeEnvironmentFactory(),
+            conditioner=NoSkillConditioner(),
+            rollout_backend=_FakeRolloutBackend(),
+            max_steps=4,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+        )
+        task = TaskSpec(
+            "game-1",
+            "train",
+            "pick_and_place_simple",
+            "put the apple in the fridge",
+        )
+
+        group = collector.collect_task_group(
+            task,
+            rollouts_per_task=2,
+            master_seed=0,
+        )
+
+        fourth = group.trajectories[1].steps[3].conditioned_input
+        self.assertEqual(fourth.history_entries_omitted, 1)
+        self.assertEqual(fourth.history_entries_omitted_by_window, 1)
+        self.assertEqual(fourth.history_entries_omitted_for_prompt_budget, 0)
 
     def test_latent_seeds_are_semantic_and_independent_of_collection_instance(self) -> None:
         task = TaskSpec("game-1", "train", "pick_and_place_simple", "look")
