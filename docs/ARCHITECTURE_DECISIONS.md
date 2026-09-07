@@ -18,6 +18,8 @@ M1 默认在 replayed latent 处截断 GRPO 动作梯度：GRPO 更新 Qwen LoRA
 
 每个采样 ALFWorld 任务创建 G 个底层任务与初始条件相同、但状态互相独立的环境实例，并从每个实例采样一条完整轨迹。group-relative advantage 只在这 G 条轨迹间归一化，并广播到对应轨迹的所有有效动作 token；detached trajectory advantage 同时作为该轨迹各访问状态的 fidelity target，提前终止通过 mask 表示而不伪造环境步骤。step-relative/GiGPO 只作为后续显式实验，不能静默替换 M0/M1 的 episodic GRPO 定义。
 
+其中“同一 detached trajectory advantage 同时作为 fidelity target”的部分由 D011 取代；其余 group 构造与广播语义仍然有效。
+
 ## D005：按环境可执行性定义非法动作且默认不加步数惩罚
 
 系统不沿用 SkillRL 以 XML 标签和响应语言判定语义合法性的 `is_action_valid`。解析器优先读取完整 `<action>`；多个完整标签只有内容相同才接受，内容冲突即判歧义。缺少完整标签时只允许从最后一个非空行去除有限的格式前缀后，与当前 `admissible_commands` 做大小写/连续空白规范化后的整行精确匹配；不扫描 reasoning 子串、不纠正标点、不做模糊或最近动作投影。只有无法解析动作，或规范化命令不能唯一匹配当前可执行命令时，才计为非法动作，标签、`<think>` 和语言仅作格式统计。合法动作提交对应规范命令，非法动作统一提交必须消耗一步且不推进世界状态的 `__invalid_action__` 哨兵，不用 `look`、最近合法动作或可能被环境解释成别名的模型原文进行免费修正。默认轨迹奖励为 `won - 0.01 * invalid_action_count`，保留可配置硬步数上限，但不加入逐步惩罚、goal-condition reward 或 information bonus；正式评测成功率始终只依据未塑形的 `won`。
@@ -47,3 +49,9 @@ reference policy 不再按 VERL 默认方式创建并 CPU-offload 第二套 Qwen
 ## D010：pilot 与 formal 统一使用固定 valid_seen 评测
 
 取消从 ALFWorld train 派生的 355 条内部 monitor；所有训练档位都从完整 3,553 条 train 清单按同一规则取样。pilot 在 update 0 和 25、formal 在 update 0、每 25 个 update 及最终 update 445，使用同一个以 SHA-256 预注册身份的固定 140 条 `valid_seen` manifest、确定性解码和完整六类分母；身份不符时必须在加载模型前失败。这样缩短 pilot 的评测时间，并让 pilot 与正式曲线直接可比；代价是曲线、`best-valid` 和最终报告使用同一集合，因此必须标注为 validation-selected performance，且不得根据该曲线调整损失权重、学习率等超参数。旧 train-monitor pilot 只保留为工程稳定性证据，不与新曲线拼接。
+
+## D011：策略整形优势与任务成功 fidelity 目标分离
+
+M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` 在同任务组内标准化得到的 Shaped Policy Advantage，以保留合法动作密集反馈；M1 的 fidelity predictor 改用仅由二值 `won` 组内标准化得到的 Task-Success Fidelity Target。两者使用同一批轨迹但不能共用一个无语义区分的 `advantage` 接口。每个 update 同时记录混合结果组、全失败组、全成功组、Shaping-Only Group、零策略信号组以及按任务类型拆分的任务成功信号覆盖率。
+
+75-update M0 审计发现 596 个具有非零策略优势的组中有 351 个组内 `won` 恒定，其梯度只来自非法动作数差异；由于组内标准化会消除正比例系数，单纯继续减小 `0.01` 不能削弱这些组中的相对整形信号。若 fidelity 继续拟合同一个整形优势，压缩器可能主要学习动作合法性而不是技能对任务成功的贡献。完全去除策略整形会丢失稀疏成功奖励下的可用反馈并改变已验证的 SkillRL 相近基线，因此不采用；分离两个目标保留策略学习信号，同时让 fidelity 的含义可解释且可审计。

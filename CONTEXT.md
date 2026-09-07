@@ -114,6 +114,18 @@ _Avoid_: implicit joint gradient、latent-density policy ratio
 以同一任务的多条独立完整轨迹组成 group，并按终局回报计算组内相对优势的训练方法。
 _Avoid_: cross-task normalization、step-relative GRPO
 
+**Shaped Policy Advantage**:
+由主训练回报在同任务轨迹组内标准化得到、只用于 GRPO 策略更新的优势信号；它可以同时反映任务成功与奖励整形。
+_Avoid_: fidelity target、unshaped success signal
+
+**Task-Success Fidelity Target**:
+仅由每条轨迹是否完成任务在同任务组内标准化得到的辅助学习目标；只有同时包含成功与失败轨迹的组才提供非零目标。
+_Avoid_: shaped policy advantage、invalid-action target
+
+**Shaping-Only Group**:
+任务结果在组内完全相同、因奖励整形差异仍产生非零 Shaped Policy Advantage 的轨迹组；它能训练策略，但不提供任务成功区分信号。
+_Avoid_: mixed-outcome group、zero-signal group
+
 **Resolved Action**:
 动作解析器从模型原始响应中确定并规范化后的 ALFWorld 命令。
 _Avoid_: raw model response、XML block

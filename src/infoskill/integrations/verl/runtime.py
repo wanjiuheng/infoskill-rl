@@ -182,13 +182,13 @@ class VerlRuntime:
     def update_policy(
         self,
         groups: tuple[TrajectoryGroup, ...],
-        advantages: tuple[tuple[float, ...], ...],
+        policy_advantages: tuple[tuple[float, ...], ...],
         *,
         global_update: int,
     ) -> Mapping[str, float]:
         policy_update_started = time.perf_counter()
         stage_started = policy_update_started
-        data = self.codec.training_dataproto(groups, advantages)
+        data = self.codec.training_dataproto(groups, policy_advantages)
         real_sample_count = len(data)
         data, padding_count = pad_batch_to_divisor(
             data,
@@ -313,11 +313,11 @@ class VerlRuntime:
     def update_auxiliary(
         self,
         groups: tuple[TrajectoryGroup, ...],
-        advantages: tuple[tuple[float, ...], ...],
+        fidelity_targets: tuple[tuple[float, ...], ...],
         *,
         global_update: int,
     ) -> Mapping[str, float]:
-        del groups, advantages, global_update
+        del groups, fidelity_targets, global_update
         raise RuntimeError("token-only VERL runtime has no INFO-SKILL auxiliary worker")
 
     def synchronize_rollout_weights(self) -> None:

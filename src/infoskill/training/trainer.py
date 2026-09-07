@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Callable, Mapping, Protocol, Sequence
 
 from infoskill.episode import TrajectoryCollector, TrajectoryGroup
-from infoskill.learning import group_relative_advantages
+from infoskill.learning import build_group_advantage_signals, summarize_grpo_signals
 
 from .schedule import TaskSchedule
 from .schedule import TaskScheduleState
@@ -21,7 +21,7 @@ class TrainingRuntime(Protocol):
     def update_policy(
         self,
         groups: tuple[TrajectoryGroup, ...],
-        advantages: tuple[tuple[float, ...], ...],
+        policy_advantages: tuple[tuple[float, ...], ...],
         *,
         global_update: int,
     ) -> Mapping[str, float]: ...
@@ -29,7 +29,7 @@ class TrainingRuntime(Protocol):
     def update_auxiliary(
         self,
         groups: tuple[TrajectoryGroup, ...],
-        advantages: tuple[tuple[float, ...], ...],
+        fidelity_targets: tuple[tuple[float, ...], ...],
         *,
         global_update: int,
     ) -> Mapping[str, float]: ...
@@ -102,21 +102,26 @@ class InfoSkillTrainer:
                 lambda: {},
             )()
             stage_started = time.perf_counter()
-            advantages = tuple(
-                group_relative_advantages([trajectory.reward for trajectory in group.trajectories])
-                for group in groups
-            )
+            signals = build_group_advantage_signals(groups)
+            policy_advantages = tuple(signal.shaped_policy for signal in signals)
+            fidelity_targets = tuple(signal.task_success for signal in signals)
             advantage_seconds = time.perf_counter() - stage_started
             stage_started = time.perf_counter()
             values = dict(
-                self.runtime.update_policy(groups, advantages, global_update=self.global_update)
+                self.runtime.update_policy(
+                    groups,
+                    policy_advantages,
+                    global_update=self.global_update,
+                )
             )
             policy_update_seconds = time.perf_counter() - stage_started
             if self.auxiliary_enabled:
                 stage_started = time.perf_counter()
                 values.update(
                     self.runtime.update_auxiliary(
-                        groups, advantages, global_update=self.global_update
+                        groups,
+                        fidelity_targets,
+                        global_update=self.global_update,
                     )
                 )
                 values["perf/auxiliary_update_seconds"] = (
@@ -138,6 +143,7 @@ class InfoSkillTrainer:
             )
             values.update(performance_metrics)
             values.update(_rollout_metrics(groups))
+            values.update(summarize_grpo_signals(groups, signals))
             if self.on_update:
                 self.on_update(UpdateMetrics(self.global_update, values), groups)
             if self.on_checkpoint and self.global_update % self.checkpoint_every == 0:

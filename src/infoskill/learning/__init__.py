@@ -7,6 +7,11 @@ from .alignment import (
     require_logprob_alignment,
     summarize_logprob_alignment,
 )
+from .signals import (
+    GroupAdvantageSignals,
+    build_group_advantage_signals,
+    summarize_grpo_signals,
+)
 
 try:
     from .losses import AuxiliaryLoss, GrpoLoss, auxiliary_loss, clipped_grpo_loss
@@ -23,9 +28,12 @@ __all__ = [
     "GrpoLoss",
     "DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS",
     "LogprobAlignmentThresholds",
+    "GroupAdvantageSignals",
     "auxiliary_loss",
     "clipped_grpo_loss",
     "group_relative_advantages",
+    "build_group_advantage_signals",
     "require_logprob_alignment",
     "summarize_logprob_alignment",
+    "summarize_grpo_signals",
 ]

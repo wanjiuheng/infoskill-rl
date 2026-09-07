@@ -44,14 +44,19 @@ class _Collector:
 class _Runtime:
     def __init__(self) -> None:
         self.updated: list[int] = []
+        self.policy_advantages = None
+        self.fidelity_targets = None
 
-    def update_policy(self, groups, advantages, *, global_update: int):
-        del groups, advantages
+    def update_policy(self, groups, policy_advantages, *, global_update: int):
+        del groups
+        self.policy_advantages = policy_advantages
         self.updated.append(global_update)
         return {"actor/ppo_kl": 0.0, "actor/grad_norm": 1.0}
 
-    def update_auxiliary(self, groups, advantages, *, global_update: int):
-        raise AssertionError("M0 must not run an auxiliary update")
+    def update_auxiliary(self, groups, fidelity_targets, *, global_update: int):
+        del groups, global_update
+        self.fidelity_targets = fidelity_targets
+        return {"aux/fidelity_loss": 0.0}
 
     def synchronize_rollout_weights(self) -> None:
         return None
@@ -181,6 +186,40 @@ class InfoSkillTrainerTests(unittest.TestCase):
         ):
             self.assertIn(key, captured[0])
             self.assertGreaterEqual(captured[0][key], 0.0)
+
+    def test_auxiliary_receives_success_only_target(self) -> None:
+        task = TaskSpec("task", "train", "kind", "goal")
+        group = TrajectoryGroup(
+            task=task,
+            trajectories=(
+                Trajectory(task, 0, (), False, True, False, 0, 0.0),
+                Trajectory(task, 1, (), False, True, False, 3, -0.03),
+            ),
+        )
+
+        class _FixedCollector:
+            def collect_task_groups(self, *args, **kwargs):
+                return (group,)
+
+        runtime = _Runtime()
+        captured = []
+        trainer = InfoSkillTrainer(
+            collector=_FixedCollector(),  # type: ignore[arg-type]
+            runtime=runtime,  # type: ignore[arg-type]
+            schedule=TaskSchedule((task,), master_seed=0),
+            task_groups_per_update=1,
+            rollouts_per_task=2,
+            master_seed=0,
+            auxiliary_enabled=True,
+            on_update=lambda update, groups: captured.append(update.values),
+        )
+
+        trainer.fit(max_updates=1, evaluate_at_start=False)
+
+        self.assertNotEqual(runtime.policy_advantages, ((0.0, 0.0),))
+        self.assertEqual(runtime.fidelity_targets, ((0.0, 0.0),))
+        self.assertEqual(captured[0]["grpo_signal/shaping_only_group_rate"], 1.0)
+        self.assertEqual(captured[0]["grpo_signal/task_success_signal_group_rate"], 0.0)
 
 
 if __name__ == "__main__":

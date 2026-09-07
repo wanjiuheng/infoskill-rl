@@ -157,7 +157,7 @@ _Avoid_: full-backbone fine-tuning、LoRA dropout in policy ratio、different ra
 _Avoid_: cross-FSDP-DDP optimizer state、partial policy step、separate LoRA/projector clipping、replica-multiplied norm、unlogged gradient routing
 
 **Normalized Auxiliary Objective**:
-Compressor Optimizer 默认最小化 `L_aux = L_fidelity + 0.001 * L_rate + 0.1 * L_ground`。其中 fidelity 是对 detached task-group trajectory advantage 的步骤级 MSE；rate 是 posterior 与 state-conditioned prior 的 32 维高斯 KL，先按 latent 维求和再按有效步骤平均；ground 是专家命令在当前合法命令集合上的交叉熵，只按具有合法标签的离线样本平均。各项先按自身有效样本数归一化再加权，并同时记录原始值、加权贡献与梯度范数。`0.1` 来自草案 `alpha2/alpha1`，独立 auxiliary optimizer 不再重复乘整体 `alpha1`；默认不使用 KL annealing。
+Compressor Optimizer 默认最小化 `L_aux = L_fidelity + 0.001 * L_rate + 0.1 * L_ground`。其中 fidelity 是对 detached Task-Success Fidelity Target 的步骤级 MSE；该目标只由组内二值 `won` 标准化得到，不包含非法动作惩罚。rate 是 posterior 与 state-conditioned prior 的 32 维高斯 KL，先按 latent 维求和再按有效步骤平均；ground 是专家命令在当前合法命令集合上的交叉熵，只按具有合法标签的离线样本平均。各项先按自身有效样本数归一化再加权，并同时记录原始值、加权贡献与梯度范数。`0.1` 来自草案 `alpha2/alpha1`，独立 auxiliary optimizer 不再重复乘整体 `alpha1`；默认不使用 KL annealing。
 _Avoid_: double alpha1 scaling、length-dependent auxiliary weights、unlogged weighted loss
 
 **Auxiliary Update Batch**:
@@ -239,7 +239,7 @@ _Avoid_: post-hoc success threshold、scale-out on ambiguous result、success-on
 _Avoid_: default training mode、untracked latent likelihood
 
 **Task-Grouped Episodic GRPO**:
-对同一个 ALFWorld 任务创建 G 个初始任务相同但状态互相独立的环境实例，每个实例采样一条完整轨迹；仅在这 G 条轨迹内部按终局回报计算 group-relative advantage，并将每条轨迹的 detached advantage 广播到该轨迹所有有效动作 token 和步骤级 fidelity target。提前结束的轨迹通过 mask 排除后续位置。正式 M0/M1 训练固定 `G=8` 以对齐 SkillRL 并降低稀疏奖励下同组全同回报的概率；`G=2` 只用于冒烟测试，`G=4` 只用于小规模联调。
+对同一个 ALFWorld 任务创建 G 个初始任务相同但状态互相独立的环境实例，每个实例采样一条完整轨迹。仅在这 G 条轨迹内部计算两种明确分离的 group-relative 信号：由 `won - 0.01 * invalid_action_count` 标准化得到的 Shaped Policy Advantage 广播到对应轨迹全部有效动作 token；仅由二值 `won` 标准化得到的 Task-Success Fidelity Target 广播到对应轨迹全部有效状态。提前结束的轨迹通过 mask 排除后续位置。正式 M0/M1 训练固定 `G=8` 以对齐 SkillRL 并降低稀疏奖励下同组全同结果的概率；`G=2` 只用于冒烟测试，`G=4` 只用于小规模联调。每个 update 必须记录混合结果、全失败、全成功、仅整形、零策略信号组及六类任务成功信号覆盖率。
 _Avoid_: sequential actions as group samples、cross-task normalization、fake padded environment steps
 
 **Clipped GRPO Policy Update**:
