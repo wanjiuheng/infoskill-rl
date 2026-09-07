@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from infoskill.app_config import AppConfig
-from infoskill.conditioning import NoSkillConditioner
-from infoskill.config import EvaluationConfig
+from infoskill.conditioning import NoSkillConditioner, SkillConditioner
+from infoskill.config import EvaluationConfig, SkillMode
 from infoskill.episode import TaskSpec, TrajectoryCollector
 from infoskill.evaluation import (
     EvaluationCheckpointScore,
@@ -30,7 +30,7 @@ from infoskill.persistence import (
     ZstdJsonlTraceWriter,
 )
 from infoskill.persistence.model_identity import verify_policy_model_identity
-from infoskill.rollout import GenerationParameters
+from infoskill.rollout import GenerationParameters, PromptLengthError
 
 from .plan import TrainingPlan, TrainingProfile
 from .run_directory import resolve_training_run_directory, validate_resume_config
@@ -56,11 +56,50 @@ def run_m0_training(
     policy_max_tokens_per_gpu: int = 16_384,
     balance_policy_tokens_across_ranks: bool = True,
 ) -> int:
-    """Run the token-only M0 vertical slice through the pinned VERL runtime."""
+    """Backward-compatible entry point for the token-only M0 baseline."""
+
+    return run_policy_training(
+        config=config,
+        mode=SkillMode.NO_SKILL,
+        plan=plan,
+        num_gpus=num_gpus,
+        run_name=run_name,
+        resume=resume,
+        persistent_rollout_session=persistent_rollout_session,
+        environment_workers=environment_workers,
+        environment_backend=environment_backend,
+        verbose_runtime_logs=verbose_runtime_logs,
+        cuda_memory_poll_interval_ms=cuda_memory_poll_interval_ms,
+        policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
+        balance_policy_tokens_across_ranks=balance_policy_tokens_across_ranks,
+    )
+
+
+def run_policy_training(
+    *,
+    config: AppConfig,
+    mode: SkillMode,
+    plan: TrainingPlan,
+    num_gpus: int,
+    run_name: str | None,
+    resume: str | None,
+    persistent_rollout_session: bool = True,
+    environment_workers: int = 1,
+    environment_backend: str = "native_batch",
+    verbose_runtime_logs: bool = False,
+    cuda_memory_poll_interval_ms: int = 0,
+    policy_max_tokens_per_gpu: int = 16_384,
+    balance_policy_tokens_across_ranks: bool = True,
+) -> int:
+    """Run a token-only policy control through the pinned VERL runtime."""
+
+    if mode not in {SkillMode.NO_SKILL, SkillMode.RAW_SKILL_PROMPT}:
+        raise ValueError("policy training supports no_skill or raw_skill_prompt")
 
     if config.paths.policy_adapter is not None:
         raise ValueError(
-            "formal M0 must start from the shared full-model initialization; "
+            "formal policy training must start from the shared full-model "
+            "initialization; "
             "policy_adapter must be null"
         )
     if num_gpus <= 0:
@@ -97,7 +136,14 @@ def run_m0_training(
     valid_seen_tasks: tuple[TaskSpec, ...] = ()
     valid_seen_manifest_sha256: str | None = None
     evaluation_config = EvaluationConfig()
-    if plan.evaluation_kind == "valid_seen":
+    # Raw-skill checkpoints must carry an immutable retrieval plan for both the
+    # train corpus and the fixed evaluation corpus.  Discover valid_seen even
+    # for smoke/integration raw runs so their checkpoints can be evaluated
+    # independently without introducing previously unseen retrieval queries.
+    if (
+        plan.evaluation_kind == "valid_seen"
+        or mode is SkillMode.RAW_SKILL_PROMPT
+    ):
         valid_seen_tasks = discover_tasks(
             config.paths.alfworld_data,
             split=evaluation_config.split,
@@ -126,16 +172,47 @@ def run_m0_training(
             f"formal task schedule resolves to {available_updates} updates instead of 445"
         )
 
+    raw_skill_setup = None
+    raw_skill_provenance: dict[str, object] | None = None
+    if mode is SkillMode.RAW_SKILL_PROMPT:
+        from infoskill.builders import (
+            audit_raw_skill_prompt_budget_for_model,
+            build_raw_skill_setup,
+        )
+
+        raw_skill_setup = build_raw_skill_setup(
+            config,
+            retrieval_queries={
+                task.task_id: task.goal
+                for task in (*all_train_tasks, *valid_seen_tasks)
+            },
+        )
+        raw_skill_provenance = {
+            **raw_skill_setup.provenance,
+            **audit_raw_skill_prompt_budget_for_model(
+                raw_skill_setup,
+                model_path=config.paths.policy_model,
+                max_prompt_tokens=config.max_prompt_tokens,
+            ),
+        }
+        conditioner: SkillConditioner = raw_skill_setup.conditioner
+    else:
+        conditioner = NoSkillConditioner()
     run_directory, checkpoint_to_load, forked_resume = resolve_training_run_directory(
         output_root=config.paths.output_root,
         profile_name=plan.profile.value,
         run_name=run_name,
         resume=resume,
+        default_run_name=(
+            f"m0-{plan.profile.value}"
+            if mode is SkillMode.NO_SKILL
+            else f"raw-skill-prompt-{plan.profile.value}"
+        ),
     )
     logger = _configure_training_logging(run_directory)
     resolved = {
         "schema_version": 1,
-        "mode": "no_skill",
+        "mode": mode.value,
         "num_gpus": num_gpus,
         "app_config": config.as_dict(),
         "training_plan": _plan_payload(plan),
@@ -156,10 +233,12 @@ def run_m0_training(
                 "task_count": evaluation_config.total_tasks,
                 "sha256": valid_seen_manifest_sha256,
             }
-            if valid_seen_manifest_sha256 is not None
+            if plan.evaluation_kind == "valid_seen"
             else None
         ),
     }
+    if raw_skill_provenance is not None:
+        resolved["skill_conditioning"] = raw_skill_provenance
     resume_source_num_gpus: int | None = None
     if checkpoint_to_load is not None:
         resume_source_num_gpus = validate_resume_config(
@@ -189,7 +268,7 @@ def run_m0_training(
 
     provenance = {
         "schema_version": 1,
-        "mode": "no_skill",
+        "mode": mode.value,
         "train_task_count": len(all_train_tasks),
         "scheduled_task_count": len(scheduled_tasks),
         "train_task_manifest_sha256": task_manifest_sha256(all_train_tasks),
@@ -198,6 +277,8 @@ def run_m0_training(
         "policy_model": policy_model_identity.as_dict(),
         "verbose_runtime_logs": verbose_runtime_logs,
     }
+    if raw_skill_provenance is not None:
+        provenance["skill_conditioning"] = raw_skill_provenance
     if checkpoint_to_load is not None:
         provenance.update(
             {
@@ -252,6 +333,7 @@ def run_m0_training(
             config,
             factory=factory,
             runtime=runtime,
+            conditioner=conditioner,
             training=True,
             environment_workers=environment_workers,
             environment_backend=environment_backend,
@@ -260,6 +342,7 @@ def run_m0_training(
             config,
             factory=factory,
             runtime=runtime,
+            conditioner=conditioner,
             training=False,
             environment_workers=environment_workers,
             environment_backend=environment_backend,
@@ -275,7 +358,7 @@ def run_m0_training(
         progress = tqdm(
             total=plan.max_updates,
             initial=initial_update,
-            desc=f"M0/{plan.profile.value}",
+            desc=f"{mode.value}/{plan.profile.value}",
             unit="update",
             dynamic_ncols=True,
         )
@@ -379,18 +462,27 @@ def run_m0_training(
         summary = {
             "schema_version": 1,
             "status": "complete",
-            "mode": "no_skill",
+            "mode": mode.value,
             "profile": plan.profile.value,
             "global_update": trainer.global_update,
             "task_cursor": schedule.cursor,
             "max_updates": plan.max_updates,
         }
         _write_json(run_directory / "training_summary.json", summary)
-        logger.info("M0 training segment complete: %s", json.dumps(summary))
+        logger.info("Policy training segment complete: %s", json.dumps(summary))
         return 0
     except Exception as error:
+        if isinstance(error, PromptLengthError):
+            _write_json(
+                run_directory / "prompt-overflow.json",
+                {
+                    "schema_version": 1,
+                    "mode": mode.value,
+                    **error.as_dict(),
+                },
+            )
         # The uncaught exception below prints the complete traceback once.
-        logger.error("M0 training failed: %s", error)
+        logger.error("Policy training failed: %s", error)
         raise
     finally:
         runtime.close()
@@ -401,6 +493,7 @@ def _collector(
     *,
     factory: AlfworldEnvironmentFactory,
     runtime: object,
+    conditioner: SkillConditioner,
     training: bool,
     environment_workers: int,
     environment_backend: str,
@@ -413,7 +506,7 @@ def _collector(
     )
     return TrajectoryCollector(
         environment_factory=factory,
-        conditioner=NoSkillConditioner(),
+        conditioner=conditioner,
         rollout_backend=runtime,  # type: ignore[arg-type]
         max_steps=config.max_steps,
         history_limit=config.history_length,

@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 
 from infoskill.episode import TrajectoryGroup
-from infoskill.rollout import GenerationRequest, GenerationResult
+from infoskill.rollout import GenerationRequest, GenerationResult, PromptLengthError
 
 from .generation_boundary import trim_vllm_padding_sentinel
 from .hybrid_prefix import build_hybrid_vllm_inputs
@@ -43,7 +43,13 @@ class VerlBatchCodec:
         self.pad_token_id = int(pad)
 
     def encode_prompts(self, requests: Sequence[GenerationRequest]) -> TokenBatch:
-        raw = tuple(self._prompt_ids(request.user_message) for request in requests)
+        raw = tuple(
+            self._prompt_ids(
+                request.user_message,
+                request_id=request.request_id,
+            )
+            for request in requests
+        )
         return self._encode_token_ids(raw)
 
     def generation_dataproto(self, requests: Sequence[GenerationRequest]):
@@ -207,7 +213,12 @@ class VerlBatchCodec:
             },
         )
 
-    def _prompt_ids(self, user_message: str) -> tuple[int, ...]:
+    def _prompt_ids(
+        self,
+        user_message: str,
+        *,
+        request_id: str = "unknown",
+    ) -> tuple[int, ...]:
         result = self.tokenizer.apply_chat_template(
             [{"role": "user", "content": user_message}],
             tokenize=True,
@@ -219,8 +230,11 @@ class VerlBatchCodec:
             result = result[0]
         ids = tuple(int(value) for value in result)
         if len(ids) > self.max_prompt_tokens:
-            raise RuntimeError(
-                f"policy prompt has {len(ids)} tokens, exceeding {self.max_prompt_tokens}; no silent truncation"
+            raise PromptLengthError(
+                request_id=request_id,
+                token_count=len(ids),
+                max_prompt_tokens=self.max_prompt_tokens,
+                user_message=user_message,
             )
         return ids
 

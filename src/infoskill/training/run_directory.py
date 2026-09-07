@@ -18,6 +18,7 @@ def resolve_training_run_directory(
     profile_name: str,
     run_name: str | None,
     resume: str | None,
+    default_run_name: str | None = None,
 ) -> tuple[Path, Path | None, bool]:
     """Resolve an in-place run or a named fork from an immutable checkpoint."""
     if resume is not None:
@@ -28,7 +29,7 @@ def resolve_training_run_directory(
             return checkpoint.parent.parent, checkpoint, False
         return _create_run_directory(output_root, run_name), checkpoint, True
 
-    name = run_name or f"m0-{profile_name}"
+    name = run_name or default_run_name or f"m0-{profile_name}"
     return _create_run_directory(output_root, name), None, False
 
 

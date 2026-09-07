@@ -74,12 +74,18 @@ class FixedSkillLibrary:
         metadata = payload.get("metadata", {})
         if not isinstance(metadata, dict):
             raise ValueError("skill bank metadata must be a JSON object")
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
         return cls(
             general=general,
             task_specific=tuple(task_specific),
             mistakes=mistakes,
             source_path=source,
-            source_sha256=hashlib.sha256(raw).hexdigest(),
+            source_sha256=hashlib.sha256(canonical).hexdigest(),
             metadata=metadata,
         )
 

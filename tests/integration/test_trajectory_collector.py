@@ -8,7 +8,7 @@ from time import sleep
 from infoskill.conditioning import NoSkillConditioner
 from infoskill.domain.state import AgentHistoryEntry, CanonicalAgentState
 from infoskill.episode import EnvironmentTransition, TaskSpec, TrajectoryCollector
-from infoskill.rollout import GenerationRequest, GenerationResult
+from infoskill.rollout import GenerationRequest, GenerationResult, PromptLengthError
 
 
 class _FakeEnvironment:
@@ -191,6 +191,35 @@ class _FakeRolloutBackend:
         return tuple(results)
 
 
+class _HistoryOverflowBackend:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(
+        self,
+        requests: tuple[GenerationRequest, ...],
+    ) -> tuple[GenerationResult, ...]:
+        self.calls += 1
+        request = requests[0]
+        if "Step 1:" in request.user_message:
+            raise PromptLengthError(
+                request_id=request.request_id,
+                token_count=4_100,
+                max_prompt_tokens=4_096,
+                user_message=request.user_message,
+            )
+        return (
+            GenerationResult(
+                request_id=request.request_id,
+                text="<action>look</action>",
+                finish_reason="action_stop",
+                token_ids=(1,),
+                token_logprobs=(-0.1,),
+                prompt_token_count=100,
+            ),
+        )
+
+
 class _RecordingConditioner(NoSkillConditioner):
     def __init__(self) -> None:
         self.identities: list[tuple[str, int, int, int, int]] = []
@@ -210,6 +239,34 @@ class _RecordingConditioner(NoSkillConditioner):
 
 
 class TrajectoryCollectorTests(unittest.TestCase):
+    def test_prompt_overflow_removes_oldest_history_and_records_it(self) -> None:
+        backend = _HistoryOverflowBackend()
+        collector = TrajectoryCollector(
+            environment_factory=_FakeEnvironmentFactory(),
+            conditioner=NoSkillConditioner(),
+            rollout_backend=backend,
+            max_steps=2,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+        )
+        task = TaskSpec(
+            "game-1",
+            "train",
+            "pick_and_place_simple",
+            "put the apple in the fridge",
+        )
+
+        group = collector.collect_task_group(
+            task,
+            rollouts_per_task=1,
+            master_seed=0,
+        )
+
+        second = group.trajectories[0].steps[1].conditioned_input
+        self.assertEqual(backend.calls, 3)
+        self.assertEqual(second.history_entries_omitted, 1)
+        self.assertIn("corresponding actions you took:\nNone", second.user_message)
+
     def test_latent_seeds_are_semantic_and_independent_of_collection_instance(self) -> None:
         task = TaskSpec("game-1", "train", "pick_and_place_simple", "look")
 

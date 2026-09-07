@@ -86,6 +86,10 @@ GPUS=0 bash scripts/run_alfworld.sh eval no_skill
 # embedding 检索 + 原始技能 prompt
 GPUS=0 bash scripts/run_alfworld.sh eval raw_skill_prompt
 
+# 可选 template 检索；默认留空时使用 YAML 中的 embedding
+GPUS=0 RETRIEVAL_MODE=template \
+  bash scripts/run_alfworld.sh eval raw_skill_prompt
+
 # 训练后的 LoRA + INFO-SKILL 模块；先在 YAML 中填写 checkpoint/adapter
 GPUS=0 bash scripts/run_alfworld.sh eval infoskill
 
@@ -110,6 +114,11 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 DRY_RUN=1 \
 # M0 首次真实 smoke：四卡、1 个 update、同一任务的 2 条独立轨迹
 GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 RUN_NAME=m0-smoke \
   bash scripts/run_alfworld.sh train no_skill
+
+# raw-skill 独立对照：同一训练管线，只增加 episode-level 检索和完整 skill prompt
+GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 \
+  RUN_NAME=raw-skill-smoke \
+  bash scripts/run_alfworld.sh train raw_skill_prompt
 ```
 
 训练档位固定为 `smoke`、`integration`、`pilot`、`formal`。前三者允许用
@@ -158,15 +167,20 @@ checkpoint 不完整、不是 portable、训练模式或基座模型指纹不匹
 
 ## 当前实现边界
 
-Transformers 评测后端、ALFWorld/技能/INFO-SKILL 核心模块、M0 `no_skill`
-GRPO 训练入口及可移植 LoRA checkpoint 已实现。M0 不使用 soft prefix，因此不受
+Transformers 评测后端、ALFWorld/技能/INFO-SKILL 核心模块、M0 `no_skill` 与
+`raw_skill_prompt` 的共享 GRPO 训练入口及可移植 LoRA checkpoint 已实现。raw
+模式在运行开始前批量冻结每个任务目标的检索结果，完整保留最多 17 条技能，不设
+独立 skill token 上限；策略 tokenizer 会预审计 skill block，最终 4,096-token
+prompt 仍逐步严格检查，超限时先移除最旧历史并记录，历史清空后仍超限则保存失败，
+且始终禁止截断技能。M0 不使用 soft prefix，因此不受
 Qwen2.5-7B BF16 的 cross-backend Hybrid Prefix parity 结论阻塞。A800 上的真实
 smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植 checkpoint
 恢复已经通过；进入 M1 开发前的长稳门使用与正式训练相同形状的 25-update pilot。
 首轮 Qwen2.5-7B 训练统一从配置中的 `Alfworld-7B-SFT/checkpoint-140` 完整模型
 独立初始化，M0、`raw_skill_prompt` 与 M1 不互相 warm-start。
-`raw_skill_prompt` 与 `infoskill` 顶层训练当前保持 fail-fast；M1 已具备独立可测试的
-online fidelity/rate + offline grounding/rate Auxiliary Updater，但 trajectory
+`raw_skill_prompt` 尚需在目标 Linux/A800 服务器通过真实 smoke 与 checkpoint
+评测门；`infoskill` 顶层训练仍保持 fail-fast。M1 已具备独立可测试的 online
+fidelity/rate + offline grounding/rate Auxiliary Updater，但 trajectory
 replay batch 构造现已具备内部实现，并以稳定语义 seed 保存可重放 epsilon，rollout
 期间不会保留 compressor/projector 计算图。正式规模的 micro-batch 累积、分布式
 Auxiliary Adapter、projector policy update 与 checkpoint 接线仍未完成。M1 正式训练

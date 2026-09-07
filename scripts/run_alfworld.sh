@@ -5,6 +5,7 @@ set -euo pipefail
 ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | checkpoint-effect | grounding | train
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
+RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
 GPUS="${GPUS:-${4:-0}}"                       # examples: 0 or 0,1 or 0,1,2,3
 RUN_NAME="${RUN_NAME:-}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-0}"
@@ -77,11 +78,22 @@ if [[ -n "${RUN_NAME}" ]]; then
   EXTRA_ARGS+=(--run-name "${RUN_NAME}")
 fi
 
+RETRIEVAL_ARGS=()
+if [[ -n "${RETRIEVAL_MODE}" ]]; then
+  case "${RETRIEVAL_MODE}" in
+    embedding|template) RETRIEVAL_ARGS+=(--retrieval-mode "${RETRIEVAL_MODE}") ;;
+    *)
+      echo "RETRIEVAL_MODE must be embedding, template, or empty" >&2
+      exit 2
+      ;;
+  esac
+fi
+
 echo "[INFO-SKILL] action=${ACTION} mode=${MODE} gpus=${GPUS} config=${CONFIG}"
 
 case "${ACTION}" in
   validate)
-    python -m infoskill.cli validate --config "${CONFIG}" --mode "${MODE}"
+    python -m infoskill.cli validate --config "${CONFIG}" --mode "${MODE}" "${RETRIEVAL_ARGS[@]}"
     ;;
   eval)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
@@ -98,6 +110,7 @@ case "${ACTION}" in
     EVAL_ARGS=(
       --config "${CONFIG}"
       --mode "${MODE}"
+      "${RETRIEVAL_ARGS[@]}"
       --checkpoint-step "${CHECKPOINT_STEP}"
       --backend "${EVAL_BACKEND}"
       --num-gpus "${#GPU_IDS[@]}"
@@ -180,6 +193,7 @@ case "${ACTION}" in
     TRAIN_ARGS=(
       --config "${CONFIG}"
       --mode "${MODE}"
+      "${RETRIEVAL_ARGS[@]}"
       --profile "${PROFILE}"
       --num-gpus "${#GPU_IDS[@]}"
       --environment-workers "${ENVIRONMENT_WORKERS}"

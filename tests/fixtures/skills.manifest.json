@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "artifact": "unit-test skill library",
+  "skill_bank_sha256_algorithm": "canonical-json-sha256-v1",
+  "skill_bank_sha256": "93e0920d794a6e125b2292e27b580b31dd075c8174e5f1786850769d819713dc",
+  "source_split": "train",
+  "trajectory_count": 223,
+  "generation_method": "unit fixture",
+  "generator_source": "tests/fixtures/skills.json",
+  "generator_commit": "unit-test",
+  "generation_timestamp": null,
+  "generation_timestamp_status": "not applicable"
+}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from infoskill.config import EvaluationConfig
 
@@ -15,6 +15,7 @@ class EpisodeEvaluation:
     steps: int
     invalid_action_count: int
     infrastructure_error: str | None = None
+    infrastructure_detail: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not self.task_id or not self.task_type:

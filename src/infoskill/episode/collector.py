@@ -4,13 +4,19 @@ import hashlib
 import time
 from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from typing import Callable, Literal, TypeVar, cast
 
 from infoskill.conditioning import ConditioningRequest, SkillConditioner
 from infoskill.domain.actions import resolve_action
 from infoskill.domain.rewards import trajectory_reward
 from infoskill.domain.state import CanonicalAgentState, render_state_views
-from infoskill.rollout import GenerationParameters, GenerationRequest, RolloutBackend
+from infoskill.rollout import (
+    GenerationParameters,
+    GenerationRequest,
+    PromptLengthError,
+    RolloutBackend,
+)
 
 from .contracts import (
     Environment,
@@ -257,6 +263,7 @@ class TrajectoryCollector:
                     if not active:
                         break
                     prepared: list[tuple[int, int, CanonicalAgentState, object]] = []
+                    history_limits: dict[tuple[int, int], int] = {}
                     for task_index in range(len(tasks)):
                         rollout_ids = [
                             rollout_id for index, rollout_id in active if index == task_index
@@ -266,9 +273,19 @@ class TrajectoryCollector:
                         active_states = tuple(
                             states[task_index][rollout_id] for rollout_id in rollout_ids
                         )
-                        views = tuple(
-                            render_state_views(state, history_limit=self._history_limit)
+                        limits = tuple(
+                            min(self._history_limit, len(state.history))
                             for state in active_states
+                        )
+                        history_limits.update(
+                            {
+                                (task_index, rollout_id): limit
+                                for rollout_id, limit in zip(rollout_ids, limits)
+                            }
+                        )
+                        views = tuple(
+                            render_state_views(state, history_limit=limit)
+                            for state, limit in zip(active_states, limits)
                         )
                         stage_started = time.perf_counter()
                         conditioned = self._conditioner.condition_batch(
@@ -286,9 +303,10 @@ class TrajectoryCollector:
                                         env_step,
                                         global_update,
                                     ),
+                                    history_limit=limit,
                                 )
-                                for rollout_id, state, view in zip(
-                                    rollout_ids, active_states, views
+                                for rollout_id, state, view, limit in zip(
+                                    rollout_ids, active_states, views, limits
                                 )
                             ),
                             contexts[task_index],
@@ -296,6 +314,19 @@ class TrajectoryCollector:
                         conditioning_seconds += time.perf_counter() - stage_started
                         if len(conditioned) != len(rollout_ids):
                             raise RuntimeError("conditioner returned a different batch size")
+                        conditioned = tuple(
+                            replace(
+                                policy_input,
+                                history_entries_omitted=(
+                                    len(state.history) - limit
+                                ),
+                            )
+                            for state, limit, policy_input in zip(
+                                active_states,
+                                limits,
+                                conditioned,
+                            )
+                        )
                         prepared.extend(
                             (task_index, rollout_id, state, policy_input)
                             for rollout_id, state, policy_input in zip(
@@ -303,31 +334,100 @@ class TrajectoryCollector:
                             )
                         )
 
-                    requests = tuple(
-                        GenerationRequest(
-                            request_id=(
-                                f"{tasks[task_index].task_id}:{rollout_id}:{env_step}"
-                            ),
-                            task_id=tasks[task_index].task_id,
-                            rollout_id=rollout_id,
-                            env_step=env_step,
-                            user_message=policy_input.user_message,  # type: ignore[attr-defined]
-                            parameters=self._generation_parameters,
-                            soft_prefix=policy_input.soft_prefix,  # type: ignore[attr-defined]
-                            seed=_semantic_seed(
-                                "policy_sampling",
-                                master_seed,
-                                tasks[task_index].task_id,
-                                rollout_id,
-                                env_step,
-                                global_update,
-                            ),
+                    while True:
+                        requests = tuple(
+                            GenerationRequest(
+                                request_id=(
+                                    f"{tasks[task_index].task_id}:"
+                                    f"{rollout_id}:{env_step}"
+                                ),
+                                task_id=tasks[task_index].task_id,
+                                rollout_id=rollout_id,
+                                env_step=env_step,
+                                user_message=policy_input.user_message,  # type: ignore[attr-defined]
+                                parameters=self._generation_parameters,
+                                soft_prefix=policy_input.soft_prefix,  # type: ignore[attr-defined]
+                                seed=_semantic_seed(
+                                    "policy_sampling",
+                                    master_seed,
+                                    tasks[task_index].task_id,
+                                    rollout_id,
+                                    env_step,
+                                    global_update,
+                                ),
+                            )
+                            for task_index, rollout_id, _, policy_input in prepared
                         )
-                        for task_index, rollout_id, _, policy_input in prepared
-                    )
-                    stage_started = time.perf_counter()
-                    results = self._rollout_backend.generate(requests)
-                    backend_generate_seconds += time.perf_counter() - stage_started
+                        stage_started = time.perf_counter()
+                        try:
+                            results = self._rollout_backend.generate(requests)
+                        except PromptLengthError as error:
+                            backend_generate_seconds += (
+                                time.perf_counter() - stage_started
+                            )
+                            overflow_index = next(
+                                (
+                                    index
+                                    for index, request in enumerate(requests)
+                                    if request.request_id == error.request_id
+                                ),
+                                None,
+                            )
+                            if overflow_index is None:
+                                raise
+                            task_index, rollout_id, state, _ = prepared[
+                                overflow_index
+                            ]
+                            key = (task_index, rollout_id)
+                            current_limit = history_limits[key]
+                            if current_limit == 0:
+                                raise
+                            next_limit = current_limit - 1
+                            history_limits[key] = next_limit
+                            view = render_state_views(
+                                state,
+                                history_limit=next_limit,
+                            )
+                            stage_started = time.perf_counter()
+                            policy_input = self._conditioner.condition_batch(
+                                (
+                                    ConditioningRequest(
+                                        state=state,
+                                        views=view,
+                                        rollout_id=rollout_id,
+                                        global_update=global_update,
+                                        latent_seed=_semantic_seed(
+                                            "latent_epsilon",
+                                            master_seed,
+                                            tasks[task_index].task_id,
+                                            rollout_id,
+                                            env_step,
+                                            global_update,
+                                        ),
+                                        history_limit=next_limit,
+                                    ),
+                                ),
+                                contexts[task_index],
+                            )[0]
+                            conditioning_seconds += (
+                                time.perf_counter() - stage_started
+                            )
+                            prepared[overflow_index] = (
+                                task_index,
+                                rollout_id,
+                                state,
+                                replace(
+                                    policy_input,
+                                    history_entries_omitted=(
+                                        len(state.history) - next_limit
+                                    ),
+                                ),
+                            )
+                            continue
+                        backend_generate_seconds += (
+                            time.perf_counter() - stage_started
+                        )
+                        break
                     by_request_id = {result.request_id: result for result in results}
                     if len(by_request_id) != len(requests) or set(by_request_id) != {
                         request.request_id for request in requests

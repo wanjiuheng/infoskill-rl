@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,6 +18,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     config = AppConfig.load(args.config)
+    retrieval_mode = getattr(args, "retrieval_mode", None)
+    if retrieval_mode is not None:
+        config = replace(config, retrieval_mode=retrieval_mode)
     if args.command == "validate":
         mode = SkillMode(args.mode)
         _validate_paths(
@@ -44,9 +48,11 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate", help="validate config and local paths")
     validate.add_argument("--config", required=True)
     validate.add_argument("--mode", choices=[mode.value for mode in SkillMode], default="no_skill")
+    _add_retrieval_mode_argument(validate)
     evaluate = subparsers.add_parser("eval", help="run the complete ALFWorld valid_seen evaluation")
     evaluate.add_argument("--config", required=True)
     evaluate.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
+    _add_retrieval_mode_argument(evaluate)
     evaluate.add_argument("--run-name")
     evaluate.add_argument("--checkpoint-step", type=int, default=0)
     evaluate.add_argument(
@@ -83,6 +89,7 @@ def _parser() -> argparse.ArgumentParser:
     train = subparsers.add_parser("train", help="run INFO-SKILL-owned GRPO training")
     train.add_argument("--config", required=True)
     train.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
+    _add_retrieval_mode_argument(train)
     train.add_argument(
         "--profile",
         choices=[profile.value for profile in TrainingProfile],
@@ -140,12 +147,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_retrieval_mode_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--retrieval-mode",
+        choices=("embedding", "template"),
+        help="override the YAML retrieval mode for raw_skill_prompt/infoskill",
+    )
+
+
 def _train(config: AppConfig, args: argparse.Namespace) -> int:
     mode = SkillMode(args.mode)
-    if mode is not SkillMode.NO_SKILL:
+    if mode is SkillMode.INFO_SKILL:
         raise NotImplementedError(
-            "the first training slice supports only mode=no_skill; "
-            "raw_skill_prompt and infoskill remain fail-fast"
+            "infoskill training remains fail-fast until the distributed M1 "
+            "policy and auxiliary update paths are complete"
         )
     if args.num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
@@ -176,6 +191,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                 {
                     "action": "train",
                     "mode": mode.value,
+                    "retrieval_mode": config.retrieval_mode,
                     "profile": plan.profile.value,
                     "max_updates": plan.max_updates,
                     "task_groups_per_update": plan.task_groups_per_update,
@@ -206,10 +222,11 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         )
         return 0
 
-    from infoskill.training.m0 import run_m0_training
+    from infoskill.training.m0 import run_policy_training
 
-    return run_m0_training(
+    return run_policy_training(
         config=config,
+        mode=mode,
         plan=plan,
         num_gpus=args.num_gpus,
         run_name=args.run_name,
@@ -234,9 +251,9 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("checkpoint_step must be non-negative")
     if args.backend == "transformers" and args.num_gpus != 1:
         raise ValueError("the Transformers evaluation backend requires num_gpus=1")
-    if args.backend == "verl" and mode is not SkillMode.NO_SKILL:
+    if args.backend == "verl" and mode is SkillMode.INFO_SKILL:
         raise NotImplementedError(
-            "VERL checkpoint evaluation currently supports only mode=no_skill"
+            "VERL infoskill evaluation requires the unfinished distributed M1 path"
         )
     if args.backend == "verl" and config.paths.policy_adapter is not None:
         raise ValueError(
@@ -254,8 +271,10 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     from tqdm.auto import tqdm
 
     from infoskill.builders import (
+        audit_raw_skill_prompt_budget_for_model,
+        build_raw_skill_setup,
         build_transformers_evaluation,
-        build_verl_no_skill_evaluation,
+        build_verl_policy_evaluation,
     )
     from infoskill.evaluation import EvaluationRunner
     from infoskill.integrations.alfworld import discover_tasks, task_manifest_sha256
@@ -299,6 +318,27 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             "nonzero VERL checkpoint_step requires a portable policy_checkpoint"
         )
 
+    raw_skill_setup = (
+        build_raw_skill_setup(
+            config,
+            retrieval_queries={task.task_id: task.goal for task in tasks},
+        )
+        if mode is SkillMode.RAW_SKILL_PROMPT
+        else None
+    )
+    raw_skill_provenance = (
+        {
+            **raw_skill_setup.provenance,
+            **audit_raw_skill_prompt_budget_for_model(
+                raw_skill_setup,
+                model_path=config.paths.policy_model,
+                max_prompt_tokens=config.max_prompt_tokens,
+            ),
+        }
+        if raw_skill_setup is not None
+        else None
+    )
+
     policy_identity = None
     if args.backend == "verl":
         policy_identity = verify_policy_model_identity(
@@ -319,7 +359,13 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     f"portable checkpoint provenance is not an object: {provenance_path}"
                 )
             if checkpoint_provenance.get("mode") != mode.value:
-                raise RuntimeError("portable checkpoint mode is not no_skill")
+                raise RuntimeError(
+                    "portable checkpoint mode differs from evaluation mode"
+                )
+            if raw_skill_setup is not None:
+                raw_skill_setup.require_checkpoint_compatibility(
+                    checkpoint_provenance
+                )
             if not provenance_matches_pinned_model(
                 checkpoint_provenance,
                 model_id=config.policy_model_id or "",
@@ -351,6 +397,8 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "task_count": evaluation_config.total_tasks,
         "sha256": valid_seen_manifest_sha256,
     }
+    if raw_skill_provenance is not None:
+        resolved["skill_conditioning"] = raw_skill_provenance
     if policy_identity is not None:
         resolved["policy_model_identity"] = policy_identity.as_dict()
     _write_json(run_directory / "resolved_config.json", resolved)
@@ -393,9 +441,15 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     "Loaded portable policy checkpoint: %s",
                     checkpoint.directory,
                 )
-            collector = build_verl_no_skill_evaluation(
+            collector = build_verl_policy_evaluation(
                 config,
+                mode=mode,
                 backend=runtime,
+                conditioner=(
+                    raw_skill_setup.conditioner
+                    if raw_skill_setup is not None
+                    else None
+                ),
                 environment_backend=args.environment_backend,
             )
         else:
@@ -407,6 +461,11 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                 config,
                 mode=mode,
                 environment_backend=args.environment_backend,
+                conditioner=(
+                    raw_skill_setup.conditioner
+                    if raw_skill_setup is not None
+                    else None
+                ),
             )
 
         progress = tqdm(
@@ -708,8 +767,16 @@ def _validate_paths(
         "output_root": config.paths.output_root,
     }
     if mode is not SkillMode.NO_SKILL:
-        required["semantic_model"] = config.paths.semantic_model
         required["skill_bank"] = config.paths.skill_bank
+        required["skill_bank_manifest"] = (
+            config.paths.skill_bank_manifest
+            or "configs/alfworld_skill_bank_manifest.json"
+        )
+    if mode is SkillMode.INFO_SKILL or (
+        mode is SkillMode.RAW_SKILL_PROMPT
+        and config.retrieval_mode == "embedding"
+    ):
+        required["semantic_model"] = config.paths.semantic_model
     if require_training_runtime:
         required["skillrl_source"] = config.paths.skillrl_source
     if config.paths.policy_adapter:

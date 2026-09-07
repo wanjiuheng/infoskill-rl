@@ -116,6 +116,9 @@ def _trajectory_record(trajectory: object, *, advantage: float, global_update: i
                 "response_token_ids": list(step.generation.token_ids),
                 "old_token_logprobs": list(step.generation.token_logprobs),
                 "prompt_token_count": step.generation.prompt_token_count,
+                "history_entries_omitted": (
+                    step.conditioned_input.history_entries_omitted
+                ),
                 "action_resolution": _json_safe(step.action),
                 "environment_raw_output": {
                     "observation": step.transition.raw_observation,

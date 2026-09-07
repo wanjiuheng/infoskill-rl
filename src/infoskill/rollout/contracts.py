@@ -4,6 +4,35 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
+class PromptLengthError(RuntimeError):
+    """A complete policy input exceeded the registered prompt budget."""
+
+    def __init__(
+        self,
+        *,
+        request_id: str,
+        token_count: int,
+        max_prompt_tokens: int,
+        user_message: str,
+    ) -> None:
+        self.request_id = request_id
+        self.token_count = token_count
+        self.max_prompt_tokens = max_prompt_tokens
+        self.user_message = user_message
+        super().__init__(
+            f"policy prompt for {request_id} has {token_count} tokens, exceeding "
+            f"{max_prompt_tokens}; no silent truncation"
+        )
+
+    def as_dict(self) -> dict[str, int | str]:
+        return {
+            "request_id": self.request_id,
+            "token_count": self.token_count,
+            "max_prompt_tokens": self.max_prompt_tokens,
+            "user_message": self.user_message,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class GenerationParameters:
     do_sample: bool

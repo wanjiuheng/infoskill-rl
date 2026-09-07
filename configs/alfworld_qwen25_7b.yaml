@@ -8,6 +8,7 @@ paths:
   alfworld_data: /root/autodl-tmp/wjh/data/alfworld/alfworld
   alfworld_config: /root/autodl-tmp/wjh/alfworld_eval/alfworld-master/configs/base_config.yaml
   skill_bank: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/memory_data/alfworld/claude_style_skills.json
+  skill_bank_manifest: configs/alfworld_skill_bank_manifest.json
   output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
   # Required only for mode=infoskill. Point at the exported inference .pt file.
   infoskill_checkpoint: null

@@ -1,6 +1,12 @@
 """Policy generation interface shared by Transformers and VERL adapters."""
 
-from .contracts import GenerationParameters, GenerationRequest, GenerationResult, RolloutBackend
+from .contracts import (
+    GenerationParameters,
+    GenerationRequest,
+    GenerationResult,
+    PromptLengthError,
+    RolloutBackend,
+)
 
 try:
     from .transformers_backend import TransformersBackend
@@ -13,6 +19,7 @@ __all__ = [
     "GenerationParameters",
     "GenerationRequest",
     "GenerationResult",
+    "PromptLengthError",
     "RolloutBackend",
     "TransformersBackend",
 ]

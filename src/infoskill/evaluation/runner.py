@@ -5,6 +5,7 @@ from typing import Callable, Sequence
 
 from infoskill.config import EvaluationConfig
 from infoskill.episode import TaskSpec, TrajectoryCollector, TrajectoryGroup
+from infoskill.rollout import PromptLengthError
 
 from .metrics import EpisodeEvaluation, EvaluationSummary, aggregate_valid_seen
 
@@ -86,6 +87,11 @@ class EvaluationRunner:
                 steps=0,
                 invalid_action_count=0,
                 infrastructure_error=f"{type(last_error).__name__}: {last_error}",
+                infrastructure_detail=(
+                    last_error.as_dict()
+                    if isinstance(last_error, PromptLengthError)
+                    else None
+                ),
             )
             for task in tasks
         ], ()

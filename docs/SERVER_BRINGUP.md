@@ -424,6 +424,89 @@ VERBOSE_RUNTIME_LOGS=1 bash scripts/run_alfworld.sh train no_skill
 `formal` 固定 445 个 update，并在 update 0、每 25 个 update 和训练结束后评测
 完整 `valid_seen`。正式训练不接受 `MAX_UPDATES` 的其他值。
 
+## 9. `raw_skill_prompt` 独立对照门禁
+
+raw 对照不是 M1，也不从 M0 checkpoint 继续训练。它从同一份 SFT 权重独立初始化，
+复用 M0 已验证的 GRPO、VERL/vLLM、任务顺序、奖励、checkpoint、恢复和
+`valid_seen` 评测管线；唯一方法差异是每个 episode 按任务目标检索一次最多 17 条
+技能，并在每个环境步骤完整写入 policy prompt。默认使用 YAML 的 `embedding`；
+`template` 仅作为可选诊断，通过 `RETRIEVAL_MODE=template` 切换，不需要编辑 YAML。
+
+先拉取代码并运行不占 GPU 的逻辑门和静态预检：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+git pull origin main
+python -m unittest \
+  tests.unit.test_skill_retrieval \
+  tests.unit.test_raw_skill_training_setup \
+  tests.unit.test_training_cli -v
+
+GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 DRY_RUN=1 \
+  bash scripts/run_alfworld.sh train raw_skill_prompt
+```
+
+然后运行一次 embedding smoke。启动阶段会先批量计算全部 train 目标和固定 140 条
+`valid_seen` 目标的检索结果，释放 embedding 模型及其 CUDA cache，再初始化
+Ray/FSDP/vLLM；这不是外部 API 调用。完整 skill block 会用 policy tokenizer
+预计算长度，但不设置独立的 1,600-token 上限。运行时最终 prompt 超过 4,096
+tokens 时先从最旧历史开始移除；历史清空后仍超限才明确失败，绝不截断技能或减少
+Top-K。
+
+```bash
+GPUS=0,1,2,3 \
+PROFILE=smoke \
+MAX_UPDATES=1 \
+PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_BACKEND=native_batch \
+ENVIRONMENT_WORKERS=1 \
+POLICY_MAX_TOKENS_PER_GPU=16384 \
+BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=raw-skill-embedding-smoke-u1 \
+bash scripts/run_alfworld.sh train raw_skill_prompt
+```
+
+通过条件与 M0 smoke 相同，并额外要求：
+
+- `resolved_config.json` 与 `provenance.json` 的 `mode` 均为
+  `raw_skill_prompt`；
+- `skill_conditioning` 记录 `retrieval_mode=embedding`、规范化 skill bank SHA-256、
+  223 条 train 轨迹来源 manifest、embedding 模型内容校验值、train 与固定 140 条
+  `valid_seen` 的逐任务检索计划、Top-K 与 raw skill block token 统计；
+- trace 每条轨迹的 `candidate_skill_ids` 非空，同一 episode 的候选 ID 保持不变；
+- 最终 prompt 超限时只允许从最旧历史开始逐条移除，并在 trace 记录
+  `history_entries_omitted`；历史清空后仍超限则保存结构化错误并终止；
+- checkpoint 的 `mode` 与 skill conditioning 不匹配时，恢复和评测都必须拒绝。
+
+smoke 通过后再运行 25-update pilot；它会在 update 0 和 25 各评一次固定 140 条
+`valid_seen`。长任务使用 `nohup`，断开 SSH 不会停止训练：
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/raw-skill-pilot-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  PROFILE=pilot \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  ENVIRONMENT_WORKERS=1 \
+  POLICY_MAX_TOKENS_PER_GPU=16384 \
+  BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=raw-skill-embedding-pilot-u25 \
+  bash scripts/run_alfworld.sh train raw_skill_prompt \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+`tail -f "${LOG}"` 可持续查看 update 和 `valid_seen` 进度条。只有真实 smoke、
+checkpoint 加载评测和 pilot 都通过后，才能称 raw 对照已完成服务器验证；这不会
+改变 M1 `infoskill` 仍需完成分布式 compressor/projector/auxiliary 接线的事实。
+
 ## ALFWorld 环境多进程基准
 
 在训练中启用任何进程式环境后端前，必须先运行独立的 CPU 差分基准。它不会加载

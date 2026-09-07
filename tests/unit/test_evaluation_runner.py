@@ -5,6 +5,7 @@ import unittest
 from infoskill.config import EvaluationConfig
 from infoskill.episode import TaskSpec, Trajectory, TrajectoryGroup
 from infoskill.evaluation import EvaluationRunner
+from infoskill.rollout import PromptLengthError
 
 
 class _RecordingCollector:
@@ -66,6 +67,42 @@ class EvaluationRunnerTests(unittest.TestCase):
 
         self.assertTrue(result.summary.is_complete)
         self.assertEqual(collector.global_updates, [0])
+
+    def test_prompt_overflow_preserves_the_exact_failed_input(self) -> None:
+        task = TaskSpec(
+            task_id="task-1",
+            split="valid_seen",
+            task_type="pick_and_place_simple",
+            goal="goal",
+        )
+
+        class OverflowCollector:
+            def collect_task_groups(self, *args, **kwargs):
+                del args, kwargs
+                raise PromptLengthError(
+                    request_id="task-1:0:3",
+                    token_count=4_101,
+                    max_prompt_tokens=4_096,
+                    user_message="full raw skill prompt",
+                )
+
+        run = EvaluationRunner(
+            collector_factory=OverflowCollector,  # type: ignore[arg-type]
+            config=EvaluationConfig(),
+            task_batch_size=1,
+        ).run((task,))
+
+        record = run.records[0]
+        self.assertIn("PromptLengthError", record.infrastructure_error or "")
+        self.assertEqual(
+            record.infrastructure_detail,
+            {
+                "request_id": "task-1:0:3",
+                "token_count": 4_101,
+                "max_prompt_tokens": 4_096,
+                "user_message": "full raw skill prompt",
+            },
+        )
 
 
 if __name__ == "__main__":

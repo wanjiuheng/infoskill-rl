@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from infoskill.skills import EmbeddingRetriever, FixedSkillLibrary, TemplateRetriever
+from infoskill.skills import (
+    EmbeddingRetriever,
+    FixedSkillLibrary,
+    PrecomputedEmbeddingRetriever,
+    TemplateRetriever,
+)
 
 
 class _Encoder:
@@ -13,6 +18,7 @@ class _Encoder:
         "Clean A. wash. dirty": (0.2, 0.8),
         "Heat A. warm. cold": (0.9, 0.1),
         "heat the apple": (1.0, 0.0),
+        "clean the apple": (0.0, 1.0),
     }
 
     def encode(self, texts):
@@ -41,6 +47,37 @@ class SkillRetrievalTests(unittest.TestCase):
 
         self.assertIn("clean_a", result.skill_ids)
         self.assertNotIn("heat_a", result.skill_ids)
+
+    def test_precomputed_embedding_retrieval_batches_and_freezes_queries(self) -> None:
+        class RecordingEncoder(_Encoder):
+            def __init__(self) -> None:
+                self.calls = []
+
+            def encode(self, texts):
+                self.calls.append(tuple(texts))
+                return super().encode(texts)
+
+        encoder = RecordingEncoder()
+        retriever = PrecomputedEmbeddingRetriever(
+            self.library,
+            encoder,
+            queries=("heat the apple", "clean the apple", "heat the apple"),
+            general_top_k=1,
+            task_top_k=1,
+            mistake_count=1,
+        )
+
+        self.assertEqual(len(encoder.calls), 2)
+        self.assertEqual(
+            encoder.calls[1],
+            ("heat the apple", "clean the apple"),
+        )
+        self.assertEqual(
+            retriever.retrieve("heat the apple").skill_ids,
+            ("gen_a", "heat_a", "err_a"),
+        )
+        with self.assertRaisesRegex(KeyError, "not precomputed"):
+            retriever.retrieve("unknown goal")
 
 
 if __name__ == "__main__":

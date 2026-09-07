@@ -7,6 +7,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+from infoskill.app_config import AppConfig
 from infoskill.cli import main
 
 
@@ -49,6 +50,64 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["cuda_memory_poll_interval_ms"], 0)
         self.assertEqual(payload["policy_max_tokens_per_gpu"], 16_384)
         self.assertTrue(payload["balance_policy_tokens_across_ranks"])
+
+    def test_raw_skill_prompt_dry_run_uses_the_shared_training_interface(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "raw_skill_prompt"
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["mode"], "raw_skill_prompt")
+        self.assertEqual(payload["profile"], "smoke")
+        self.assertEqual(payload["trajectories_per_full_update"], 2)
+        self.assertEqual(payload["retrieval_mode"], "embedding")
+
+    def test_raw_skill_retrieval_mode_can_be_overridden_without_editing_yaml(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "raw_skill_prompt"
+        arguments.extend(["--retrieval-mode", "template"])
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue())["retrieval_mode"], "template")
+
+    def test_infoskill_training_remains_fail_fast(self) -> None:
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "infoskill"
+
+        with self.assertRaisesRegex(NotImplementedError, "infoskill"):
+            main(arguments)
+
+    def test_raw_skill_prompt_dispatches_to_shared_policy_training(self) -> None:
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "raw_skill_prompt"
+        arguments.remove("--dry-run")
+
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "infoskill.training.m0.run_m0_training",
+                side_effect=AssertionError("legacy no-skill-only runner used"),
+            ),
+            patch(
+                "infoskill.training.m0.run_policy_training",
+                create=True,
+                return_value=0,
+            ) as train,
+        ):
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(train.call_args.kwargs["mode"].value, "raw_skill_prompt")
 
     def test_persistent_rollout_session_allows_explicit_opt_out(self) -> None:
         output = io.StringIO()
@@ -186,6 +245,32 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
 
+    def test_raw_template_training_does_not_require_embedding_model(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "raw_skill_prompt"
+
+        base = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+
+        def load_template(path):
+            from dataclasses import replace
+
+            del path
+            return replace(base, retrieval_mode="template")
+
+        def exists(path: Path) -> bool:
+            return not path.as_posix().endswith("/Qwen3-Embedding-0.6B")
+
+        with (
+            patch("infoskill.cli.AppConfig.load", side_effect=load_template),
+            patch("pathlib.Path.exists", autospec=True, side_effect=exists),
+        ):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output.getvalue())["mode"], "raw_skill_prompt")
+
     def test_named_resume_dry_run_reports_checkpoint_fork(self) -> None:
         output = io.StringIO()
         arguments = self._arguments() + [
@@ -233,6 +318,29 @@ class TrainingCliTests(unittest.TestCase):
             parsed.policy_checkpoint,
             "/runs/pilot/checkpoints/step-000025",
         )
+
+    def test_raw_skill_prompt_verl_evaluation_passes_the_mode_gate(self) -> None:
+        arguments = [
+            "eval",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--mode",
+            "raw_skill_prompt",
+            "--backend",
+            "verl",
+            "--num-gpus",
+            "4",
+        ]
+
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "infoskill.integrations.alfworld.discover_tasks",
+                side_effect=RuntimeError("reached task discovery"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "reached task discovery"):
+                main(arguments)
 
     def test_checkpoint_effect_accepts_portable_checkpoint_and_gpu_count(self) -> None:
         arguments = [

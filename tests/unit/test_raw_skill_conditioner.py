@@ -42,6 +42,41 @@ class RawSkillConditionerTests(unittest.TestCase):
         self.assertLess(conditioned.user_message.index("## Retrieved"), conditioned.user_message.index("Prior to this step"))
         self.assertIn("[clean_a] type=task_specific category=clean", conditioned.user_message)
 
+    def test_registered_task_goal_is_the_retrieval_key_not_environment_wording(self) -> None:
+        library = FixedSkillLibrary.load(
+            Path(__file__).parents[1] / "fixtures" / "skills.json"
+        )
+
+        class RecordingRetriever(TemplateRetriever):
+            def __init__(self) -> None:
+                super().__init__(library)
+                self.queries: list[str] = []
+
+            def retrieve(self, query: str):
+                self.queries.append(query)
+                return super().retrieve(query)
+
+        retriever = RecordingRetriever()
+        conditioner = RawSkillPromptConditioner(
+            retriever,
+            history_length=2,
+            query_by_task_id={"game-1": "clean the human-described apple"},
+        )
+        environment_state = CanonicalAgentState(
+            task_id="game-1",
+            split="train",
+            task_type="pick_clean_then_place_in_recep",
+            goal="put a clean apple in a receptacle",
+            step_index=0,
+            observation="Kitchen.",
+            history=(),
+            admissible_commands=("look",),
+        )
+
+        conditioner.prepare_group(environment_state)
+
+        self.assertEqual(retriever.queries, ["clean the human-described apple"])
+
 
 if __name__ == "__main__":
     unittest.main()

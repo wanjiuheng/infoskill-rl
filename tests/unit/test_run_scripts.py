@@ -33,6 +33,19 @@ class RunScriptTests(unittest.TestCase):
             script,
         )
 
+    def test_retrieval_mode_override_reaches_training_and_evaluation(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"', script)
+        self.assertIn(
+            'RETRIEVAL_ARGS+=(--retrieval-mode "${RETRIEVAL_MODE}")',
+            script,
+        )
+        self.assertEqual(script.count('"${RETRIEVAL_ARGS[@]}"'), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

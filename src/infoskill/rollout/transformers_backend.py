@@ -6,7 +6,7 @@ from typing import Iterable
 import torch
 from torch import Tensor
 
-from .contracts import GenerationRequest, GenerationResult
+from .contracts import GenerationRequest, GenerationResult, PromptLengthError
 
 
 class TransformersBackend:
@@ -69,9 +69,11 @@ class TransformersBackend:
             prompt_ids = prompt_ids.unsqueeze(0)
         prompt_tokens = int(prompt_ids.shape[-1])
         if prompt_tokens > self.max_prompt_tokens:
-            raise RuntimeError(
-                f"prompt exceeds max_prompt_tokens ({prompt_tokens}>{self.max_prompt_tokens}) "
-                f"for request {request.request_id}"
+            raise PromptLengthError(
+                request_id=request.request_id,
+                token_count=prompt_tokens,
+                max_prompt_tokens=self.max_prompt_tokens,
+                user_message=request.user_message,
             )
         device = next(self.model.parameters()).device  # type: ignore[attr-defined]
         prompt_ids = prompt_ids.to(device)

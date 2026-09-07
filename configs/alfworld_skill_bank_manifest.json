@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "artifact": "SkillRL ALFWorld Claude-style fixed skill library",
+  "skill_bank_sha256_algorithm": "canonical-json-sha256-v1",
+  "skill_bank_sha256": "b098ebb45ee17ab8d5ff99fb9bb15a0ed72a1dbacf689d349c5442e411dcaa36",
+  "source_split": "train",
+  "trajectory_count": 223,
+  "generation_method": "SkillRL published skill generation using o3",
+  "generator_source": "skill_generation/alfworld.py",
+  "generator_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
+  "generation_timestamp": null,
+  "generation_timestamp_status": "not published in the source artifact"
+}
