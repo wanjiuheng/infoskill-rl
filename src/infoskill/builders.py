@@ -410,6 +410,9 @@ def build_skillrl_sft_prompt_setup(config: AppConfig) -> RawSkillSetup:
             "retrieval_schema_version": 1,
             "retrieval_mode": "template",
             "retrieval_query_source": "canonical_environment_goal_at_reset",
+            "task_category_classifier": "skillrl-parquet-observed-keyword-v1",
+            "task_text_normalization": "strip-terminal-period",
+            "observation_normalization": "strip-textworld-welcome-banner",
             "prompt_format": "skillrl_sft_exact",
             "prompt_reference": "Jianwen/SkillRL-SFT-Data ALFWorld parquet",
             "sft_dataset_sha256": (

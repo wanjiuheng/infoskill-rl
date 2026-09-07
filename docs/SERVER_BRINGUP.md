@@ -607,6 +607,15 @@ echo "pid=${PID} log=${LOG}"
 同时记录参考 parquet 校验值、行数、轨迹数、history=5、step-0 技能注入，以及
 “在线完整动作池”这一有意保留的边界。
 
+该入口还会把环境任务末尾句号和 TextWorld welcome banner 从策略可见 instruction
+中移除，因为二者都未出现在发布 SFT parquet 对应字段中。provenance 会记录
+`task_text_normalization=strip-terminal-period`、
+`observation_normalization=strip-textworld-welcome-banner` 和类别分类器版本。注意：
+发布 parquet 对 `examine ... with desklamp` 使用独立 `Examine Skills`，而当前 SkillRL
+仓库的数据生成分类代码不是这一行为；本诊断以发布 parquet 为准。固定 12 条中若出现
+发布训练任务文本未覆盖的 `find ...`、`hot ...`，其结果属于分布外措辞诊断，不能据此
+宣称 template 分类器逐字复现了数据生成过程，也不能在本入口中静默改用环境 task type。
+
 ```bash
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)

@@ -50,6 +50,18 @@ class RawSkillTrainingSetupTests(unittest.TestCase):
         )
         self.assertEqual(setup.provenance["retrieval_mode"], "template")
         self.assertEqual(setup.provenance["prompt_format"], "skillrl_sft_exact")
+        self.assertEqual(
+            setup.provenance["task_category_classifier"],
+            "skillrl-parquet-observed-keyword-v1",
+        )
+        self.assertEqual(
+            setup.provenance["task_text_normalization"],
+            "strip-terminal-period",
+        )
+        self.assertEqual(
+            setup.provenance["observation_normalization"],
+            "strip-textworld-welcome-banner",
+        )
         self.assertEqual(setup.provenance["history_length"], 5)
         self.assertTrue(setup.provenance["step_zero_skill_injection"])
         self.assertEqual(setup.provenance["sft_dataset_row_count"], 7_486)

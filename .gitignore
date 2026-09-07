@@ -32,6 +32,7 @@ hybrid-prefix-parity*.json
 # Local scratch directories
 tmp/
 tmp*/
+_tmp_parquet_deps/
 
 # Model weights must live outside this source repository
 *.safetensors

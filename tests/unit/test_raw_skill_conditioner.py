@@ -38,7 +38,10 @@ class RawSkillConditionerTests(unittest.TestCase):
             task_type="pick_clean_then_place_in_recep",
             goal="put a clean apple in a receptacle.",
             step_index=0,
-            observation="Kitchen.",
+            observation=(
+                "-= Welcome to TextWorld, ALFRED! =-\n\n"
+                "Kitchen."
+            ),
             history=(),
             admissible_commands=("help", "look"),
         )
@@ -61,7 +64,7 @@ class RawSkillConditionerTests(unittest.TestCase):
         self.assertEqual(
             conditioned.user_message,
             "You are an expert agent operating in the ALFRED Embodied Environment.\n"
-            "Your task is to: put a clean apple in a receptacle.\n\n"
+            "Your task is to: put a clean apple in a receptacle\n\n"
             "## Retrieved Relevant Experience\n\n"
             "### General Principles\n"
             "- **General A**: alpha\n\n"
@@ -120,7 +123,16 @@ class RawSkillConditionerTests(unittest.TestCase):
             step_index=6,
             observation="At the counter.",
             history=tuple(
-                AgentHistoryEntry(index, f"Observation {index}.", f"action {index}")
+                AgentHistoryEntry(
+                    index,
+                    (
+                        "-= Welcome to TextWorld, ALFRED! =-\n\n"
+                        if index == 1
+                        else ""
+                    )
+                    + f"Observation {index}.",
+                    f"action {index}",
+                )
                 for index in range(6)
             ),
             admissible_commands=("help", "take apple 1 from countertop 1", "look"),
@@ -140,6 +152,7 @@ class RawSkillConditionerTests(unittest.TestCase):
         )[0]
 
         self.assertNotIn("Observation 0.", conditioned.user_message)
+        self.assertNotIn("Welcome to TextWorld", conditioned.user_message)
         self.assertIn(
             "most recent 5 observations and the corresponding actions you took: "
             "[Observation 1: 'Observation 1.', Action 1: 'action 1']",

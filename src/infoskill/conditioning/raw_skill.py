@@ -260,7 +260,8 @@ def _render_skillrl_history(entries: Sequence[AgentHistoryEntry]) -> str:
 
 def _render_skillrl_sft_history(entries: Sequence[AgentHistoryEntry]) -> str:
     return "\n".join(
-        f"[Observation {index}: '{entry.observation}', "
+        f"[Observation {index}: "
+        f"'{_normalize_skillrl_sft_observation(entry.observation)}', "
         f"Action {index}: '{entry.executed_action}']"
         for index, entry in enumerate(entries, start=1)
     )
@@ -274,15 +275,16 @@ def _render_skillrl_sft_message(
 ) -> str:
     prefix = (
         "You are an expert agent operating in the ALFRED Embodied Environment.\n"
-        f"Your task is to: {state.goal}\n\n"
+        f"Your task is to: {_normalize_skillrl_sft_task(state.goal)}\n\n"
         "## Retrieved Relevant Experience\n\n"
         f"{skill_block}\n\n"
         "## Current Progress\n"
     )
     actions = ", ".join(state.admissible_commands)
+    observation = _normalize_skillrl_sft_observation(state.observation)
     if state.step_index == 0:
         progress = (
-            f"Your current observation is: {state.observation}\n"
+            f"Your current observation is: {observation}\n"
             "Your admissible actions of the current situation are: "
             f"[{actions}].\n\n"
         )
@@ -294,7 +296,7 @@ def _render_skillrl_sft_message(
             f"{len(recent_history)} observations and the corresponding actions "
             f"you took: {history}\n\n"
             f"You are now at step {state.step_index + 1} and your current "
-            f"observation is: {state.observation}\n"
+            f"observation is: {observation}\n"
             "Your admissible actions of the current situation are: "
             f"[{actions}].\n\n"
         )
@@ -307,6 +309,18 @@ def _render_skillrl_sft_message(
         "Once you've finished your reasoning, you should choose an admissible "
         "action for current step and present it within <action> </action> tags."
     )
+
+
+def _normalize_skillrl_sft_task(goal: str) -> str:
+    return goal.strip().rstrip(".")
+
+
+def _normalize_skillrl_sft_observation(observation: str) -> str:
+    normalized = observation.strip()
+    welcome = "-= Welcome to TextWorld, ALFRED! =-"
+    if normalized.startswith(welcome):
+        normalized = normalized[len(welcome) :].lstrip()
+    return normalized
 
 
 def _render_skillrl_initial_message(state: CanonicalAgentState) -> str:

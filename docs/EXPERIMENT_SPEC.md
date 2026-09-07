@@ -66,6 +66,14 @@ general skills、检测类别中的全部 task skills 和 5 条 mistakes。该�
 为追求训练数据表面一致而抽样到 10 条；因此 exact 的范围不包含 SFT 动作候选采样、
 轨迹采集策略或训练过程。该入口只运行固定 12 条归因任务，不参与正式 control、选模
 或 140 条 `valid_seen` 报告。
+
+该协议还按发布数据规范化输入：移除任务文本末尾句号，并从当前与历史 observation
+中移除 TextWorld welcome banner。发布 parquet 是类别与文本形状的最高证据：它为
+`examine ... with desklamp` 使用独立 `Examine Skills`，这与当前锁定 SkillRL 仓库中
+把 `examine` 归入 `look_at_obj_in_light` 的数据生成分类代码存在差异。parquet 中也没有
+出现 `find ...`、`hot ...` 等 `valid_seen` 措辞，因此这些任务上的 template 分类结果
+只能解释为分布外 heuristic，不能当成发布 SFT 生成逻辑的逐字复现，也不能暗中改用
+环境 task type 作为 oracle。需要验证这一因素时必须单独报告 oracle-category A/B。
 _Avoid_: mode-specific base prompt、system-message drift、raw-skill truncation、admissible leakage into compression、manual special-token assembly
 
 **Frozen Semantic Feature Encoder**:

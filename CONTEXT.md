@@ -76,6 +76,15 @@ prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动�
 结构与静态技能选择，用于固定 12 条的归因诊断；在线评测仍保留环境当步提供的全部
 可执行动作，而不把动作空间人为抽样成 10 条，因此不得称为完整 SFT 数据生成复现，
 也不得作为第四个正式 control 或 140 条正式结果。
+
+发布 parquet 还确认了两项输入规范化边界：训练 instruction 中任务文本没有末尾句号，
+初始 observation 也不含 TextWorld 的 welcome banner，因此 `skillrl-sft-exact` 在渲染
+当前 observation 和历史 observation 时移除该 banner，并移除任务末尾句号。类别选择
+以发布 parquet 实际出现的六种技能块为最高依据；当前 SkillRL 仓库的数据生成脚本会把
+`examine` 映射到 `look_at_obj_in_light`，但发布 parquet 对 `examine ... with desklamp`
+使用独立 `Examine Skills`，两者并不逐字一致。`valid_seen` 中的 `find ...`、`hot ...`
+等表达也未出现在已审计 SFT 任务文本中，属于训练文本分布外措辞，不允许在 exact 诊断
+中静默使用环境 task type 进行 oracle 分类；如需验证类别归因，应另做显式 oracle A/B。
 _Avoid_: unrelated baseline、different evaluation pipeline
 
 ## Skills and State
