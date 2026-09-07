@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from infoskill.evaluation.artifacts import (
     checkpoint_load_payload,
@@ -13,10 +14,8 @@ from infoskill.evaluation.artifacts import (
 
 class EvaluationArtifactTests(unittest.TestCase):
     def test_evaluation_provenance_is_written_with_checkpoint_identity(self) -> None:
-        run_directory = Path("/runs/evaluation")
-        with patch(
-            "infoskill.evaluation.artifacts._write_json_atomic"
-        ) as write_json:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_directory = Path(temporary)
             payload = write_evaluation_provenance(
                 run_directory,
                 mode="raw_skill_prompt",
@@ -35,17 +34,17 @@ class EvaluationArtifactTests(unittest.TestCase):
                 checkpoint_provenance_sha256="checkpoint-provenance-sha",
             )
 
-        write_json.assert_called_once_with(
-            run_directory / "provenance.json",
-            payload,
-        )
-        self.assertEqual(payload["artifact_kind"], "valid_seen_evaluation")
-        self.assertEqual(payload["mode"], "raw_skill_prompt")
-        self.assertEqual(payload["evaluation_manifest"]["task_count"], 140)
-        self.assertEqual(
-            payload["checkpoint_provenance_sha256"],
-            "checkpoint-provenance-sha",
-        )
+            stored = json.loads(
+                (run_directory / "provenance.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(stored, payload)
+            self.assertEqual(stored["artifact_kind"], "valid_seen_evaluation")
+            self.assertEqual(stored["mode"], "raw_skill_prompt")
+            self.assertEqual(stored["evaluation_manifest"]["task_count"], 140)
+            self.assertEqual(
+                stored["checkpoint_provenance_sha256"],
+                "checkpoint-provenance-sha",
+            )
 
     def test_checkpoint_load_payload_distinguishes_loaded_and_not_requested(self) -> None:
         not_requested = checkpoint_load_payload(
