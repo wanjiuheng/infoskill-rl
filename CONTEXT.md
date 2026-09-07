@@ -53,6 +53,11 @@ portable checkpoint 在固定 140 条 `valid_seen` 上为 0/140；全部任务�
 零，因此在改变已登记 prompt 设计前，必须先补测相同 raw prompt 的 update 0，区分
 prompt 条件效应和 checkpoint 效应。评测现已要求独立写出 provenance、结构化
 checkpoint-load 状态和分阶段耗时。
+update-0 的 `embedding + full` 已确认同样为 0/140，且诊断显示格式合规、没有
+prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动作循环。下一步固定用
+六类各 2 条 `valid_seen`、同一模型和环境种子，在一次 runtime 中补测
+`embedding + SkillRL concise`、`template + full`、`template + SkillRL concise`；
+这些 12-task 结果只用于归因，明确不得作为正式 `valid_seen` 指标。
 _Avoid_: unrelated baseline、different evaluation pipeline
 
 ## Skills and State

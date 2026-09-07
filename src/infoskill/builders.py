@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Literal, Mapping, Sequence
 
 from infoskill.app_config import AppConfig
 from infoskill.conditioning import (
@@ -40,6 +40,7 @@ class RawSkillSetup:
         compatibility_keys = (
             "retrieval_schema_version",
             "retrieval_mode",
+            "prompt_format",
             "skill_library_provenance_id",
             "skill_bank_sha256",
             "skill_count",
@@ -136,8 +137,14 @@ def build_raw_skill_setup(
     *,
     retrieval_queries: Mapping[str, str] | Sequence[str],
     embedding_device: str = "cuda:0",
+    retrieval_mode: Literal["embedding", "template"] | None = None,
+    prompt_format: Literal["full", "skillrl"] = "full",
 ) -> RawSkillSetup:
     """Build one immutable raw-skill conditioner for a complete run corpus."""
+
+    effective_retrieval_mode = retrieval_mode or config.retrieval_mode
+    if effective_retrieval_mode not in {"embedding", "template"}:
+        raise ValueError("raw skill retrieval mode must be embedding or template")
 
     query_by_task_id = (
         dict(retrieval_queries)
@@ -159,10 +166,10 @@ def build_raw_skill_setup(
     )
     semantic_model_identity = (
         _semantic_model_identity(config.paths.semantic_model)
-        if config.retrieval_mode == "embedding"
+        if effective_retrieval_mode == "embedding"
         else None
     )
-    if config.retrieval_mode == "embedding":
+    if effective_retrieval_mode == "embedding":
         encoder = SentenceTransformerEncoder(
             config.paths.semantic_model,
             device=embedding_device,
@@ -218,11 +225,13 @@ def build_raw_skill_setup(
             retriever,
             history_length=config.history_length,
             query_by_task_id=query_by_task_id,
+            prompt_format=prompt_format,
         ),
         library=library,
         provenance={
             "retrieval_schema_version": 1,
-            "retrieval_mode": config.retrieval_mode,
+            "retrieval_mode": effective_retrieval_mode,
+            "prompt_format": prompt_format,
             "semantic_model_identity": semantic_model_identity,
             "skill_library_provenance_id": skill_library_provenance[
                 "provenance_id"
@@ -245,7 +254,8 @@ def build_raw_skill_setup(
         },
         skill_blocks=tuple(
             dict.fromkeys(
-                format_raw_skill_block(result) for result in retrieval_results
+                format_raw_skill_block(result, style=prompt_format)
+                for result in retrieval_results
             )
         ),
     )

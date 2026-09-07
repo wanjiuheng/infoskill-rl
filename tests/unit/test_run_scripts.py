@@ -46,6 +46,18 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertEqual(script.count('"${RETRIEVAL_ARGS[@]}"'), 3)
 
+    def test_raw_skill_ab_action_forwards_the_stratified_probe_size(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("raw-skill-ab)", script)
+        self.assertIn(
+            '--tasks-per-type "${RAW_SKILL_AB_TASKS_PER_TYPE}"',
+            script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

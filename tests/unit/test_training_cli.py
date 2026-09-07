@@ -367,6 +367,25 @@ class TrainingCliTests(unittest.TestCase):
             "/runs/pilot/checkpoints/step-000025",
         )
 
+    def test_raw_skill_ab_dispatches_one_runtime_diagnostic(self) -> None:
+        arguments = [
+            "raw-skill-ab",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--num-gpus",
+            "4",
+            "--tasks-per-type",
+            "2",
+        ]
+
+        with patch("infoskill.cli._raw_skill_ab", return_value=0, create=True) as probe:
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        parsed = probe.call_args.args[1]
+        self.assertEqual(parsed.num_gpus, 4)
+        self.assertEqual(parsed.tasks_per_type, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

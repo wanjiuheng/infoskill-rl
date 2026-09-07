@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "eval":
         return _evaluate(config, args)
+    if args.command == "raw-skill-ab":
+        return _raw_skill_ab(config, args)
     if args.command == "checkpoint-effect":
         return _checkpoint_effect(config, args)
     if args.command == "grounding":
@@ -74,6 +76,25 @@ def _parser() -> argparse.ArgumentParser:
         default=True,
     )
     evaluate.add_argument("--verbose-runtime-logs", action="store_true")
+    raw_skill_ab = subparsers.add_parser(
+        "raw-skill-ab",
+        help="run the diagnostic raw-skill retrieval/prompt-format matrix",
+    )
+    raw_skill_ab.add_argument("--config", required=True)
+    raw_skill_ab.add_argument("--num-gpus", type=int, required=True)
+    raw_skill_ab.add_argument("--tasks-per-type", type=int, default=2)
+    raw_skill_ab.add_argument("--run-name")
+    raw_skill_ab.add_argument(
+        "--environment-backend",
+        choices=("individual", "native_batch"),
+        default="native_batch",
+    )
+    raw_skill_ab.add_argument(
+        "--persistent-rollout-session",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    raw_skill_ab.add_argument("--verbose-runtime-logs", action="store_true")
     checkpoint_effect = subparsers.add_parser(
         "checkpoint-effect",
         help="diagnose portable checkpoint propagation into FSDP and vLLM",
@@ -635,6 +656,267 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         json.dumps(summary_payload, ensure_ascii=False, indent=2),
     )
     return 0 if summary.is_complete else 3
+
+
+def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
+    """Run a small controlled prompt/retrieval diagnostic on valid_seen."""
+
+    diagnostic_started = time.perf_counter()
+    if args.num_gpus <= 0:
+        raise ValueError("num_gpus must be positive")
+    if args.tasks_per_type <= 0:
+        raise ValueError("tasks_per_type must be positive")
+    if config.paths.policy_adapter is not None:
+        raise ValueError(
+            "raw-skill-ab diagnoses the registered base policy; "
+            "paths.policy_adapter must be null"
+        )
+    _validate_paths(
+        config,
+        mode=SkillMode.RAW_SKILL_PROMPT,
+        require_checkpoint=False,
+        require_training_runtime=True,
+    )
+
+    from tqdm.auto import tqdm
+
+    from infoskill.builders import (
+        audit_raw_skill_prompt_budget_for_model,
+        build_raw_skill_setup,
+        build_verl_policy_evaluation,
+    )
+    from infoskill.diagnostics import (
+        RAW_SKILL_AB_VARIANTS,
+        select_stratified_tasks,
+        summarize_probe_groups,
+    )
+    from infoskill.evaluation import write_checkpoint_load
+    from infoskill.integrations.alfworld import discover_tasks, task_manifest_sha256
+    from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
+    from infoskill.persistence import MetricLogger, ZstdJsonlTraceWriter
+    from infoskill.persistence.model_identity import verify_policy_model_identity
+
+    if VerlRuntime is None or VerlRuntimeConfig is None:
+        raise RuntimeError("the pinned VERL runtime is unavailable")
+    all_tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
+    evaluation_config = EvaluationConfig()
+    full_manifest_sha256 = task_manifest_sha256(all_tasks)
+    if (
+        len(all_tasks) != evaluation_config.total_tasks
+        or full_manifest_sha256 != evaluation_config.manifest_sha256
+    ):
+        raise RuntimeError(
+            "raw-skill-ab requires the registered 140-task valid_seen manifest"
+        )
+    tasks = select_stratified_tasks(
+        all_tasks,
+        tasks_per_type=args.tasks_per_type,
+    )
+    selected_manifest_sha256 = task_manifest_sha256(tasks)
+    retrieval_queries = {task.task_id: task.goal for task in tasks}
+
+    setups = {}
+    prompt_budgets = {}
+    for variant in RAW_SKILL_AB_VARIANTS:
+        setup = build_raw_skill_setup(
+            config,
+            retrieval_queries=retrieval_queries,
+            retrieval_mode=variant.retrieval_mode,
+            prompt_format=variant.prompt_format,
+        )
+        setups[variant.name] = setup
+        prompt_budgets[variant.name] = audit_raw_skill_prompt_budget_for_model(
+            setup,
+            model_path=config.paths.policy_model,
+            max_prompt_tokens=config.max_prompt_tokens,
+        )
+
+    policy_identity = verify_policy_model_identity(
+        config.paths.policy_model,
+        model_id=config.policy_model_id,
+    )
+    run_directory = _run_directory(
+        config,
+        args.run_name or f"raw-skill-ab-valid-seen-{len(tasks)}",
+    )
+    logger = _configure_logging(run_directory)
+    runtime_settings = VerlRuntimeConfig(
+        skillrl_source=config.paths.skillrl_source,
+        model_path=config.paths.policy_model,
+        num_gpus=args.num_gpus,
+        num_cpus=96,
+        max_prompt_tokens=config.max_prompt_tokens,
+        max_response_tokens=config.max_response_tokens,
+        total_training_steps=1,
+        action_minibatch_size=256,
+        policy_max_tokens_per_gpu=16_384,
+        gpu_memory_utilization=0.45,
+        require_hybrid_prefix=False,
+        master_seed=config.master_seed,
+        persistent_rollout_session=args.persistent_rollout_session,
+        verbose_runtime_logs=args.verbose_runtime_logs,
+        cuda_memory_poll_interval_ms=0,
+        balance_policy_tokens_across_ranks=True,
+    )
+    runtime_payload = {
+        "backend": "verl",
+        "num_gpus": args.num_gpus,
+        "environment_backend": args.environment_backend,
+        "persistent_rollout_session": args.persistent_rollout_session,
+        "policy_checkpoint": None,
+        "checkpoint_step": 0,
+    }
+    variants_payload = [
+        {
+            "name": variant.name,
+            "retrieval_mode": variant.retrieval_mode,
+            "prompt_format": variant.prompt_format,
+        }
+        for variant in RAW_SKILL_AB_VARIANTS
+    ]
+    diagnostic_manifest = {
+        "diagnostic_only": True,
+        "reportable_as_valid_seen": False,
+        "split": "valid_seen",
+        "full_task_count": len(all_tasks),
+        "full_task_manifest_sha256": full_manifest_sha256,
+        "selected_task_count": len(tasks),
+        "selected_task_manifest_sha256": selected_manifest_sha256,
+        "tasks_per_type": args.tasks_per_type,
+        "selected_tasks": [
+            {
+                "task_id": task.task_id,
+                "task_type": task.task_type,
+                "goal": task.goal,
+            }
+            for task in tasks
+        ],
+        "variants": variants_payload,
+    }
+    resolved = config.as_dict()
+    resolved["evaluation_runtime"] = runtime_payload
+    resolved["raw_skill_ab_diagnostic"] = diagnostic_manifest
+    resolved["policy_model_identity"] = policy_identity.as_dict()
+    resolved["skill_conditioning"] = {
+        name: {
+            **setup.provenance,
+            **prompt_budgets[name],
+        }
+        for name, setup in setups.items()
+    }
+    _write_json(run_directory / "resolved_config.json", resolved)
+    _write_json(
+        run_directory / "provenance.json",
+        {
+            "schema_version": 1,
+            "artifact_kind": "raw_skill_prompt_ab_diagnostic",
+            **diagnostic_manifest,
+            "evaluation_runtime": runtime_payload,
+            "policy_model": policy_identity.as_dict(),
+            "skill_conditioning": resolved["skill_conditioning"],
+        },
+    )
+    write_checkpoint_load(
+        run_directory,
+        backend="verl",
+        checkpoint=None,
+        checkpoint_step=0,
+        status="not_requested",
+    )
+
+    logger.info(
+        "Initializing one VERL/vLLM runtime for %d diagnostic variants on %d GPU(s)",
+        len(RAW_SKILL_AB_VARIANTS),
+        args.num_gpus,
+    )
+    initialize_started = time.perf_counter()
+    runtime = VerlRuntime.start(runtime_settings)
+    initialize_seconds = time.perf_counter() - initialize_started
+    trace_writer = ZstdJsonlTraceWriter(run_directory)
+    metric_logger = MetricLogger(run_directory)
+    progress = tqdm(
+        total=len(tasks) * len(RAW_SKILL_AB_VARIANTS),
+        desc="raw-skill-ab/diagnostic",
+        unit="task",
+        dynamic_ncols=True,
+    )
+    variant_results = []
+    try:
+        for variant in RAW_SKILL_AB_VARIANTS:
+            setup = setups[variant.name]
+            collector = build_verl_policy_evaluation(
+                config,
+                mode=SkillMode.RAW_SKILL_PROMPT,
+                backend=runtime,
+                conditioner=setup.conditioner,
+                environment_backend=args.environment_backend,
+            )
+            rollout_started = time.perf_counter()
+            groups = []
+            with collector.rollout_session():
+                for start in range(0, len(tasks), config.eval_batch_size):
+                    batch = tuple(tasks[start : start + config.eval_batch_size])
+                    groups.extend(
+                        collector.collect_task_groups(
+                            batch,
+                            rollouts_per_task=1,
+                            master_seed=config.master_seed,
+                            global_update=0,
+                        )
+                    )
+                    progress.update(len(batch))
+            rollout_seconds = time.perf_counter() - rollout_started
+            summary = summarize_probe_groups(groups)
+            trace_path = trace_writer.write_diagnostic_groups(
+                label=f"raw-skill-ab-{variant.name}",
+                groups=groups,
+            )
+            result = {
+                "variant": variant.name,
+                "retrieval_mode": variant.retrieval_mode,
+                "prompt_format": variant.prompt_format,
+                "rollout_seconds": rollout_seconds,
+                "trace": str(trace_path),
+                **summary,
+            }
+            variant_results.append(result)
+            metric_logger.log(
+                step=0,
+                phase=f"raw_skill_ab/{variant.name}",
+                values={
+                    key: value
+                    for key, value in result.items()
+                    if isinstance(value, (str, int, float, bool)) or value is None
+                },
+            )
+            logger.info(
+                "variant=%s success=%.4f invalid=%.4f repeat=%.4f rollout=%.1fs",
+                variant.name,
+                summary["overall_success"],
+                summary["invalid_action_rate"],
+                summary["consecutive_repeat_rate"],
+                rollout_seconds,
+            )
+    finally:
+        progress.close()
+        close_started = time.perf_counter()
+        runtime.close()
+        close_seconds = time.perf_counter() - close_started
+
+    payload = {
+        "schema_version": 1,
+        **diagnostic_manifest,
+        "runtime_initialize_seconds": initialize_seconds,
+        "runtime_close_seconds": close_seconds,
+        "total_seconds": time.perf_counter() - diagnostic_started,
+        "results": variant_results,
+    }
+    _write_json(run_directory / "raw_skill_ab_summary.json", payload)
+    logger.info(
+        "Raw-skill A/B diagnostic complete:\n%s",
+        json.dumps(payload, ensure_ascii=False, indent=2),
+    )
+    return 0
 
 
 def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:

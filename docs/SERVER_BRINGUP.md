@@ -515,6 +515,36 @@ portable checkpoint 的评测应为 `loaded`，并记录各 rank 的 base-sync �
 checkpoint load、rollout、runtime close、trace write 和总耗时。终端只额外显示一行
 精简耗时汇总。
 
+如果 update-0 的 `embedding + full` raw prompt 明显退化，不要立即启动 25-update
+pilot。先运行固定 12 条任务（六类各 2 条）的诊断矩阵，区分检索方式与 prompt
+格式的影响。该命令只初始化一次 VERL/vLLM，并补测尚未测量的三个组合：
+`embedding + SkillRL concise`、`template + full`、`template + SkillRL concise`。
+已有的 140 条 `embedding + full` 结果不重复消耗 GPU。
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/raw-skill-ab-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  RAW_SKILL_AB_TASKS_PER_TYPE=2 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=raw-skill-ab-valid-seen-12 \
+  bash scripts/run_alfworld.sh raw-skill-ab raw_skill_prompt \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+用 `tail -f "${LOG}"` 查看一个覆盖 36 条轨迹的总进度条。结果目录必须包含
+`raw_skill_ab_summary.json`、`provenance.json`、`checkpoint-load.json`、三条
+`metrics.jsonl` 记录和三份压缩轨迹。所有这些文件均强制记录
+`diagnostic_only=true`、`reportable_as_valid_seen=false`；12 条结果只能定位问题，
+不能替代固定 140 条 `valid_seen`、参与 checkpoint 选模或写入论文主表。
+
 ```bash
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -63,6 +64,35 @@ class ZstdJsonlTraceWriter:
             for record in run.records
             if record.infrastructure_error is not None
         )
+        self._write(path, records)
+        return path
+
+    def write_diagnostic_groups(
+        self,
+        *,
+        label: str,
+        groups: Sequence[TrajectoryGroup],
+        global_update: int = 0,
+    ) -> Path:
+        """Persist complete diagnostic trajectories without formal-eval claims."""
+
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", label):
+            raise ValueError("diagnostic trace label must be alphanumeric with hyphens")
+        if any(len(group.trajectories) != 1 for group in groups):
+            raise ValueError("diagnostic groups must contain exactly one trajectory")
+        path = (
+            self.run_directory
+            / "traces"
+            / f"{label}-rank-{self.rank:03d}.jsonl.zst"
+        )
+        records = [
+            _trajectory_record(
+                group.trajectories[0],
+                advantage=0.0,
+                global_update=global_update,
+            )
+            for group in groups
+        ]
         self._write(path, records)
         return path
 

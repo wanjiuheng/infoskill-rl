@@ -14,6 +14,34 @@ from infoskill.domain.state import CanonicalAgentState, render_state_views
 
 
 class RawSkillTrainingSetupTests(unittest.TestCase):
+    def test_diagnostic_setup_can_override_retrieval_and_prompt_format(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+        skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"
+        config = replace(
+            config,
+            paths=replace(
+                config.paths,
+                skill_bank=str(skill_bank),
+                skill_bank_manifest=str(skill_bank.with_name("skills.manifest.json")),
+            ),
+            retrieval_mode="embedding",
+            general_top_k=1,
+            task_top_k=1,
+            mistake_count=1,
+        )
+
+        setup = build_raw_skill_setup(
+            config,
+            retrieval_queries=("clean an apple",),
+            retrieval_mode="template",
+            prompt_format="skillrl",
+        )
+
+        self.assertEqual(setup.provenance["retrieval_mode"], "template")
+        self.assertEqual(setup.provenance["prompt_format"], "skillrl")
+        self.assertTrue(setup.skill_blocks[0].startswith("### General Principles"))
+        self.assertEqual(config.retrieval_mode, "embedding")
+
     def test_template_setup_builds_conditioner_and_auditable_provenance(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
         skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"
@@ -170,6 +198,12 @@ class RawSkillTrainingSetupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "skill conditioning differs"):
             setup.require_checkpoint_compatibility(
                 {"skill_conditioning": incompatible}
+            )
+        different_prompt_format = dict(setup.provenance)
+        different_prompt_format["prompt_format"] = "skillrl"
+        with self.assertRaisesRegex(RuntimeError, "skill conditioning differs"):
+            setup.require_checkpoint_compatibility(
+                {"skill_conditioning": different_prompt_format}
             )
 
     def test_checkpoint_semantic_identity_allows_relocation_but_not_new_weights(

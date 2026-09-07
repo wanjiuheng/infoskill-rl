@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Central parameter panel. Every value can also be overridden as an environment variable.
-ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | checkpoint-effect | grounding | train
+ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab | checkpoint-effect | grounding | train
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
@@ -34,6 +34,8 @@ POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-16384}"
 # Validated default. Reassigns samples among ranks while preserving each
 # global GRPO minibatch's membership; set to 0 for rollback.
 BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-1}"
+# Small, explicitly non-reportable raw-skill diagnostic subset per task type.
+RAW_SKILL_AB_TASKS_PER_TYPE="${RAW_SKILL_AB_TASKS_PER_TYPE:-2}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -67,6 +69,10 @@ if [[ ! "${POLICY_MAX_TOKENS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "1" ]]; then
   echo "BALANCE_POLICY_TOKENS_ACROSS_RANKS must be 0 or 1" >&2
+  exit 2
+fi
+if [[ ! "${RAW_SKILL_AB_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "RAW_SKILL_AB_TASKS_PER_TYPE must be a positive integer" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -139,6 +145,45 @@ case "${ACTION}" in
         ;;
     esac
     python -m infoskill.cli eval "${EVAL_ARGS[@]}"
+    ;;
+  raw-skill-ab)
+    IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
+    if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
+      echo "GPUS must contain at least one physical GPU index" >&2
+      exit 2
+    fi
+    for gpu_id in "${GPU_IDS[@]}"; do
+      if [[ ! "${gpu_id}" =~ ^[0-9]+$ ]]; then
+        echo "Invalid GPU index in GPUS=${GPUS}: ${gpu_id}" >&2
+        exit 2
+      fi
+    done
+    RAW_SKILL_AB_ARGS=(
+      --config "${CONFIG}"
+      --num-gpus "${#GPU_IDS[@]}"
+      --tasks-per-type "${RAW_SKILL_AB_TASKS_PER_TYPE}"
+      --environment-backend "${ENVIRONMENT_BACKEND}"
+    )
+    if [[ -n "${RUN_NAME}" ]]; then
+      RAW_SKILL_AB_ARGS+=(--run-name "${RUN_NAME}")
+    fi
+    case "${PERSISTENT_ROLLOUT_SESSION}" in
+      1) RAW_SKILL_AB_ARGS+=(--persistent-rollout-session) ;;
+      0) RAW_SKILL_AB_ARGS+=(--no-persistent-rollout-session) ;;
+      *)
+        echo "PERSISTENT_ROLLOUT_SESSION must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
+    case "${VERBOSE_RUNTIME_LOGS}" in
+      0) ;;
+      1) RAW_SKILL_AB_ARGS+=(--verbose-runtime-logs) ;;
+      *)
+        echo "VERBOSE_RUNTIME_LOGS must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
+    python -m infoskill.cli raw-skill-ab "${RAW_SKILL_AB_ARGS[@]}"
     ;;
   checkpoint-effect)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
@@ -236,7 +281,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, checkpoint-effect, grounding, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, raw-skill-ab, checkpoint-effect, grounding, or train" >&2
     exit 2
     ;;
 esac
