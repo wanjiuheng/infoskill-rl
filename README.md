@@ -165,5 +165,7 @@ smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植
 恢复已经通过；进入 M1 开发前的长稳门使用与正式训练相同形状的 25-update pilot。
 首轮 Qwen2.5-7B 训练统一从配置中的 `Alfworld-7B-SFT/checkpoint-140` 完整模型
 独立初始化，M0、`raw_skill_prompt` 与 M1 不互相 warm-start。
-`raw_skill_prompt` 与 `infoskill` 训练当前保持 fail-fast；M1 正式训练仍受 Hybrid
-Prefix Input parity gate 约束。
+`raw_skill_prompt` 与 `infoskill` 顶层训练当前保持 fail-fast；M1 已具备独立可测试的
+online fidelity/rate + offline grounding/rate Auxiliary Updater，但 trajectory
+replay batch 构造、分布式 Auxiliary Adapter、projector policy update 与 checkpoint
+接线仍未完成。M1 正式训练仍受 Hybrid Prefix Input parity gate 约束。

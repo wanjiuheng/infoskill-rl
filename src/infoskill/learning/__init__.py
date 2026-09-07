@@ -14,20 +14,40 @@ from .signals import (
 )
 
 try:
+    from .auxiliary import (
+        AuxiliaryTrainingBatch,
+        AuxiliaryUpdateConfig,
+        AuxiliaryUpdater,
+        CompressionReplayBatch,
+        OfflineGroundingBatch,
+        OnlineAuxiliaryBatch,
+    )
     from .losses import AuxiliaryLoss, GrpoLoss, auxiliary_loss, clipped_grpo_loss
 except ModuleNotFoundError as error:
     if error.name != "torch":
         raise
     AuxiliaryLoss = None  # type: ignore[assignment,misc]
+    AuxiliaryTrainingBatch = None  # type: ignore[assignment,misc]
+    AuxiliaryUpdateConfig = None  # type: ignore[assignment,misc]
+    AuxiliaryUpdater = None  # type: ignore[assignment,misc]
+    CompressionReplayBatch = None  # type: ignore[assignment,misc]
     GrpoLoss = None  # type: ignore[assignment,misc]
+    OfflineGroundingBatch = None  # type: ignore[assignment,misc]
+    OnlineAuxiliaryBatch = None  # type: ignore[assignment,misc]
     auxiliary_loss = None  # type: ignore[assignment]
     clipped_grpo_loss = None  # type: ignore[assignment]
 
 __all__ = [
     "AuxiliaryLoss",
+    "AuxiliaryTrainingBatch",
+    "AuxiliaryUpdateConfig",
+    "AuxiliaryUpdater",
+    "CompressionReplayBatch",
     "GrpoLoss",
     "DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS",
     "LogprobAlignmentThresholds",
+    "OfflineGroundingBatch",
+    "OnlineAuxiliaryBatch",
     "GroupAdvantageSignals",
     "auxiliary_loss",
     "clipped_grpo_loss",

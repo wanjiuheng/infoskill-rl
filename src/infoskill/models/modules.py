@@ -99,8 +99,12 @@ class InfoSkillCompressor(nn.Module):
         batch, candidates, tokens, _ = skill_tokens.shape
         if candidates > self.boundary_embedding.num_embeddings:
             raise ValueError("candidate skill count exceeds configured maximum")
-        state = self.state_projection(state_tokens)
-        skill = self.skill_projection(skill_tokens)
+        state = self.state_projection(
+            state_tokens.to(dtype=self.state_projection.weight.dtype)
+        )
+        skill = self.skill_projection(
+            skill_tokens.to(dtype=self.skill_projection.weight.dtype)
+        )
         boundaries = torch.arange(candidates, device=skill.device).view(1, candidates, 1)
         skill = skill + self.kind_embedding(skill_kind_ids).unsqueeze(2)
         skill = skill + self.boundary_embedding(boundaries).expand(batch, -1, tokens, -1)
@@ -122,7 +126,7 @@ class InfoSkillCompressor(nn.Module):
         elif latent_mode == "replay":
             if replay_epsilon is None or replay_epsilon.shape != mu.shape:
                 raise ValueError("replay mode requires epsilon with posterior shape")
-            epsilon = replay_epsilon
+            epsilon = replay_epsilon.to(dtype=mu.dtype)
             latent = mu + torch.exp(0.5 * logvar) * epsilon
         elif latent_mode == "sample":
             epsilon = torch.randn_like(mu)
@@ -221,7 +225,12 @@ class ExecutableGroundingHead(nn.Module):
         command_valid: Tensor,
     ) -> Tensor:
         query = F.normalize(self.query(torch.cat((state_summary, latent), dim=-1)), dim=-1)
-        keys = F.normalize(self.command_key(command_embeddings), dim=-1)
+        keys = F.normalize(
+            self.command_key(
+                command_embeddings.to(dtype=self.command_key.weight.dtype)
+            ),
+            dim=-1,
+        )
         logits = torch.einsum("bd,bcd->bc", query, keys) / self.temperature
         return logits.masked_fill(~command_valid.bool(), -torch.inf)
 
