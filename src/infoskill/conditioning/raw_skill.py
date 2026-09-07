@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from infoskill.domain.state import CanonicalAgentState, StateViews, render_policy_message
+from infoskill.domain.state import CanonicalAgentState, render_policy_message
 from infoskill.skills import RetrievalResult
 
-from .contracts import ConditionedPolicyInput, ConditioningContext
+from .contracts import ConditionedPolicyInput, ConditioningContext, ConditioningRequest
 
 
 class EpisodeRetriever(Protocol):
@@ -23,12 +23,9 @@ class RawSkillPromptConditioner:
 
     def condition_batch(
         self,
-        states: tuple[CanonicalAgentState, ...],
-        views: tuple[StateViews, ...],
+        requests: tuple[ConditioningRequest, ...],
         context: ConditioningContext,
     ) -> tuple[ConditionedPolicyInput, ...]:
-        if len(states) != len(views):
-            raise ValueError("states and views must have equal length")
         if context.retrieval is None:
             raise ValueError("raw skill conditioning requires an episode retrieval result")
         skill_block = format_raw_skill_block(context.retrieval)
@@ -41,7 +38,7 @@ class RawSkillPromptConditioner:
                 ),
                 candidate_skill_ids=context.candidate_skill_ids,
             )
-            for state in states
+            for state in (request.state for request in requests)
         )
 
 

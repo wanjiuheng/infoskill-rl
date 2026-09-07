@@ -167,5 +167,7 @@ smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植
 独立初始化，M0、`raw_skill_prompt` 与 M1 不互相 warm-start。
 `raw_skill_prompt` 与 `infoskill` 顶层训练当前保持 fail-fast；M1 已具备独立可测试的
 online fidelity/rate + offline grounding/rate Auxiliary Updater，但 trajectory
-replay batch 构造、分布式 Auxiliary Adapter、projector policy update 与 checkpoint
-接线仍未完成。M1 正式训练仍受 Hybrid Prefix Input parity gate 约束。
+replay batch 构造现已具备内部实现，并以稳定语义 seed 保存可重放 epsilon，rollout
+期间不会保留 compressor/projector 计算图。正式规模的 micro-batch 累积、分布式
+Auxiliary Adapter、projector policy update 与 checkpoint 接线仍未完成。M1 正式训练
+仍受 Hybrid Prefix Input parity gate 约束。

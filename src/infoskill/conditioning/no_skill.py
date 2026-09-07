@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from infoskill.domain.state import CanonicalAgentState, StateViews
+from infoskill.domain.state import CanonicalAgentState
 
-from .contracts import ConditionedPolicyInput, ConditioningContext
+from .contracts import ConditionedPolicyInput, ConditioningContext, ConditioningRequest
 
 
 class NoSkillConditioner:
@@ -13,12 +13,13 @@ class NoSkillConditioner:
 
     def condition_batch(
         self,
-        states: tuple[CanonicalAgentState, ...],
-        views: tuple[StateViews, ...],
+        requests: tuple[ConditioningRequest, ...],
         context: ConditioningContext,
     ) -> tuple[ConditionedPolicyInput, ...]:
-        if len(states) != len(views):
-            raise ValueError("states and views must have equal length")
         return tuple(
-            ConditionedPolicyInput(user_message=view.policy_view, candidate_skill_ids=()) for view in views
+            ConditionedPolicyInput(
+                user_message=request.views.policy_view,
+                candidate_skill_ids=(),
+            )
+            for request in requests
         )

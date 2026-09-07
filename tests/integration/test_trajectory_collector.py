@@ -191,7 +191,53 @@ class _FakeRolloutBackend:
         return tuple(results)
 
 
+class _RecordingConditioner(NoSkillConditioner):
+    def __init__(self) -> None:
+        self.identities: list[tuple[str, int, int, int, int]] = []
+
+    def condition_batch(self, requests, context):
+        self.identities.extend(
+            (
+                request.state.task_id,
+                request.rollout_id,
+                request.state.step_index,
+                request.global_update,
+                request.latent_seed,
+            )
+            for request in requests
+        )
+        return super().condition_batch(requests, context)
+
+
 class TrajectoryCollectorTests(unittest.TestCase):
+    def test_latent_seeds_are_semantic_and_independent_of_collection_instance(self) -> None:
+        task = TaskSpec("game-1", "train", "pick_and_place_simple", "look")
+
+        def collect(global_update: int):
+            conditioner = _RecordingConditioner()
+            TrajectoryCollector(
+                environment_factory=_FakeEnvironmentFactory(),
+                conditioner=conditioner,
+                rollout_backend=_FakeRolloutBackend(),
+                max_steps=2,
+                history_limit=2,
+                invalid_action_penalty=0.01,
+            ).collect_task_group(
+                task,
+                rollouts_per_task=2,
+                master_seed=17,
+                global_update=global_update,
+            )
+            return conditioner.identities
+
+        first = collect(3)
+        repeated = collect(3)
+        next_update = collect(4)
+
+        self.assertEqual(first, repeated)
+        self.assertNotEqual(first, next_update)
+        self.assertEqual(len({item[-1] for item in first}), len(first))
+
     def test_group_collection_batches_active_envs_and_preserves_invalid_failures(self) -> None:
         backend = _FakeRolloutBackend()
         collector = TrajectoryCollector(

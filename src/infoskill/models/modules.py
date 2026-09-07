@@ -71,6 +71,7 @@ class InfoSkillCompressor(nn.Module):
         super().__init__()
         if model_width % attention_heads:
             raise ValueError("model_width must be divisible by attention_heads")
+        self.latent_dim = latent_dim
         self.state_projection = nn.Linear(semantic_width, model_width)
         self.skill_projection = nn.Linear(semantic_width, model_width)
         self.kind_embedding = nn.Embedding(skill_kinds, model_width)

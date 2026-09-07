@@ -108,17 +108,7 @@ class SemanticFeatureCache:
     ) -> tuple[Tensor, Tensor, Tensor]:
         if not records or batch_size <= 0:
             raise ValueError("skill batch requires records and a positive batch size")
-        missing = [record for record in records if record.skill_id not in self._skills]
-        if missing:
-            features = self.encoder.encode_tokens(
-                [record.text for record in missing], max_length=self.skill_max_length
-            )
-            for row, record in enumerate(missing):
-                length = int(features.valid[row].sum().item())
-                self._skills[record.skill_id] = (
-                    features.tokens[row, :length].detach(),
-                    features.valid[row, :length].detach(),
-                )
+        self._ensure_skills(records)
         max_tokens = max(self._skills[record.skill_id][0].shape[0] for record in records)
         width = self._skills[records[0].skill_id][0].shape[-1]
         tokens = torch.zeros(
@@ -142,6 +132,64 @@ class SemanticFeatureCache:
             valid.unsqueeze(0).expand(batch_size, -1, -1),
             kind_ids.unsqueeze(0).expand(batch_size, -1),
         )
+
+    def heterogeneous_skill_batch(
+        self,
+        record_groups: Sequence[Sequence[SkillRecord]],
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """Materialize differently retrieved candidate sets in one padded batch."""
+
+        if not record_groups or any(not records for records in record_groups):
+            raise ValueError("every sample requires at least one candidate skill")
+        all_records = tuple(record for records in record_groups for record in records)
+        self._ensure_skills(all_records)
+        max_candidates = max(len(records) for records in record_groups)
+        max_tokens = max(
+            self._skills[record.skill_id][0].shape[0] for record in all_records
+        )
+        first = self._skills[all_records[0].skill_id][0]
+        tokens = torch.zeros(
+            (len(record_groups), max_candidates, max_tokens, first.shape[-1]),
+            device=self.encoder.device,
+            dtype=first.dtype,
+        )
+        valid = torch.zeros(
+            (len(record_groups), max_candidates, max_tokens),
+            device=self.encoder.device,
+            dtype=torch.bool,
+        )
+        kind_ids = torch.zeros(
+            (len(record_groups), max_candidates),
+            device=self.encoder.device,
+            dtype=torch.long,
+        )
+        for row, records in enumerate(record_groups):
+            for column, record in enumerate(records):
+                item_tokens, item_valid = self._skills[record.skill_id]
+                length = item_tokens.shape[0]
+                tokens[row, column, :length] = item_tokens
+                valid[row, column, :length] = item_valid
+                kind_ids[row, column] = self._KIND_IDS[record.kind]
+        return tokens, valid, kind_ids
+
+    def _ensure_skills(self, records: Sequence[SkillRecord]) -> None:
+        missing = list(
+            {
+                record.skill_id: record
+                for record in records
+                if record.skill_id not in self._skills
+            }.values()
+        )
+        if missing:
+            features = self.encoder.encode_tokens(
+                [record.text for record in missing], max_length=self.skill_max_length
+            )
+            for row, record in enumerate(missing):
+                length = int(features.valid[row].sum().item())
+                self._skills[record.skill_id] = (
+                    features.tokens[row, :length].detach(),
+                    features.valid[row, :length].detach(),
+                )
 
     def command_batch(self, command_groups: Sequence[Sequence[str]]) -> tuple[Tensor, Tensor]:
         if not command_groups or any(not group for group in command_groups):

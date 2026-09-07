@@ -108,6 +108,9 @@ def _trajectory_record(trajectory: object, *, advantage: float, global_update: i
                 "candidate_skill_ids": list(step.conditioned_input.candidate_skill_ids),
                 "policy_user_message": step.conditioned_input.user_message,
                 "soft_prefix_stats": prefix_stats,
+                "conditioning_replay": _conditioning_replay_record(
+                    step.conditioned_input.conditioning_trace
+                ),
                 "model_raw_response": step.generation.text,
                 "finish_reason": step.generation.finish_reason,
                 "response_token_ids": list(step.generation.token_ids),
@@ -140,6 +143,29 @@ def _trajectory_record(trajectory: object, *, advantage: float, global_update: i
         "group_advantage": advantage,
         "steps": steps,
     }
+
+
+def _conditioning_replay_record(value: object | None) -> dict[str, object] | None:
+    if value is None or not hasattr(value, "latent_seed"):
+        return None
+    return {
+        "latent_seed": int(value.latent_seed),  # type: ignore[attr-defined]
+        "posterior_mu_stats": _tensor_stats(value.posterior_mu),  # type: ignore[attr-defined]
+        "posterior_logvar_stats": _tensor_stats(  # type: ignore[attr-defined]
+            value.posterior_logvar
+        ),
+        "latent": _tensor_values(value.latent),  # type: ignore[attr-defined]
+    }
+
+
+def _tensor_values(value: object) -> list[float]:
+    try:
+        return [
+            float(item)
+            for item in value.detach().float().cpu().reshape(-1).tolist()  # type: ignore[attr-defined]
+        ]
+    except (AttributeError, TypeError, RuntimeError) as error:
+        raise TypeError("conditioning replay values must be tensor-like") from error
 
 
 def _tensor_stats(value: object | None) -> dict[str, float] | None:

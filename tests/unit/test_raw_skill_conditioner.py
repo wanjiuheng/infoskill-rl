@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from infoskill.conditioning import RawSkillPromptConditioner
+from infoskill.conditioning import ConditioningRequest, RawSkillPromptConditioner
 from infoskill.domain import CanonicalAgentState, render_state_views
 from infoskill.skills import FixedSkillLibrary, TemplateRetriever
 
@@ -24,7 +24,18 @@ class RawSkillConditionerTests(unittest.TestCase):
         )
         context = conditioner.prepare_group(state)
 
-        conditioned = conditioner.condition_batch((state,), (render_state_views(state),), context)[0]
+        conditioned = conditioner.condition_batch(
+            (
+                ConditioningRequest(
+                    state=state,
+                    views=render_state_views(state),
+                    rollout_id=0,
+                    global_update=0,
+                    latent_seed=1,
+                ),
+            ),
+            context,
+        )[0]
 
         self.assertEqual(conditioned.candidate_skill_ids, context.candidate_skill_ids)
         self.assertLess(conditioned.user_message.index("clean an apple"), conditioned.user_message.index("## Retrieved"))

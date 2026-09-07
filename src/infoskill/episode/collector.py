@@ -6,7 +6,7 @@ from concurrent.futures import Executor, ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from typing import Callable, Literal, TypeVar, cast
 
-from infoskill.conditioning import SkillConditioner
+from infoskill.conditioning import ConditioningRequest, SkillConditioner
 from infoskill.domain.actions import resolve_action
 from infoskill.domain.rewards import trajectory_reward
 from infoskill.domain.state import CanonicalAgentState, render_state_views
@@ -272,7 +272,26 @@ class TrajectoryCollector:
                         )
                         stage_started = time.perf_counter()
                         conditioned = self._conditioner.condition_batch(
-                            active_states, views, contexts[task_index]
+                            tuple(
+                                ConditioningRequest(
+                                    state=state,
+                                    views=view,
+                                    rollout_id=rollout_id,
+                                    global_update=global_update,
+                                    latent_seed=_semantic_seed(
+                                        "latent_epsilon",
+                                        master_seed,
+                                        tasks[task_index].task_id,
+                                        rollout_id,
+                                        env_step,
+                                        global_update,
+                                    ),
+                                )
+                                for rollout_id, state, view in zip(
+                                    rollout_ids, active_states, views
+                                )
+                            ),
+                            contexts[task_index],
                         )
                         conditioning_seconds += time.perf_counter() - stage_started
                         if len(conditioned) != len(rollout_ids):
