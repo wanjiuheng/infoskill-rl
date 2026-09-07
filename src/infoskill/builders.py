@@ -10,6 +10,7 @@ from infoskill.app_config import AppConfig
 from infoskill.conditioning import (
     NoSkillConditioner,
     RawSkillPromptConditioner,
+    SkillRlGrpoPromptConditioner,
     SkillConditioner,
     format_raw_skill_block,
 )
@@ -256,6 +257,105 @@ def build_raw_skill_setup(
             dict.fromkeys(
                 format_raw_skill_block(result, style=prompt_format)
                 for result in retrieval_results
+            )
+        ),
+    )
+
+
+def build_skillrl_grpo_prompt_setup(config: AppConfig) -> RawSkillSetup:
+    """Build the pinned SkillRL ALFWorld GRPO prompt as a diagnostic control.
+
+    Unlike the registered raw-skill control, SkillRL retrieves from the
+    canonical goal exposed by the environment, uses template selection, keeps
+    all skills from the detected task category, and omits skills at step zero.
+    """
+
+    expected_shape = (6, 5, 2)
+    actual_shape = (
+        config.general_top_k,
+        config.mistake_count,
+        config.history_length,
+    )
+    if actual_shape != expected_shape:
+        raise ValueError(
+            "SkillRL GRPO prompt diagnostic requires "
+            "general_top_k=6, mistake_count=5, and history_length=2; "
+            f"received {actual_shape}"
+        )
+
+    library = FixedSkillLibrary.load(config.paths.skill_bank)
+    skill_library_provenance = _load_skill_library_provenance(
+        library,
+        manifest_path=config.paths.skill_bank_manifest,
+    )
+    retriever = TemplateRetriever(
+        library,
+        general_count=config.general_top_k,
+        # The pinned SkillsOnlyMemory leaves task_specific_top_k unset, so
+        # every skill in the detected category is returned.
+        task_count=len(library.task_specific),
+        mistake_count=config.mistake_count,
+    )
+    category_probes = (
+        "put an object in a receptacle",
+        "look at an object under a lamp",
+        "clean an object",
+        "heat an object",
+        "cool an object",
+    )
+    representative_results = tuple(
+        retriever.retrieve(query) for query in category_probes
+    )
+    return RawSkillSetup(
+        conditioner=SkillRlGrpoPromptConditioner(
+            retriever,
+            history_length=config.history_length,
+        ),
+        library=library,
+        provenance={
+            "retrieval_schema_version": 1,
+            "retrieval_mode": "template",
+            "retrieval_query_source": "canonical_environment_goal_at_reset",
+            "prompt_format": "skillrl_rl_exact",
+            "prompt_reference": (
+                "SkillRL/agent_system/environments/"
+                "{env_manager.py,prompts/alfworld.py}@"
+                "8e66726ed866a4e0a7f053586a41022798192e6c"
+            ),
+            "step_zero_skill_injection": False,
+            "semantic_model_identity": None,
+            "skill_library_provenance_id": skill_library_provenance[
+                "provenance_id"
+            ],
+            "skill_library_provenance": skill_library_provenance,
+            "retrieval_query_count": None,
+            "retrieval_plan_sha256": None,
+            "retrieval_plan": "episode-reset-canonical-goal",
+            "skill_bank_sha256": library.source_sha256,
+            "skill_count": (
+                len(library.general)
+                + len(library.task_specific)
+                + len(library.mistakes)
+            ),
+            "general_top_k": config.general_top_k,
+            "task_top_k": None,
+            "task_skill_selection": "all-detected-category",
+            "mistake_count": config.mistake_count,
+            "history_length": config.history_length,
+            "policy_prompt_schema_version": "skillrl-grpo-alfworld-v1",
+            "reference_scope": "prompt-and-initial-static-retrieval-only",
+            "initial_observation_reconstruction": (
+                "canonical-observation + double-newline + task-marker + goal"
+            ),
+            "dynamic_skill_updates": False,
+            "action_resolution": "infoskill-current",
+            "environment_max_steps": config.max_steps,
+            "diagnostic_only": True,
+        },
+        skill_blocks=tuple(
+            dict.fromkeys(
+                format_raw_skill_block(result, style="skillrl")
+                for result in representative_results
             )
         ),
     )

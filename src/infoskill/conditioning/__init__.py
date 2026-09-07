@@ -7,7 +7,12 @@ from .contracts import (
     SkillConditioner,
 )
 from .no_skill import NoSkillConditioner
-from .raw_skill import EpisodeRetriever, RawSkillPromptConditioner, format_raw_skill_block
+from .raw_skill import (
+    EpisodeRetriever,
+    RawSkillPromptConditioner,
+    SkillRlGrpoPromptConditioner,
+    format_raw_skill_block,
+)
 
 try:
     from .info_skill import InfoSkillConditioner, InfoSkillReplayTrace
@@ -26,6 +31,7 @@ __all__ = [
     "InfoSkillConditioner",
     "InfoSkillReplayTrace",
     "RawSkillPromptConditioner",
+    "SkillRlGrpoPromptConditioner",
     "SkillConditioner",
     "format_raw_skill_block",
 ]

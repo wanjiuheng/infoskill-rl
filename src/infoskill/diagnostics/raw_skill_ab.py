@@ -12,7 +12,7 @@ from infoskill.integrations.alfworld import ALFWORLD_TASK_TYPES
 class RawSkillAbVariant:
     name: str
     retrieval_mode: Literal["embedding", "template"]
-    prompt_format: Literal["full", "skillrl"]
+    prompt_format: Literal["full", "skillrl", "skillrl_rl_exact"]
 
 
 RAW_SKILL_AB_VARIANTS = (
@@ -20,6 +20,34 @@ RAW_SKILL_AB_VARIANTS = (
     RawSkillAbVariant("template-full", "template", "full"),
     RawSkillAbVariant("template-skillrl", "template", "skillrl"),
 )
+
+# Kept out of RAW_SKILL_AB_VARIANTS so the already-completed three-cell matrix
+# remains the default. This reference-prompt probe is selected explicitly and
+# does not redefine the registered raw_skill_prompt control.
+SKILLRL_RL_EXACT_VARIANT = RawSkillAbVariant(
+    "skillrl-rl-exact",
+    "template",
+    "skillrl_rl_exact",
+)
+
+
+def resolve_raw_skill_diagnostic_variants(
+    names: Sequence[str] | None,
+) -> tuple[RawSkillAbVariant, ...]:
+    if names is None:
+        return RAW_SKILL_AB_VARIANTS
+    available = {
+        item.name: item
+        for item in (*RAW_SKILL_AB_VARIANTS, SKILLRL_RL_EXACT_VARIANT)
+    }
+    unknown = tuple(name for name in names if name not in available)
+    if unknown:
+        raise ValueError(
+            "unknown raw-skill diagnostic variant(s): " + ", ".join(unknown)
+        )
+    if len(set(names)) != len(names):
+        raise ValueError("raw-skill diagnostic variants must be unique")
+    return tuple(available[name] for name in names)
 
 
 def select_stratified_tasks(

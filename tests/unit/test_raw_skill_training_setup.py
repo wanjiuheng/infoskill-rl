@@ -8,12 +8,65 @@ from infoskill.app_config import AppConfig
 from infoskill.builders import (
     audit_raw_skill_prompt_budget,
     build_raw_skill_setup,
+    build_skillrl_grpo_prompt_setup,
 )
 from infoskill.conditioning import ConditioningRequest
 from infoskill.domain.state import CanonicalAgentState, render_state_views
 
 
 class RawSkillTrainingSetupTests(unittest.TestCase):
+    def test_skillrl_grpo_setup_is_template_only_and_episode_goal_driven(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+        skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"
+        config = replace(
+            config,
+            paths=replace(
+                config.paths,
+                skill_bank=str(skill_bank),
+                skill_bank_manifest=str(skill_bank.with_name("skills.manifest.json")),
+            ),
+            retrieval_mode="embedding",
+            task_top_k=0,
+        )
+
+        setup = build_skillrl_grpo_prompt_setup(config)
+        state = CanonicalAgentState(
+            task_id="task",
+            split="valid_seen",
+            task_type="pick_clean_then_place_in_recep",
+            goal="put a clean apple in a receptacle",
+            step_index=0,
+            observation="Kitchen.",
+            history=(),
+            admissible_commands=("look",),
+        )
+        context = setup.conditioner.prepare_group(state)
+
+        self.assertEqual(
+            context.candidate_skill_ids,
+            ("gen_a", "gen_b", "clean_a", "err_a"),
+        )
+        self.assertEqual(setup.provenance["retrieval_mode"], "template")
+        self.assertEqual(
+            setup.provenance["retrieval_query_source"],
+            "canonical_environment_goal_at_reset",
+        )
+        self.assertEqual(setup.provenance["prompt_format"], "skillrl_rl_exact")
+        self.assertIsNone(setup.provenance["task_top_k"])
+        self.assertFalse(setup.provenance["step_zero_skill_injection"])
+        self.assertEqual(
+            setup.provenance["reference_scope"],
+            "prompt-and-initial-static-retrieval-only",
+        )
+
+    def test_skillrl_grpo_setup_rejects_non_reference_prompt_shape(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+
+        with self.assertRaisesRegex(ValueError, "general_top_k=6"):
+            build_skillrl_grpo_prompt_setup(
+                replace(config, history_length=3)
+            )
+
     def test_diagnostic_setup_can_override_retrieval_and_prompt_format(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
         skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"

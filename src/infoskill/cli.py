@@ -83,6 +83,20 @@ def _parser() -> argparse.ArgumentParser:
     raw_skill_ab.add_argument("--config", required=True)
     raw_skill_ab.add_argument("--num-gpus", type=int, required=True)
     raw_skill_ab.add_argument("--tasks-per-type", type=int, default=2)
+    raw_skill_ab.add_argument(
+        "--variants",
+        nargs="+",
+        choices=(
+            "embedding-skillrl",
+            "template-full",
+            "template-skillrl",
+            "skillrl-rl-exact",
+        ),
+        help=(
+            "run only the selected diagnostic variants; omission preserves "
+            "the original three-cell raw-skill matrix"
+        ),
+    )
     raw_skill_ab.add_argument("--run-name")
     raw_skill_ab.add_argument(
         "--environment-backend",
@@ -683,10 +697,11 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
     from infoskill.builders import (
         audit_raw_skill_prompt_budget_for_model,
         build_raw_skill_setup,
+        build_skillrl_grpo_prompt_setup,
         build_verl_policy_evaluation,
     )
     from infoskill.diagnostics import (
-        RAW_SKILL_AB_VARIANTS,
+        resolve_raw_skill_diagnostic_variants,
         select_stratified_tasks,
         summarize_probe_groups,
     )
@@ -712,18 +727,22 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         all_tasks,
         tasks_per_type=args.tasks_per_type,
     )
+    variants = resolve_raw_skill_diagnostic_variants(args.variants)
     selected_manifest_sha256 = task_manifest_sha256(tasks)
     retrieval_queries = {task.task_id: task.goal for task in tasks}
 
     setups = {}
     prompt_budgets = {}
-    for variant in RAW_SKILL_AB_VARIANTS:
-        setup = build_raw_skill_setup(
-            config,
-            retrieval_queries=retrieval_queries,
-            retrieval_mode=variant.retrieval_mode,
-            prompt_format=variant.prompt_format,
-        )
+    for variant in variants:
+        if variant.prompt_format == "skillrl_rl_exact":
+            setup = build_skillrl_grpo_prompt_setup(config)
+        else:
+            setup = build_raw_skill_setup(
+                config,
+                retrieval_queries=retrieval_queries,
+                retrieval_mode=variant.retrieval_mode,
+                prompt_format=variant.prompt_format,
+            )
         setups[variant.name] = setup
         prompt_budgets[variant.name] = audit_raw_skill_prompt_budget_for_model(
             setup,
@@ -772,7 +791,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
             "retrieval_mode": variant.retrieval_mode,
             "prompt_format": variant.prompt_format,
         }
-        for variant in RAW_SKILL_AB_VARIANTS
+        for variant in variants
     ]
     diagnostic_manifest = {
         "diagnostic_only": True,
@@ -826,7 +845,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
 
     logger.info(
         "Initializing one VERL/vLLM runtime for %d diagnostic variants on %d GPU(s)",
-        len(RAW_SKILL_AB_VARIANTS),
+        len(variants),
         args.num_gpus,
     )
     initialize_started = time.perf_counter()
@@ -835,14 +854,14 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
     trace_writer = ZstdJsonlTraceWriter(run_directory)
     metric_logger = MetricLogger(run_directory)
     progress = tqdm(
-        total=len(tasks) * len(RAW_SKILL_AB_VARIANTS),
+        total=len(tasks) * len(variants),
         desc="raw-skill-ab/diagnostic",
         unit="task",
         dynamic_ncols=True,
     )
     variant_results = []
     try:
-        for variant in RAW_SKILL_AB_VARIANTS:
+        for variant in variants:
             setup = setups[variant.name]
             collector = build_verl_policy_evaluation(
                 config,

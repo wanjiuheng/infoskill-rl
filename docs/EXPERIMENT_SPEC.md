@@ -46,6 +46,14 @@ _Avoid_: admissible-command shortcut in compressor、different train/eval render
 
 **Unified ALFWorld Prompt Rendering**:
 M0/M1 与三个 Skill-Injection Control Modes 每个环境步骤都把一条英文 ALFWorld 指令作为唯一 `user` message，并调用当前 policy tokenizer 自己的 `apply_chat_template(..., add_generation_prompt=True)`；不额外添加 system message、不硬编码 Qwen 特殊 token。统一指令在 step 0 和后续步骤都包含任务目标、已执行步数、最近 `H` 个按旧到新排列的“动作前 observation + 实际执行动作”、当前一步编号、当前 observation、全部 `admissible_commands` 以及 `<think>/<action>` 输出协议；空历史显式写 `None`，不使用 SkillRL 单独的 `NO_HIS` 模板。`no_skill` 与 `infoskill` 的文本完全相同，后者只在模型输入前端注入 soft prefix；`raw_skill_prompt` 仅在任务目标之后、Current Progress 之前插入 `## Retrieved Relevant Skills`，按 episode 检索固定顺序完整列出最多 17 条技能的 ID、类型和原文。`retrieval_view` 是无标签、无附加说明的原始任务目标；`compression_view` 只含目标、最近历史、当前 observation 和步号，不含 admissible actions，候选技能 embedding 作为 cross-attention 的独立张量输入。
+
+`skillrl-rl-exact` 是用于归因的额外诊断协议，不是第四个正式 control mode，
+也不改变上面的统一主实验 prompt。它固定复现已锁定 SkillRL commit 的 ALFWorld
+GRPO 提示词与 episode-reset 静态 template 检索：step 0 使用独立 `NO_HIS`
+模板且不显示技能，后续步骤使用 `WITH_MEMORY` 模板、最近 2 步历史、6 条
+general skills、检测类别中的全部 task skills 和 5 条 mistakes。该诊断仍使用本项目的
+确定性评测、30 步环境上限、动作解析器和只读技能库，不复现 SkillRL 的动态技能更新，
+因此只能称为 prompt 与初始静态检索复现，不能称为完整 SkillRL 算法复现。
 _Avoid_: mode-specific base prompt、system-message drift、raw-skill truncation、admissible leakage into compression、manual special-token assembly
 
 **Frozen Semantic Feature Encoder**:

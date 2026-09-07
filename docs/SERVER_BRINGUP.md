@@ -545,6 +545,37 @@ echo "pid=${PID} log=${LOG}"
 `diagnostic_only=true`、`reportable_as_valid_seen=false`；12 条结果只能定位问题，
 不能替代固定 140 条 `valid_seen`、参与 checkpoint 选模或写入论文主表。
 
+这三个变体在固定 12 条任务上均为 0/12，而成对的 `no_skill` 为 2/12。由于
+SkillRL 的 GRPO prompt 并不是上面的 SFT/concise prompt，可再运行一次只包含
+`skillrl-rl-exact` 的诊断。它从环境提供的规范任务目标做 template 检索，固定
+general=6、当前类别全部 task skills、mistakes=5、history=2；step 0 使用 SkillRL
+`NO_HIS` 模板且不显示技能，后续步骤才使用其 `WITH_MEMORY` 模板。该命令不加载
+embedding 模型、不训练、不保存新 checkpoint，也不会重跑前述三个变体。
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/skillrl-rl-exact-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  RAW_SKILL_AB_TASKS_PER_TYPE=2 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=skillrl-rl-exact-valid-seen-12 \
+  bash scripts/run_alfworld.sh skillrl-rl-exact raw_skill_prompt \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+结果仍写入 `raw_skill_ab_summary.json`，但只包含一项
+`skillrl-rl-exact`，并生成一份 trace、一条 metrics、`provenance.json` 和
+`checkpoint-load.json`。这里的 exact 仅指锁定 commit 中的 ALFWorld GRPO
+prompt 文本与初始静态检索形状；评测继续使用本项目的 greedy 解码、30 步上限、
+动作解析和只读技能库，不复现 SkillRL 动态技能更新，不能作为正式 140 条结果。
+
 ```bash
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)

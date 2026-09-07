@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Central parameter panel. Every value can also be overridden as an environment variable.
-ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab | checkpoint-effect | grounding | train
+ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab | skillrl-rl-exact | checkpoint-effect | grounding | train
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
@@ -146,7 +146,7 @@ case "${ACTION}" in
     esac
     python -m infoskill.cli eval "${EVAL_ARGS[@]}"
     ;;
-  raw-skill-ab)
+  raw-skill-ab|skillrl-rl-exact)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
       echo "GPUS must contain at least one physical GPU index" >&2
@@ -164,6 +164,9 @@ case "${ACTION}" in
       --tasks-per-type "${RAW_SKILL_AB_TASKS_PER_TYPE}"
       --environment-backend "${ENVIRONMENT_BACKEND}"
     )
+    if [[ "${ACTION}" == "skillrl-rl-exact" ]]; then
+      RAW_SKILL_AB_ARGS+=(--variants skillrl-rl-exact)
+    fi
     if [[ -n "${RUN_NAME}" ]]; then
       RAW_SKILL_AB_ARGS+=(--run-name "${RUN_NAME}")
     fi
@@ -281,7 +284,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, raw-skill-ab, checkpoint-effect, grounding, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, raw-skill-ab, skillrl-rl-exact, checkpoint-effect, grounding, or train" >&2
     exit 2
     ;;
 esac

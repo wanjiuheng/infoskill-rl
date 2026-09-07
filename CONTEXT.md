@@ -58,6 +58,15 @@ prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动�
 六类各 2 条 `valid_seen`、同一模型和环境种子，在一次 runtime 中补测
 `embedding + SkillRL concise`、`template + full`、`template + SkillRL concise`；
 这些 12-task 结果只用于归因，明确不得作为正式 `valid_seen` 指标。
+
+上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
+框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成
+负向条件效应。进一步核对锁定 SkillRL 源码后确认，其 GRPO prompt 与 SFT prompt、
+本项目正式 raw control 都不相同：step 0 使用独立无历史模板且不注入技能，只有后续
+步骤才加入 `Retrieved Relevant Experience` 和最近 2 步历史。新增
+`skillrl-rl-exact` 仅用于复现这套 GRPO prompt 与初始静态 template 检索；它仍使用
+本项目的确定性解码、30 步上限、动作解析和固定技能库，不属于第四个正式 control，
+也不代表完整复现 SkillRL 的动态技能更新或训练算法。
 _Avoid_: unrelated baseline、different evaluation pipeline
 
 ## Skills and State
