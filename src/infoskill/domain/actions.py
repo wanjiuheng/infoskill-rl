@@ -12,6 +12,14 @@ _THINK_TAG = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _LIST_PREFIX = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
 _ROLE_PREFIX = re.compile(r"^(?:action|assistant)\s*:\s*", re.IGNORECASE)
 _UNCLOSED_ACTION_PREFIX = re.compile(r"^<action>\s*", re.IGNORECASE)
+_EXPLICIT_SQUARE_ACTION_PREFIX = re.compile(
+    r"^(?:\[action\]|\[action>)\s*",
+    re.IGNORECASE,
+)
+_EXPLICIT_SQUARE_ACTION_SUFFIX = re.compile(
+    r"\s*(?:\[/action\]|</action>)\s*$",
+    re.IGNORECASE,
+)
 
 ExtractionMethod = Literal["action_tag", "last_line", "none"]
 
@@ -50,6 +58,17 @@ def _clean_last_line(line: str) -> str:
     return candidate
 
 
+def _square_action_candidate(line: str) -> tuple[bool, str]:
+    """Read an explicit Qwen-style action marker from the final output line."""
+
+    match = _EXPLICIT_SQUARE_ACTION_PREFIX.match(line.strip())
+    if match is None:
+        return False, ""
+    candidate = line.strip()[match.end() :]
+    candidate = _EXPLICIT_SQUARE_ACTION_SUFFIX.sub("", candidate, count=1).strip()
+    return True, candidate
+
+
 def resolve_action(model_output: str, admissible_commands: Sequence[str]) -> ActionResolution:
     """Resolve one model response without correcting its semantic action."""
 
@@ -84,6 +103,29 @@ def resolve_action(model_output: str, admissible_commands: Sequence[str]) -> Act
         )
 
     nonempty_lines = [line for line in model_output.splitlines() if line.strip()]
+    if nonempty_lines:
+        marked, candidate = _square_action_candidate(nonempty_lines[-1])
+        if marked:
+            resolved = (
+                _match_environment_command(candidate, admissible_commands)
+                if candidate
+                else None
+            )
+            return ActionResolution(
+                candidate=candidate or None,
+                resolved_action=resolved,
+                executed_action=resolved or INVALID_ACTION_SENTINEL,
+                extraction_method="action_tag",
+                is_executable=resolved is not None,
+                had_action_tag=True,
+                had_think_tag=had_think_tag,
+                format_compliant=False,
+                failure_reason=(
+                    None
+                    if resolved is not None
+                    else ("not_admissible" if candidate else "unresolved")
+                ),
+            )
     candidate = _clean_last_line(nonempty_lines[-1]) if nonempty_lines else ""
     resolved = _match_environment_command(candidate, admissible_commands) if candidate else None
     return ActionResolution(

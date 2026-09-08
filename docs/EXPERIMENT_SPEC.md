@@ -300,7 +300,7 @@ _Avoid_: default GRPO semantics、silent replacement of episodic advantage
 动作解析器从模型响应中得到的规范化 ALFWorld 命令。优先读取 `<action>...</action>`，缺少标签时允许 fallback 解析；是否使用 `<think>`、是否带 `<action>` 标签和响应语言只属于格式统计，不直接决定动作合法性。
 
 **Deterministic Action Fallback**:
-完整 `<action>...</action>` 是唯一优先解析来源：单个标签直接取内容；多个标签只有在内容经大小写与连续空白规范化后完全相同时才可接受，不同则判为歧义。没有完整标签时只检查最后一个非空行，允许依次移除 `Action:`/`Assistant:` 前缀、Markdown 列表符号、包围整行的代码反引号以及单个未闭合 `<action>` 前缀，清理后的整行必须与唯一一条当前 `admissible_commands` 在相同规范化后精确相等。不扫描整段 reasoning 中的命令子串，不自动去除句号，不做模糊/最近动作匹配；无法唯一解析时 `resolved_action=None` 并执行 Invalid-Action Sentinel。
+完整 `<action>...</action>` 是唯一优先解析来源：单个标签直接取内容；多个标签只有在内容经大小写与连续空白规范化后完全相同时才可接受，不同则判为歧义。没有完整 XML 标签时只检查最后一个非空行：先允许显式 `[action]` 或 `[action>` 起始标记及可选的 `[/action]` 或 `</action>` 结束标记；否则允许依次移除 `Action:`/`Assistant:` 前缀、Markdown 列表符号、包围整行的代码反引号以及单个未闭合 `<action>` 前缀。方括号或畸形起始标记即使成功解析也保持 `format_compliant=false`。清理后的整行必须与唯一一条当前 `admissible_commands` 在相同规范化后精确相等。不扫描整段 reasoning 中的命令子串，不自动去除句号，不做模糊/最近动作匹配；无法唯一解析时 `resolved_action=None` 并执行 Invalid-Action Sentinel。
 _Avoid_: prose substring extraction、last-of-conflicting-tags、punctuation correction、fuzzy action projection
 _Avoid_: raw model response、XML-only action
 
