@@ -47,6 +47,10 @@ _Avoid_: admissible-command shortcut in compressor、different train/eval render
 **Unified ALFWorld Prompt Rendering**:
 M0/M1 与三个 Skill-Injection Control Modes 每个环境步骤都把一条英文 ALFWorld 指令作为唯一 `user` message，并调用当前 policy tokenizer 自己的 `apply_chat_template(..., add_generation_prompt=True)`；不额外添加 system message、不硬编码 Qwen 特殊 token。统一指令在 step 0 和后续步骤都包含任务目标、已执行步数、最近 `H` 个按旧到新排列的“动作前 observation + 实际执行动作”、当前一步编号、当前 observation、全部 `admissible_commands` 以及 `<think>/<action>` 输出协议；空历史显式写 `None`，不使用 SkillRL 单独的 `NO_HIS` 模板。`no_skill` 与 `infoskill` 的文本完全相同，后者只在模型输入前端注入 soft prefix；`raw_skill_prompt` 仅在任务目标之后、Current Progress 之前插入 `## Retrieved Relevant Skills`，按 episode 检索固定顺序完整列出最多 17 条技能的 ID、类型和原文。`retrieval_view` 是无标签、无附加说明的原始任务目标；`compression_view` 只含目标、最近历史、当前 observation 和步号，不含 admissible actions，候选技能 embedding 作为 cross-attention 的独立张量输入。
 
+**Unified Skill Causal Gate**:
+在继续 `raw_skill_prompt` 训练前，必须在注册的 140 条 `valid_seen` manifest 中按任务 ID 固定选取六类各 2 条、共 12 条任务，并在同一个 VERL/vLLM runtime 中依次运行四格诊断：`unified-no-skill-deterministic`、`unified-empty-skills-deterministic`、`unified-template-skills-deterministic`、`unified-embedding-skills-deterministic`。四格使用同一份未经过本项目 GRPO 的 `Alfworld-7B-SFT/checkpoint-140`、`master_seed=0`、greedy 解码、最近 `H=2` 步历史、30 步上限、环境、动作渲染和解析器；唯一区别是技能条件来源。空技能格必须真实经过 `RawSkillPromptConditioner` 和返回空集合的 retriever，而不是直接复用 no-skill 分支；前两格每一步的 `policy_user_message` 必须逐字相同、prompt token 数与确定性生成 token 必须一致，且两格 candidate skill IDs 都为空。运行器把这项 parity 写入 `raw_skill_ab_summary.json`；任一条件不满足即返回非零状态，禁止解释后两格结果。template 与 embedding 两格只能在相同统一 policy prompt 的技能插槽中加入完整技能文本。该入口固定 12 条，不允许用 `RAW_SKILL_AB_TASKS_PER_TYPE` 改变规模，所有产物必须标记 `diagnostic_only=true`、`reportable_as_valid_seen=false`，不得用于 checkpoint 选择或论文成功率。
+_Avoid_: configurable causal subset、empty-shell shortcut、unverified prompt parity、diagnostic checkpoint selection
+
 `skillrl-rl-exact` 是用于归因的额外诊断协议，不是第四个正式 control mode，
 也不改变上面的统一主实验 prompt。它固定复现已锁定 SkillRL commit 的 ALFWorld
 GRPO 提示词与 episode-reset 静态 template 检索：step 0 使用独立 `NO_HIS`

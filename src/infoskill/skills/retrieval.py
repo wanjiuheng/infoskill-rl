@@ -28,6 +28,15 @@ class RetrievalResult:
         return tuple(item.record.skill_id for item in self.skills)
 
 
+class EmptyRetriever:
+    """Return an explicit empty result for conditioning-control diagnostics."""
+
+    def retrieve(self, query: str) -> RetrievalResult:
+        if not query.strip():
+            raise ValueError("empty retrieval requires a non-empty query")
+        return RetrievalResult(mode="empty", query=query, skills=())
+
+
 class SentenceTransformerEncoder:
     """Lazy local SentenceTransformer adapter used by embedding retrieval."""
 

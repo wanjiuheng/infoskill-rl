@@ -645,6 +645,61 @@ echo "pid=${PID} log=${LOG}"
 三份 trace 仍保留每步模型原始输出、动作解析与环境结果。该矩阵强制标记为诊断，不能
 替代 140 条正式 `valid_seen`。
 
+三项 SFT 因果诊断完成后，用 `unified-skill-causal` 运行严格的统一 prompt 四格门。
+四格都固定同一 12 条任务、seed、greedy、history=2、观察文本、动作列表、解析器和
+一个 VERL/vLLM runtime：第一格是正式 `no_skill` 文本，第二格让相同文本经过
+`RawSkillPromptConditioner + EmptyRetriever`，第三格只增加 template 检索的完整技能
+块，第四格只增加 embedding 检索的完整技能块。空检索格的 policy user message 必须
+与第一格逐字一致；它用于发现 conditioning 分支或 runtime 状态污染，不能作为新方法。
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/unified-skill-causal-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  RAW_SKILL_AB_TASKS_PER_TYPE=2 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=unified-skill-causal-valid-seen-12 \
+  bash scripts/run_alfworld.sh unified-skill-causal raw_skill_prompt \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+预计四卡约 10–15 分钟。用 `tail -f "${LOG}"` 查看覆盖 48 条轨迹的总进度条。运行器会
+在 summary 的 `control_prompt_parity` 中自动逐步核对第一、二格的 prompt token 数、
+生成 token、动作与空 skill ID；prompt 文本必须逐字一致，否则命令以非零状态退出。
+完成后打包下面这些文件；trace 用来复核该门禁，并查看 template/embedding 实际选择的
+skill ID。
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-unified-skill-causal-valid-seen-12' | sort | tail -n 1)
+STAMP=$(date +%Y%m%d_%H%M%S)
+ARCHIVE="$PWD/unified-skill-causal-diagnostics-${STAMP}.tar.gz"
+tar -C "$RUN" -czf "$ARCHIVE" \
+  raw_skill_ab_summary.json \
+  provenance.json \
+  resolved_config.json \
+  checkpoint-load.json \
+  metrics.jsonl \
+  metrics.csv \
+  console.log \
+  traces
+echo "run=${RUN}"
+cat "$RUN/raw_skill_ab_summary.json"
+ls -lh "$ARCHIVE"
+```
+
+请提供上面三段终端输出（`run=...`、完整 summary、压缩包大小）和生成的压缩包。
+结果仍必须带 `diagnostic_only=true`、`reportable_as_valid_seen=false`，不能据 12 条
+诊断直接选择 checkpoint 或报告正式成功率。若 no-skill 与空检索轨迹不一致，应先
+判定本次门无效并检查 runtime 状态；只有二者一致后，才解释 template/embedding 差异。
+
 ```bash
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)

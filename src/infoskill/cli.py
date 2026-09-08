@@ -95,6 +95,10 @@ def _parser() -> argparse.ArgumentParser:
             "skillrl-sft-shell-no-skills-deterministic",
             "no-skill-sampled-t0.4",
             "skillrl-sft-exact-sampled-t0.4",
+            "unified-no-skill-deterministic",
+            "unified-empty-skills-deterministic",
+            "unified-template-skills-deterministic",
+            "unified-embedding-skills-deterministic",
         ),
         help=(
             "run only the selected diagnostic variants; omission preserves "
@@ -707,16 +711,20 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         build_verl_policy_evaluation,
     )
     from infoskill.diagnostics import (
+        compare_unified_prompt_controls,
         resolve_raw_skill_diagnostic_variants,
         select_stratified_tasks,
         summarize_probe_groups,
+        validate_unified_skill_causal_gate,
     )
+    from infoskill.conditioning import RawSkillPromptConditioner
     from infoskill.evaluation import write_checkpoint_load
     from infoskill.integrations.alfworld import discover_tasks, task_manifest_sha256
     from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
     from infoskill.persistence import MetricLogger, ZstdJsonlTraceWriter
     from infoskill.persistence.model_identity import verify_policy_model_identity
     from infoskill.rollout import GenerationParameters
+    from infoskill.skills import EmptyRetriever
 
     if VerlRuntime is None or VerlRuntimeConfig is None:
         raise RuntimeError("the pinned VERL runtime is unavailable")
@@ -730,20 +738,28 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         raise RuntimeError(
             "raw-skill-ab requires the registered 140-task valid_seen manifest"
         )
+    variants = resolve_raw_skill_diagnostic_variants(args.variants)
+    unified_skill_causal = validate_unified_skill_causal_gate(
+        variants,
+        tasks_per_type=args.tasks_per_type,
+        policy_model_id=config.policy_model_id,
+        master_seed=config.master_seed,
+        history_length=config.history_length,
+        max_steps=config.max_steps,
+    )
     tasks = select_stratified_tasks(
         all_tasks,
         tasks_per_type=args.tasks_per_type,
     )
-    variants = resolve_raw_skill_diagnostic_variants(args.variants)
     selected_manifest_sha256 = task_manifest_sha256(tasks)
     retrieval_queries = {task.task_id: task.goal for task in tasks}
 
-    setups = {}
+    conditioners = {}
     prompt_budgets = {}
     conditioning_provenance = {}
     for variant in variants:
         if variant.policy_mode == "no_skill":
-            setup = None
+            conditioner = None
             conditioning_provenance[variant.name] = {
                 "retrieval_mode": None,
                 "prompt_format": "unified_no_skill",
@@ -759,31 +775,56 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
                 "raw_skill_prompt_token_limit": config.max_prompt_tokens,
                 "raw_skill_block_fits_prompt_limit": True,
             }
-        elif variant.prompt_format == "skillrl_rl_exact":
-            setup = build_skillrl_grpo_prompt_setup(config)
-        elif variant.prompt_format == "skillrl_sft_exact":
-            setup = build_skillrl_sft_prompt_setup(config)
-        elif variant.prompt_format == "skillrl_sft_no_skills":
-            setup = build_skillrl_sft_no_skills_prompt_setup(config)
-        else:
-            if variant.retrieval_mode is None:
-                raise ValueError(
-                    f"diagnostic variant {variant.name} requires retrieval"
-                )
-            setup = build_raw_skill_setup(
-                config,
-                retrieval_queries=retrieval_queries,
-                retrieval_mode=variant.retrieval_mode,
-                prompt_format=variant.prompt_format,
+        elif variant.prompt_format == "unified_empty_skills":
+            conditioner = RawSkillPromptConditioner(
+                EmptyRetriever(),
+                history_length=config.history_length,
+                query_by_task_id=retrieval_queries,
+                prompt_format="full",
             )
-        setups[variant.name] = setup
-        if setup is not None:
+            conditioning_provenance[variant.name] = {
+                "retrieval_schema_version": 1,
+                "retrieval_mode": "empty",
+                "prompt_format": "unified_empty_skills",
+                "skills_injected": False,
+                "retrieval_query_count": len(set(retrieval_queries.values())),
+                "history_length": config.history_length,
+                "policy_prompt_schema_version": 1,
+                "diagnostic_only": True,
+            }
+            prompt_budgets[variant.name] = {
+                "raw_skill_block_count": 0,
+                "raw_skill_block_tokens_min": 0,
+                "raw_skill_block_tokens_max": 0,
+                "raw_skill_prompt_token_limit": config.max_prompt_tokens,
+                "raw_skill_block_fits_prompt_limit": True,
+            }
+        else:
+            if variant.prompt_format == "skillrl_rl_exact":
+                setup = build_skillrl_grpo_prompt_setup(config)
+            elif variant.prompt_format == "skillrl_sft_exact":
+                setup = build_skillrl_sft_prompt_setup(config)
+            elif variant.prompt_format == "skillrl_sft_no_skills":
+                setup = build_skillrl_sft_no_skills_prompt_setup(config)
+            else:
+                if variant.retrieval_mode is None:
+                    raise ValueError(
+                        f"diagnostic variant {variant.name} requires retrieval"
+                    )
+                setup = build_raw_skill_setup(
+                    config,
+                    retrieval_queries=retrieval_queries,
+                    retrieval_mode=variant.retrieval_mode,
+                    prompt_format=variant.prompt_format,
+                )
+            conditioner = setup.conditioner
             conditioning_provenance[variant.name] = dict(setup.provenance)
             prompt_budgets[variant.name] = audit_raw_skill_prompt_budget_for_model(
                 setup,
                 model_path=config.paths.policy_model,
                 max_prompt_tokens=config.max_prompt_tokens,
             )
+        conditioners[variant.name] = conditioner
 
     policy_identity = verify_policy_model_identity(
         config.paths.policy_model,
@@ -864,7 +905,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
             **conditioning_provenance[name],
             **prompt_budgets[name],
         }
-        for name in setups
+        for name in conditioners
     }
     _write_json(run_directory / "resolved_config.json", resolved)
     _write_json(
@@ -903,15 +944,16 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         dynamic_ncols=True,
     )
     variant_results = []
+    groups_by_variant = {}
     try:
         for variant in variants:
-            setup = setups[variant.name]
+            conditioner = conditioners[variant.name]
             mode = SkillMode(variant.policy_mode)
             collector = build_verl_policy_evaluation(
                 config,
                 mode=mode,
                 backend=runtime,
-                conditioner=(None if setup is None else setup.conditioner),
+                conditioner=conditioner,
                 environment_backend=args.environment_backend,
                 history_limit=(
                     5
@@ -942,6 +984,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
                     progress.update(len(batch))
             rollout_seconds = time.perf_counter() - rollout_started
             summary = summarize_probe_groups(groups)
+            groups_by_variant[variant.name] = tuple(groups)
             trace_path = trace_writer.write_diagnostic_groups(
                 label=f"raw-skill-ab-{variant.trace_slug}",
                 groups=groups,
@@ -982,6 +1025,13 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         runtime.close()
         close_seconds = time.perf_counter() - close_started
 
+    control_prompt_parity = None
+    if unified_skill_causal:
+        control_prompt_parity = compare_unified_prompt_controls(
+            groups_by_variant["unified-no-skill-deterministic"],
+            groups_by_variant["unified-empty-skills-deterministic"],
+        )
+
     payload = {
         "schema_version": 1,
         **diagnostic_manifest,
@@ -990,11 +1040,18 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         "total_seconds": time.perf_counter() - diagnostic_started,
         "results": variant_results,
     }
+    if control_prompt_parity is not None:
+        payload["control_prompt_parity"] = control_prompt_parity
     _write_json(run_directory / "raw_skill_ab_summary.json", payload)
     logger.info(
         "Raw-skill A/B diagnostic complete:\n%s",
         json.dumps(payload, ensure_ascii=False, indent=2),
     )
+    if control_prompt_parity is not None and not control_prompt_parity["passed"]:
+        logger.error(
+            "Unified prompt control parity failed; diagnostic is invalid"
+        )
+        return 4
     return 0
 
 

@@ -442,6 +442,29 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(probe.call_args.args[1].variants, variants)
 
+    def test_raw_skill_ab_accepts_the_unified_skill_causal_variants(self) -> None:
+        variants = [
+            "unified-no-skill-deterministic",
+            "unified-empty-skills-deterministic",
+            "unified-template-skills-deterministic",
+            "unified-embedding-skills-deterministic",
+        ]
+        arguments = [
+            "raw-skill-ab",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--num-gpus",
+            "4",
+            "--variants",
+            *variants,
+        ]
+
+        with patch("infoskill.cli._raw_skill_ab", return_value=0, create=True) as probe:
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(probe.call_args.args[1].variants, variants)
+
 
 if __name__ == "__main__":
     unittest.main()

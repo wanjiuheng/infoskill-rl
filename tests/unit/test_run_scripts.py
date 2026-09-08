@@ -53,7 +53,8 @@ class RunScriptTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)",
+            "raw-skill-ab|unified-skill-causal|skillrl-rl-exact|"
+            "skillrl-sft-exact|skillrl-sft-causal)",
             script,
         )
         self.assertIn(
@@ -68,7 +69,8 @@ class RunScriptTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)",
+            "raw-skill-ab|unified-skill-causal|skillrl-rl-exact|"
+            "skillrl-sft-exact|skillrl-sft-causal)",
             script,
         )
         self.assertIn(
@@ -83,7 +85,8 @@ class RunScriptTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)",
+            "raw-skill-ab|unified-skill-causal|skillrl-rl-exact|"
+            "skillrl-sft-exact|skillrl-sft-causal)",
             script,
         )
         self.assertIn(
@@ -104,6 +107,30 @@ class RunScriptTests(unittest.TestCase):
             "skillrl-sft-exact-sampled-t0.4",
         ):
             self.assertIn(variant, script)
+
+    def test_unified_skill_causal_action_selects_four_controlled_variants(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("unified-skill-causal", script)
+        for variant in (
+            "unified-no-skill-deterministic",
+            "unified-empty-skills-deterministic",
+            "unified-template-skills-deterministic",
+            "unified-embedding-skills-deterministic",
+        ):
+            self.assertIn(variant, script)
+        self.assertIn(
+            '"${ACTION}" == "unified-skill-causal" '
+            '&& "${RAW_SKILL_AB_TASKS_PER_TYPE}" != "2"',
+            script,
+        )
+        self.assertIn(
+            "unified-skill-causal requires exactly 2 tasks per task type",
+            script,
+        )
 
 
 if __name__ == "__main__":

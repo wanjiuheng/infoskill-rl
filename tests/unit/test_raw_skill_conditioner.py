@@ -5,6 +5,7 @@ from pathlib import Path
 
 from infoskill.conditioning import (
     ConditioningRequest,
+    NoSkillConditioner,
     RawSkillPromptConditioner,
     SkillRlGrpoPromptConditioner,
     SkillRlSftPromptConditioner,
@@ -16,10 +17,49 @@ from infoskill.domain import (
     CanonicalAgentState,
     render_state_views,
 )
-from infoskill.skills import FixedSkillLibrary, TemplateRetriever
+from infoskill.skills import EmptyRetriever, FixedSkillLibrary, TemplateRetriever
 
 
 class RawSkillConditionerTests(unittest.TestCase):
+    def test_empty_retrieval_preserves_the_no_skill_prompt_byte_for_byte(self) -> None:
+        state = CanonicalAgentState(
+            task_id="task",
+            split="valid_seen",
+            task_type="pick_and_place_simple",
+            goal="put a book on the sofa",
+            step_index=1,
+            observation="You are at the desk.",
+            history=(
+                AgentHistoryEntry(0, "You are in a room.", "go to desk 1"),
+            ),
+            admissible_commands=("take book 1 from desk 1", "look"),
+        )
+        request = ConditioningRequest(
+            state=state,
+            views=render_state_views(state, history_limit=2),
+            rollout_id=0,
+            global_update=0,
+            latent_seed=1,
+        )
+        no_skill = NoSkillConditioner()
+        empty_raw = RawSkillPromptConditioner(
+            EmptyRetriever(),
+            history_length=2,
+        )
+
+        no_skill_input = no_skill.condition_batch(
+            (request,),
+            no_skill.prepare_group(state),
+        )[0]
+        empty_context = empty_raw.prepare_group(state)
+        empty_input = empty_raw.condition_batch((request,), empty_context)[0]
+
+        self.assertIsNotNone(empty_context.retrieval)
+        self.assertEqual(empty_context.retrieval.mode, "empty")
+        self.assertEqual(empty_context.candidate_skill_ids, ())
+        self.assertEqual(empty_input.candidate_skill_ids, ())
+        self.assertEqual(empty_input.user_message, no_skill_input.user_message)
+
     def test_skillrl_sft_no_skills_keeps_shell_without_skill_section(self) -> None:
         conditioner = SkillRlSftNoSkillsPromptConditioner(history_length=5)
         state = CanonicalAgentState(

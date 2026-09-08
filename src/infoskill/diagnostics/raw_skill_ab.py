@@ -20,6 +20,7 @@ class RawSkillAbVariant:
         "skillrl_sft_exact",
         "skillrl_sft_no_skills",
         "unified_no_skill",
+        "unified_empty_skills",
     ]
     policy_mode: Literal["no_skill", "raw_skill_prompt"] = "raw_skill_prompt"
     do_sample: bool = False
@@ -91,6 +92,198 @@ SKILLRL_SFT_CAUSAL_VARIANTS = (
     ),
 )
 
+# A strict four-cell diagnostic for the registered Unified Policy Prompt
+# Protocol.  All cells use greedy decoding and the same state/action rendering;
+# only the presence and source of the retrieved skill text varies.
+UNIFIED_SKILL_CAUSAL_VARIANTS = (
+    RawSkillAbVariant(
+        "unified-no-skill-deterministic",
+        None,
+        "unified_no_skill",
+        policy_mode="no_skill",
+    ),
+    RawSkillAbVariant(
+        "unified-empty-skills-deterministic",
+        None,
+        "unified_empty_skills",
+    ),
+    RawSkillAbVariant(
+        "unified-template-skills-deterministic",
+        "template",
+        "full",
+    ),
+    RawSkillAbVariant(
+        "unified-embedding-skills-deterministic",
+        "embedding",
+        "full",
+    ),
+)
+
+
+def is_unified_skill_causal_matrix(
+    variants: Sequence[RawSkillAbVariant],
+) -> bool:
+    """Return whether ``variants`` are exactly the registered four-cell gate."""
+
+    expected = tuple(item.name for item in UNIFIED_SKILL_CAUSAL_VARIANTS)
+    actual = tuple(item.name for item in variants)
+    return actual == expected
+
+
+def validate_unified_skill_causal_gate(
+    variants: Sequence[RawSkillAbVariant],
+    *,
+    tasks_per_type: int,
+    policy_model_id: str | None,
+    master_seed: int,
+    history_length: int,
+    max_steps: int,
+) -> bool:
+    """Fail fast if a requested unified gate drifts from its registration."""
+
+    expected = tuple(item.name for item in UNIFIED_SKILL_CAUSAL_VARIANTS)
+    actual = tuple(item.name for item in variants)
+    if len(actual) != len(expected) or set(actual) != set(expected):
+        return False
+    if actual != expected:
+        raise ValueError(
+            "unified-skill-causal requires the registered variant order"
+        )
+    required = {
+        "tasks_per_type": (tasks_per_type, 2),
+        "policy_model_id": (
+            policy_model_id,
+            "alfworld-7b-sft-checkpoint-140",
+        ),
+        "master_seed": (master_seed, 0),
+        "history_length": (history_length, 2),
+        "max_steps": (max_steps, 30),
+    }
+    drift = [
+        f"{name}={expected_value!r} (got {actual_value!r})"
+        for name, (actual_value, expected_value) in required.items()
+        if actual_value != expected_value
+    ]
+    if drift:
+        raise ValueError(
+            "unified-skill-causal requires " + ", ".join(drift)
+        )
+    return True
+
+
+def compare_unified_prompt_controls(
+    no_skill_groups: Sequence[TrajectoryGroup],
+    empty_skill_groups: Sequence[TrajectoryGroup],
+) -> dict[str, object]:
+    """Verify the two zero-skill controls stayed identical at runtime.
+
+    Byte-identical user messages are the protocol's hard requirement.  The
+    remaining comparisons prove that tokenization and deterministic rollout
+    behavior did not introduce a hidden mode-specific difference.
+    """
+
+    def trajectories_by_identity(
+        groups: Sequence[TrajectoryGroup],
+    ) -> dict[tuple[str, int], object]:
+        indexed: dict[tuple[str, int], object] = {}
+        for group in groups:
+            if len(group.trajectories) != 1:
+                raise ValueError(
+                    "unified prompt controls require one trajectory per task"
+                )
+            trajectory = group.trajectories[0]
+            identity = (trajectory.task.task_id, trajectory.rollout_id)
+            if identity in indexed:
+                raise ValueError(
+                    f"duplicate unified prompt control trajectory: {identity!r}"
+                )
+            indexed[identity] = trajectory
+        return indexed
+
+    no_skill = trajectories_by_identity(no_skill_groups)
+    empty_skill = trajectories_by_identity(empty_skill_groups)
+    identities_exact = set(no_skill) == set(empty_skill)
+    mismatches: list[str] = []
+    if not identities_exact:
+        missing = sorted(set(no_skill) - set(empty_skill))
+        extra = sorted(set(empty_skill) - set(no_skill))
+        mismatches.append(
+            f"trajectory identities differ: missing={missing!r}, extra={extra!r}"
+        )
+
+    step_count_exact = True
+    messages_exact = True
+    prompt_token_counts_exact = True
+    generated_tokens_exact = True
+    actions_exact = True
+    candidate_skill_ids_empty = True
+    compared_steps = 0
+    for identity in sorted(set(no_skill) & set(empty_skill)):
+        left = no_skill[identity]
+        right = empty_skill[identity]
+        left_steps = left.steps  # type: ignore[attr-defined]
+        right_steps = right.steps  # type: ignore[attr-defined]
+        if len(left_steps) != len(right_steps):
+            step_count_exact = False
+            mismatches.append(
+                f"trajectory {identity!r}: step_count "
+                f"{len(left_steps)} != {len(right_steps)}"
+            )
+        for step_index, (left_step, right_step) in enumerate(
+            zip(left_steps, right_steps)
+        ):
+            compared_steps += 1
+            prefix = f"trajectory {identity!r} step {step_index}"
+            if (
+                left_step.conditioned_input.user_message
+                != right_step.conditioned_input.user_message
+            ):
+                messages_exact = False
+                mismatches.append(f"{prefix}: policy_user_message differs")
+            if (
+                left_step.generation.prompt_token_count
+                != right_step.generation.prompt_token_count
+            ):
+                prompt_token_counts_exact = False
+                mismatches.append(f"{prefix}: prompt_token_count differs")
+            if left_step.generation.token_ids != right_step.generation.token_ids:
+                generated_tokens_exact = False
+                mismatches.append(f"{prefix}: generated token_ids differ")
+            if left_step.action.executed_action != right_step.action.executed_action:
+                actions_exact = False
+                mismatches.append(f"{prefix}: executed_action differs")
+            if (
+                left_step.conditioned_input.candidate_skill_ids
+                or right_step.conditioned_input.candidate_skill_ids
+            ):
+                candidate_skill_ids_empty = False
+                mismatches.append(f"{prefix}: zero-skill control has skill IDs")
+
+    passed = all(
+        (
+            identities_exact,
+            step_count_exact,
+            messages_exact,
+            prompt_token_counts_exact,
+            generated_tokens_exact,
+            actions_exact,
+            candidate_skill_ids_empty,
+        )
+    )
+    return {
+        "passed": passed,
+        "trajectory_identities_exact": identities_exact,
+        "trajectory_count": len(no_skill),
+        "compared_step_count": compared_steps,
+        "step_counts_exact": step_count_exact,
+        "policy_user_messages_exact": messages_exact,
+        "prompt_token_counts_exact": prompt_token_counts_exact,
+        "generated_token_ids_exact": generated_tokens_exact,
+        "executed_actions_exact": actions_exact,
+        "candidate_skill_ids_empty": candidate_skill_ids_empty,
+        "mismatches": mismatches,
+    }
+
 
 def resolve_raw_skill_diagnostic_variants(
     names: Sequence[str] | None,
@@ -104,6 +297,7 @@ def resolve_raw_skill_diagnostic_variants(
             SKILLRL_RL_EXACT_VARIANT,
             SKILLRL_SFT_EXACT_VARIANT,
             *SKILLRL_SFT_CAUSAL_VARIANTS,
+            *UNIFIED_SKILL_CAUSAL_VARIANTS,
         )
     }
     unknown = tuple(name for name in names if name not in available)

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Central parameter panel. Every value can also be overridden as an environment variable.
-ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab | skillrl-rl-exact | skillrl-sft-exact | skillrl-sft-causal | checkpoint-effect | grounding | train
+ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab | unified-skill-causal | skillrl-rl-exact | skillrl-sft-exact | skillrl-sft-causal | checkpoint-effect | grounding | train
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
@@ -146,7 +146,7 @@ case "${ACTION}" in
     esac
     python -m infoskill.cli eval "${EVAL_ARGS[@]}"
     ;;
-  raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)
+  raw-skill-ab|unified-skill-causal|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
       echo "GPUS must contain at least one physical GPU index" >&2
@@ -158,6 +158,10 @@ case "${ACTION}" in
         exit 2
       fi
     done
+    if [[ "${ACTION}" == "unified-skill-causal" && "${RAW_SKILL_AB_TASKS_PER_TYPE}" != "2" ]]; then
+      echo "unified-skill-causal requires exactly 2 tasks per task type" >&2
+      exit 2
+    fi
     RAW_SKILL_AB_ARGS=(
       --config "${CONFIG}"
       --num-gpus "${#GPU_IDS[@]}"
@@ -174,6 +178,14 @@ case "${ACTION}" in
         skillrl-sft-shell-no-skills-deterministic
         no-skill-sampled-t0.4
         skillrl-sft-exact-sampled-t0.4
+      )
+    elif [[ "${ACTION}" == "unified-skill-causal" ]]; then
+      RAW_SKILL_AB_ARGS+=(
+        --variants
+        unified-no-skill-deterministic
+        unified-empty-skills-deterministic
+        unified-template-skills-deterministic
+        unified-embedding-skills-deterministic
       )
     fi
     if [[ -n "${RUN_NAME}" ]]; then
@@ -293,7 +305,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, raw-skill-ab, skillrl-rl-exact, skillrl-sft-exact, skillrl-sft-causal, checkpoint-effect, grounding, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, raw-skill-ab, unified-skill-causal, skillrl-rl-exact, skillrl-sft-exact, skillrl-sft-causal, checkpoint-effect, grounding, or train" >&2
     exit 2
     ;;
 esac

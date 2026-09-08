@@ -91,6 +91,16 @@ prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动�
 prompt 的 `temperature=0.4` 采样版本、SFT exact prompt 的 `temperature=0.4` 采样版本。
 这三项用于区分“提示词外壳”“确定性解码”“技能内容”三种可能原因；正式评测仍保持
 greedy，诊断结果不得当作 140 条 `valid_seen` 成功率。
+
+三项 SFT 因果诊断确认：同一 update-0 SFT 模型在统一 no-skill prompt 下，无论
+greedy 还是 `temperature=0.4` 都在相同 2/12 任务成功；SFT 外壳即使不注入技能也
+降为 0/12，SFT exact 加技能后同样为 0/12。采样降低重复但没有恢复成功；动作标签
+解析率接近 100%，因此不是 parser 或 GRPO checkpoint 问题。SFT 外壳无技能主要
+退化为重复 `go` 和非法旧动作，SFT exact 技能则把行为推向更合法但不推进任务的
+重复 `look`。下一门是 `unified-skill-causal`：固定 12 条、greedy、history=2 和同一
+在线动作呈现，只比较 no-skill、经过 raw conditioner 的空检索、template 技能文本、
+embedding 技能文本。前两格必须逐字生成相同 policy prompt；后两格都只在统一 prompt
+的固定位置增加完整 skill block。该门仍只用于归因，不重新定义正式 140 条结果。
 _Avoid_: unrelated baseline、different evaluation pipeline
 
 ## Skills and State

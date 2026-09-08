@@ -3,6 +3,7 @@
 from .library import FixedSkillLibrary, SkillRecord
 from .retrieval import (
     EmbeddingRetriever,
+    EmptyRetriever,
     PrecomputedEmbeddingRetriever,
     RetrievalResult,
     SentenceTransformerEncoder,
@@ -12,6 +13,7 @@ from .retrieval import (
 
 __all__ = [
     "EmbeddingRetriever",
+    "EmptyRetriever",
     "PrecomputedEmbeddingRetriever",
     "FixedSkillLibrary",
     "RetrievalResult",
