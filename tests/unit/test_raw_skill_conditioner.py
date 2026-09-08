@@ -465,8 +465,11 @@ class RawSkillConditionerTests(unittest.TestCase):
         self.assertEqual(conditioned.candidate_skill_ids, context.candidate_skill_ids)
         self.assertLess(conditioned.user_message.index("clean an apple"), conditioned.user_message.index("## Retrieved"))
         self.assertLess(conditioned.user_message.index("## Retrieved"), conditioned.user_message.index("Prior to this step"))
-        self.assertIn("**[clean] Clean A**: wash", conditioned.user_message)
-        self.assertNotIn("clean_a", conditioned.user_message)
+        self.assertIn(
+            "[clean_a] type=task_specific category=clean",
+            conditioned.user_message,
+        )
+        self.assertIn("why_it_happens: forget", conditioned.user_message)
 
     def test_registered_task_goal_is_the_retrieval_key_not_environment_wording(self) -> None:
         library = FixedSkillLibrary.load(

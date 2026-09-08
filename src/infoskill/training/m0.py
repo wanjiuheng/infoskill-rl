@@ -90,7 +90,7 @@ def run_policy_training(
     cuda_memory_poll_interval_ms: int = 0,
     policy_max_tokens_per_gpu: int = 16_384,
     balance_policy_tokens_across_ranks: bool = True,
-    raw_skill_prompt_format: Literal["compact", "full"] = "compact",
+    raw_skill_prompt_format: Literal["compact", "full"] = "full",
 ) -> int:
     """Run a token-only policy control through the pinned VERL runtime."""
 

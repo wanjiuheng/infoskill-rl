@@ -66,13 +66,13 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["profile"], "smoke")
         self.assertEqual(payload["trajectories_per_full_update"], 2)
         self.assertEqual(payload["retrieval_mode"], "embedding")
-        self.assertEqual(payload["raw_skill_prompt_format"], "compact")
+        self.assertEqual(payload["raw_skill_prompt_format"], "full")
 
-    def test_raw_skill_prompt_format_can_explicitly_use_full_text(self) -> None:
+    def test_raw_skill_prompt_format_can_explicitly_use_compact_text(self) -> None:
         output = io.StringIO()
         arguments = self._arguments()
         arguments[arguments.index("no_skill")] = "raw_skill_prompt"
-        arguments.extend(["--raw-skill-prompt-format", "full"])
+        arguments.extend(["--raw-skill-prompt-format", "compact"])
 
         with patch("pathlib.Path.exists", return_value=True):
             with redirect_stdout(output):
@@ -81,7 +81,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(
             json.loads(output.getvalue())["raw_skill_prompt_format"],
-            "full",
+            "compact",
         )
 
     def test_raw_skill_retrieval_mode_can_be_overridden_without_editing_yaml(self) -> None:

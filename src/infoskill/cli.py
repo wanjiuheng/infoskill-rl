@@ -205,10 +205,10 @@ def _add_raw_skill_prompt_format_argument(parser: argparse.ArgumentParser) -> No
     parser.add_argument(
         "--raw-skill-prompt-format",
         choices=("compact", "full"),
-        default="compact",
+        default="full",
         help=(
-            "model-visible serialization for raw_skill_prompt; compact is the "
-            "registered default and full preserves the historical diagnostic"
+            "model-visible serialization for raw_skill_prompt; full is the "
+            "registered default and compact is an explicit measured ablation"
         ),
     )
 

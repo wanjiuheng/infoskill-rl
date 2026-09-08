@@ -37,7 +37,7 @@ reference logprob 复用 actor 的同一个冻结 FSDP Qwen 基座，通过同�
 _Avoid_: second frozen base、CPU-offloaded reference swapping、concurrent actor/reference access
 
 **Unified Policy Prompt Protocol**:
-每步把统一英文 ALFWorld 指令作为单条 `user` message 交给当前模型 chat template；no-skill 与 INFO-SKILL 文本完全相同，raw-skill 只多固定位置、保留可执行语义的 compact 技能块。
+每步把统一英文 ALFWorld 指令作为单条 `user` message 交给当前模型 chat template；no-skill 与 INFO-SKILL 文本完全相同，raw-skill 只多固定位置的 full 技能块，compact 仅作显式消融。
 _Avoid_: extra system message、step-zero special template、model-specific special tokens
 
 **Fast-Update Method (M1)**:
@@ -64,10 +64,11 @@ prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动�
 `Qwen2.5-7B-Instruct` 在统一框架的 `no_skill` update 0 为 33/140、macro
 `0.21777`、非法动作率 `0.10108`；相同模型的 `embedding + full` raw prompt 为
 38/140、macro `0.25145`、非法动作率 `0.09540`。因此 raw 技能并未在当前基座上
-造成整体崩溃，但完整字段使 prompt 明显增长。正式 raw control 改用 compact v1：
-候选 ID、顺序、Top-K 和检索 provenance 不变，仅从模型可见文本移除存储 ID、重复
-type 与 `why_it_happens`；`full` 保留为显式历史诊断格式，compact 的 140 条 update-0
-结果必须重新测量，不能与 full 曲线拼接。
+造成整体崩溃，但完整字段使 prompt 明显增长。随后在候选 ID、顺序、Top-K 和检索
+provenance 不变的严格 A/B 中，compact 将技能块 token 缩短约 26%，端到端仅提速约
+2%，而结果从 full 的 38/140、macro `0.25145` 降至 35/140、macro `0.23886`。
+因此正式 raw control 恢复 `full`；compact 仅作为显式消融，不能与 full 曲线或
+checkpoint 混用。
 
 上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
 框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成

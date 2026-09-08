@@ -6,8 +6,8 @@ ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab 
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
-# Registered raw control uses compact; full remains available for historical A/B.
-RAW_SKILL_PROMPT_FORMAT="${RAW_SKILL_PROMPT_FORMAT:-compact}" # compact | full
+# Registered raw control uses full; compact remains available as a measured ablation.
+RAW_SKILL_PROMPT_FORMAT="${RAW_SKILL_PROMPT_FORMAT:-full}" # full | compact
 GPUS="${GPUS:-${4:-0}}"                       # examples: 0 or 0,1 or 0,1,2,3
 RUN_NAME="${RUN_NAME:-}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-0}"

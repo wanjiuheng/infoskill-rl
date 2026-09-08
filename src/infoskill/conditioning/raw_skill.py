@@ -23,7 +23,7 @@ class RawSkillPromptConditioner:
         *,
         history_length: int = 2,
         query_by_task_id: Mapping[str, str] | None = None,
-        prompt_format: Literal["compact", "full", "skillrl"] = "compact",
+        prompt_format: Literal["compact", "full", "skillrl"] = "full",
     ) -> None:
         if prompt_format not in {"compact", "full", "skillrl"}:
             raise ValueError(
@@ -416,7 +416,7 @@ def _render_skillrl_memory_message(
 def format_raw_skill_block(
     retrieval: RetrievalResult,
     *,
-    style: Literal["compact", "full", "skillrl"] = "compact",
+    style: Literal["compact", "full", "skillrl"] = "full",
 ) -> str:
     if style == "compact":
         return _format_compact_block(retrieval)
