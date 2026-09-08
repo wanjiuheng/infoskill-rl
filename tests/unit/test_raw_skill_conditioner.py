@@ -401,6 +401,39 @@ class RawSkillConditionerTests(unittest.TestCase):
         self.assertNotIn("skill_id", block)
         self.assertNotIn("why_it_happens", block)
 
+    def test_compact_prompt_keeps_actionable_content_without_storage_metadata(
+        self,
+    ) -> None:
+        library = FixedSkillLibrary.load(
+            Path(__file__).parents[1] / "fixtures" / "skills.json"
+        )
+        retrieval = TemplateRetriever(
+            library,
+            general_count=1,
+            task_count=1,
+            mistake_count=1,
+        ).retrieve("clean an apple")
+
+        block = format_raw_skill_block(retrieval, style="compact")
+
+        self.assertEqual(
+            block,
+            "### General Principles\n"
+            "- **General A**: alpha\n"
+            "  _Apply when: always_\n\n"
+            "### Task-Relevant Skills\n"
+            "- **[clean] Clean A**: wash\n"
+            "  _Apply when: dirty_\n\n"
+            "### Mistakes to Avoid\n"
+            "- **Avoid**: Loop\n"
+            "  **Instead**: remember",
+        )
+        self.assertNotIn("gen_a", block)
+        self.assertNotIn("clean_a", block)
+        self.assertNotIn("err_a", block)
+        self.assertNotIn("type=", block)
+        self.assertNotIn("why_it_happens", block)
+
     def test_skill_block_is_inserted_after_goal_and_retrieved_once_per_group(self) -> None:
         library = FixedSkillLibrary.load(Path(__file__).parents[1] / "fixtures" / "skills.json")
         conditioner = RawSkillPromptConditioner(TemplateRetriever(library), history_length=2)
@@ -432,7 +465,8 @@ class RawSkillConditionerTests(unittest.TestCase):
         self.assertEqual(conditioned.candidate_skill_ids, context.candidate_skill_ids)
         self.assertLess(conditioned.user_message.index("clean an apple"), conditioned.user_message.index("## Retrieved"))
         self.assertLess(conditioned.user_message.index("## Retrieved"), conditioned.user_message.index("Prior to this step"))
-        self.assertIn("[clean_a] type=task_specific category=clean", conditioned.user_message)
+        self.assertIn("**[clean] Clean A**: wash", conditioned.user_message)
+        self.assertNotIn("clean_a", conditioned.user_message)
 
     def test_registered_task_goal_is_the_retrieval_key_not_environment_wording(self) -> None:
         library = FixedSkillLibrary.load(

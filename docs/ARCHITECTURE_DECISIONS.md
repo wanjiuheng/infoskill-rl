@@ -22,7 +22,7 @@ M1 默认在 replayed latent 处截断 GRPO 动作梯度：GRPO 更新 Qwen LoRA
 
 ## D005：按环境可执行性定义非法动作且默认不加步数惩罚
 
-系统不沿用 SkillRL 以 XML 标签和响应语言判定语义合法性的 `is_action_valid`。解析器优先读取完整 `<action>`；多个完整标签只有内容相同才接受，内容冲突即判歧义。为公平支持未经 ALFWorld SFT 的 Qwen，缺少完整 XML 标签时允许从最后一个非空行识别显式 `[action]` 或 `[action>` 起始标记，并移除可选的 `[/action]` 或 `</action>` 结束标记；这种兼容动作仍记为格式不合规。若没有上述显式标记，只允许从最后一个非空行去除有限的格式前缀后，与当前 `admissible_commands` 做大小写/连续空白规范化后的整行精确匹配；不扫描 reasoning 子串、不纠正标点、不做模糊或最近动作投影。只有无法解析动作，或规范化命令不能唯一匹配当前可执行命令时，才计为非法动作，标签、`<think>` 和语言仅作格式统计。合法动作提交对应规范命令，非法动作统一提交必须消耗一步且不推进世界状态的 `__invalid_action__` 哨兵，不用 `look`、最近合法动作或可能被环境解释成别名的模型原文进行免费修正。默认轨迹奖励为 `won - 0.01 * invalid_action_count`，保留可配置硬步数上限，但不加入逐步惩罚、goal-condition reward 或 information bonus；正式评测成功率始终只依据未塑形的 `won`。
+系统不沿用 SkillRL 以 XML 标签和响应语言判定语义合法性的 `is_action_valid`。解析器优先读取完整 `<action>`；多个完整标签只有内容相同才接受，内容冲突即判歧义。为公平支持未经 ALFWorld SFT 的 Qwen，缺少完整 XML 标签时允许从最后一个非空行识别显式 `[action]` 或 `[action>` 起始标记，并移除可选的 `[/action]`、`</action>` 或实测出现的 `</action>]` 结束标记；这种兼容动作仍记为格式不合规。若没有上述显式标记，只允许从最后一个非空行去除有限的格式前缀后，与当前 `admissible_commands` 做大小写/连续空白规范化后的整行精确匹配；不扫描 reasoning 子串、不纠正标点、不做模糊或最近动作投影。只有无法解析动作，或规范化命令不能唯一匹配当前可执行命令时，才计为非法动作，标签、`<think>` 和语言仅作格式统计。合法动作提交对应规范命令，非法动作统一提交必须消耗一步且不推进世界状态的 `__invalid_action__` 哨兵，不用 `look`、最近合法动作或可能被环境解释成别名的模型原文进行免费修正。默认轨迹奖励为 `won - 0.01 * invalid_action_count`，保留可配置硬步数上限，但不加入逐步惩罚、goal-condition reward 或 information bonus；正式评测成功率始终只依据未塑形的 `won`。
 
 ## D006：首阶段使用仅来自 train 的固定技能库
 
@@ -59,3 +59,9 @@ M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` �
 ## D012：首轮 7B 主实验改用原版 Qwen2.5-7B-Instruct 初始化
 
 首轮 M0、`raw_skill_prompt` 与 M1 的共同初始化由 `Alfworld-7B-SFT/checkpoint-140` 改为注册指纹的原版 `Qwen2.5-7B-Instruct`。在固定 140 条 `valid_seen`、统一 no-skill prompt、greedy 解码和同一 VERL/vLLM 评测链上，原版 Qwen 在有限显式动作标记兼容后达到 macro success `0.21777`、overall success `33/140`、非法动作率 `0.10108`；SFT 模型为 macro `0.14713`、overall `25/140`、非法动作率 `0.55350`。原版 Qwen 结果也与旧独立框架的 `31/140` 接近，且所有兼容动作仍要求与当步 `admissible_commands` 精确匹配。因此正式主对比统一从原版 Qwen 独立开始，SFT 权重只保留为明确配置的附加对照；此前以 SFT 为起点的 M0 训练仅作为工程闭环证据，不与新主实验曲线拼接或用于选模。
+
+## D013：raw-skill 默认使用保留语义的 compact 序列化
+
+`raw_skill_prompt` 的检索算法、候选数、候选 ID、候选顺序和逐任务检索计划保持不变，但模型可见技能块默认采用 `compact` v1。general 与 task-specific 技能保留标题、原则和适用条件，task-specific 额外保留任务类别；common-mistake 保留错误描述与改进建议。存储 ID、可由章节标题推出的重复 type 和解释性 `why_it_happens` 不再输入策略。该决定减少与动作决策无关的 token，同时不通过删减 Top-K 或重新排序改变技能信息来源。
+
+旧的完整字段序列化保留为显式 `RAW_SKILL_PROMPT_FORMAT=full`，仅用于复现和 A/B，不再是正式默认值。格式名称必须写入 run provenance、resolved config 与 portable checkpoint 兼容条件；compact 与 full checkpoint 不能交叉恢复或评测。原版 Qwen 的历史 `embedding + full` update-0 结果 38/140 只作为本次 compact 140 条门禁的对照，不能与后续 compact 训练曲线拼接。

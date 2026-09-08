@@ -3,7 +3,7 @@
 第一阶段实现以 Qwen2.5-7B-Instruct + ALFWorld 为首个闭环，固定 SkillRL 技能库，只验证：
 
 1. `no_skill`：统一 prompt、无技能输入；
-2. `raw_skill_prompt`：episode 开始时检索一次技能，逐步完整写入 prompt；
+2. `raw_skill_prompt`：episode 开始时检索一次技能，逐步写入保留可执行语义的精简技能块；
 3. `infoskill`：同一候选集经过状态条件随机压缩并生成 5-token soft prefix。
 
 动态技能库增删改查不在当前阶段。正式协议见 `docs/EXPERIMENT_SPEC.md`，架构决定集中在 `docs/ARCHITECTURE_DECISIONS.md`。
@@ -83,8 +83,12 @@ GPUS=0 bash scripts/run_alfworld.sh validate no_skill
 # 原始/任意本地 Hugging Face 模型，确定性评测完整 valid_seen 140 条
 GPUS=0 bash scripts/run_alfworld.sh eval no_skill
 
-# embedding 检索 + 原始技能 prompt
+# embedding 检索 + 默认 compact 技能 prompt
 GPUS=0 bash scripts/run_alfworld.sh eval raw_skill_prompt
+
+# 仅用于复现历史对照的完整字段格式
+GPUS=0 RAW_SKILL_PROMPT_FORMAT=full \
+  bash scripts/run_alfworld.sh eval raw_skill_prompt
 
 # 可选 template 检索；默认留空时使用 YAML 中的 embedding
 GPUS=0 RETRIEVAL_MODE=template \
@@ -115,7 +119,7 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 DRY_RUN=1 \
 GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 RUN_NAME=m0-smoke \
   bash scripts/run_alfworld.sh train no_skill
 
-# raw-skill 独立对照：同一训练管线，只增加 episode-level 检索和完整 skill prompt
+# raw-skill 独立对照：同一训练管线，只增加 episode-level 检索和 compact skill prompt
 GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 \
   RUN_NAME=raw-skill-smoke \
   bash scripts/run_alfworld.sh train raw_skill_prompt
@@ -169,8 +173,11 @@ checkpoint 不完整、不是 portable、训练模式或基座模型指纹不匹
 
 Transformers 评测后端、ALFWorld/技能/INFO-SKILL 核心模块、M0 `no_skill` 与
 `raw_skill_prompt` 的共享 GRPO 训练入口及可移植 LoRA checkpoint 已实现。raw
-模式在运行开始前批量冻结每个任务目标的检索结果，完整保留最多 17 条技能，不设
-独立 skill token 上限；策略 tokenizer 会预审计 skill block，最终 4,096-token
+模式在运行开始前批量冻结每个任务目标的检索结果，完整保留最多 17 条候选技能及其
+顺序；默认 `compact` 只从模型可见文本中删除存储 ID、重复 type 和
+`why_it_happens`，保留任务类别、标题、原则、适用条件、错误描述与改进建议。
+`RAW_SKILL_PROMPT_FORMAT=full` 只用于历史 A/B。raw 模式不设独立 skill token
+上限；策略 tokenizer 会预审计 skill block，最终 4,096-token
 prompt 仍逐步严格检查，超限时先移除最旧历史并记录，历史清空后仍超限则保存失败，
 且始终禁止截断技能。M0 不使用 soft prefix，因此不受
 Qwen2.5-7B BF16 的 cross-backend Hybrid Prefix parity 结论阻塞。A800 上的真实

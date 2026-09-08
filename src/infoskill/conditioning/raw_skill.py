@@ -23,10 +23,12 @@ class RawSkillPromptConditioner:
         *,
         history_length: int = 2,
         query_by_task_id: Mapping[str, str] | None = None,
-        prompt_format: Literal["full", "skillrl"] = "full",
+        prompt_format: Literal["compact", "full", "skillrl"] = "compact",
     ) -> None:
-        if prompt_format not in {"full", "skillrl"}:
-            raise ValueError("raw skill prompt format must be full or skillrl")
+        if prompt_format not in {"compact", "full", "skillrl"}:
+            raise ValueError(
+                "raw skill prompt format must be compact, full, or skillrl"
+            )
         self._retriever = retriever
         self._history_length = history_length
         self._prompt_format = prompt_format
@@ -414,12 +416,16 @@ def _render_skillrl_memory_message(
 def format_raw_skill_block(
     retrieval: RetrievalResult,
     *,
-    style: Literal["full", "skillrl"] = "full",
+    style: Literal["compact", "full", "skillrl"] = "compact",
 ) -> str:
+    if style == "compact":
+        return _format_compact_block(retrieval)
     if style == "skillrl":
         return _format_skillrl_block(retrieval)
     if style != "full":
-        raise ValueError("raw skill prompt format must be full or skillrl")
+        raise ValueError(
+            "raw skill prompt format must be compact, full, or skillrl"
+        )
     blocks: list[str] = []
     for item in retrieval.skills:
         record = item.record
@@ -433,6 +439,48 @@ def format_raw_skill_block(
         ]
         blocks.append("\n".join([header, *fields]))
     return "\n\n".join(blocks)
+
+
+def _format_compact_block(retrieval: RetrievalResult) -> str:
+    general: list[str] = []
+    task_specific: list[str] = []
+    mistakes: list[str] = []
+    for item in retrieval.skills:
+        record = item.record
+        fields = record.fields
+        if record.kind == "general":
+            line = f"- **{fields.get('title', '')}**: {fields.get('principle', '')}"
+            when = fields.get("when_to_apply", "")
+            if when:
+                line += f"\n  _Apply when: {when}_"
+            general.append(line)
+        elif record.kind == "task_specific":
+            title = fields.get("title", "")
+            if record.category:
+                title = f"[{record.category}] {title}"
+            line = f"- **{title}**: {fields.get('principle', '')}"
+            when = fields.get("when_to_apply", "")
+            if when:
+                line += f"\n  _Apply when: {when}_"
+            task_specific.append(line)
+        elif record.kind == "common_mistake":
+            description = fields.get("description", "")
+            if not description:
+                continue
+            line = f"- **Avoid**: {description}"
+            fix = fields.get("how_to_avoid", "")
+            if fix:
+                line += f"\n  **Instead**: {fix}"
+            mistakes.append(line)
+
+    sections: list[str] = []
+    if general:
+        sections.append("### General Principles\n" + "\n".join(general))
+    if task_specific:
+        sections.append("### Task-Relevant Skills\n" + "\n".join(task_specific))
+    if mistakes:
+        sections.append("### Mistakes to Avoid\n" + "\n".join(mistakes))
+    return "\n\n".join(sections)
 
 
 def _format_skillrl_block(retrieval: RetrievalResult) -> str:

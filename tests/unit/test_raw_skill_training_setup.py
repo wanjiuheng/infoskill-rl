@@ -210,6 +210,46 @@ class RawSkillTrainingSetupTests(unittest.TestCase):
         self.assertTrue(setup.skill_blocks[0].startswith("### General Principles"))
         self.assertEqual(config.retrieval_mode, "embedding")
 
+    def test_compact_and_full_formats_preserve_the_same_retrieval_plan(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+        skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"
+        config = replace(
+            config,
+            paths=replace(
+                config.paths,
+                skill_bank=str(skill_bank),
+                skill_bank_manifest=str(skill_bank.with_name("skills.manifest.json")),
+            ),
+            retrieval_mode="template",
+            general_top_k=1,
+            task_top_k=1,
+            mistake_count=1,
+        )
+        queries = {"task": "clean an apple and put it away"}
+
+        compact = build_raw_skill_setup(
+            config,
+            retrieval_queries=queries,
+            prompt_format="compact",
+        )
+        full = build_raw_skill_setup(
+            config,
+            retrieval_queries=queries,
+            prompt_format="full",
+        )
+
+        self.assertEqual(
+            compact.provenance["retrieval_plan"],
+            full.provenance["retrieval_plan"],
+        )
+        self.assertEqual(
+            compact.provenance["retrieval_plan_sha256"],
+            full.provenance["retrieval_plan_sha256"],
+        )
+        self.assertNotEqual(compact.skill_blocks, full.skill_blocks)
+        self.assertEqual(compact.provenance["prompt_format"], "compact")
+        self.assertEqual(full.provenance["prompt_format"], "full")
+
     def test_template_setup_builds_conditioner_and_auditable_provenance(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
         skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"
@@ -256,6 +296,9 @@ class RawSkillTrainingSetupTests(unittest.TestCase):
         self.assertIn("## Retrieved Relevant Skills", conditioned.user_message)
         self.assertEqual(conditioned.candidate_skill_ids, ("gen_a", "clean_a", "err_a"))
         self.assertEqual(setup.provenance["retrieval_mode"], "template")
+        self.assertEqual(setup.provenance["prompt_format"], "compact")
+        self.assertNotIn("gen_a", conditioned.user_message)
+        self.assertNotIn("why_it_happens", conditioned.user_message)
         self.assertEqual(setup.provenance["retrieval_query_count"], 1)
         self.assertEqual(len(setup.provenance["retrieval_plan_sha256"]), 64)
         self.assertEqual(setup.provenance["skill_bank_sha256"], setup.library.source_sha256)

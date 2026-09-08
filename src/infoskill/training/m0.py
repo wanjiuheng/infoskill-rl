@@ -6,7 +6,7 @@ import math
 import sys
 import time
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Literal, Mapping, Sequence
 
 from infoskill.app_config import AppConfig
 from infoskill.conditioning import NoSkillConditioner, SkillConditioner
@@ -90,6 +90,7 @@ def run_policy_training(
     cuda_memory_poll_interval_ms: int = 0,
     policy_max_tokens_per_gpu: int = 16_384,
     balance_policy_tokens_across_ranks: bool = True,
+    raw_skill_prompt_format: Literal["compact", "full"] = "compact",
 ) -> int:
     """Run a token-only policy control through the pinned VERL runtime."""
 
@@ -186,6 +187,7 @@ def run_policy_training(
                 task.task_id: task.goal
                 for task in (*all_train_tasks, *valid_seen_tasks)
             },
+            prompt_format=raw_skill_prompt_format,
         )
         raw_skill_provenance = {
             **raw_skill_setup.provenance,

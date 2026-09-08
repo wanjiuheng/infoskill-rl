@@ -429,11 +429,14 @@ VERBOSE_RUNTIME_LOGS=1 bash scripts/run_alfworld.sh train no_skill
 
 ## 9. `raw_skill_prompt` 独立对照门禁
 
-raw 对照不是 M1，也不从 M0 checkpoint 继续训练。它从同一份 SFT 权重独立初始化，
+raw 对照不是 M1，也不从 M0 checkpoint 继续训练。它从同一份注册的原版
+`Qwen2.5-7B-Instruct` 权重独立初始化，
 复用 M0 已验证的 GRPO、VERL/vLLM、任务顺序、奖励、checkpoint、恢复和
 `valid_seen` 评测管线；唯一方法差异是每个 episode 按任务目标检索一次最多 17 条
-技能，并在每个环境步骤完整写入 policy prompt。默认使用 YAML 的 `embedding`；
-`template` 仅作为可选诊断，通过 `RETRIEVAL_MODE=template` 切换，不需要编辑 YAML。
+技能，并在每个环境步骤写入保留可执行语义的 compact 技能块。默认使用 YAML 的
+`embedding`；`template` 仅作为可选诊断，通过 `RETRIEVAL_MODE=template` 切换，
+不需要编辑 YAML。`RAW_SKILL_PROMPT_FORMAT=compact` 是正式默认值；`full` 只用于
+复现历史 A/B。
 
 先拉取代码并运行不占 GPU 的逻辑门和静态预检：
 
@@ -451,7 +454,7 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 DRY_RUN=1 \
 
 然后运行一次 embedding smoke。启动阶段会先批量计算全部 train 目标和固定 140 条
 `valid_seen` 目标的检索结果，释放 embedding 模型及其 CUDA cache，再初始化
-Ray/FSDP/vLLM；这不是外部 API 调用。完整 skill block 会用 policy tokenizer
+Ray/FSDP/vLLM；这不是外部 API 调用。compact skill block 会用 policy tokenizer
 预计算长度，但不设置独立的 1,600-token 上限。运行时最终 prompt 超过 4,096
 tokens 时先从最旧历史开始移除；历史清空后仍超限才明确失败，绝不截断技能或减少
 Top-K。
@@ -465,6 +468,7 @@ ENVIRONMENT_BACKEND=native_batch \
 ENVIRONMENT_WORKERS=1 \
 POLICY_MAX_TOKENS_PER_GPU=16384 \
 BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+RAW_SKILL_PROMPT_FORMAT=compact \
 INFO_SKILL_CPU_THREADS=1 \
 RUN_NAME=raw-skill-embedding-smoke-u1 \
 bash scripts/run_alfworld.sh train raw_skill_prompt
@@ -474,7 +478,8 @@ bash scripts/run_alfworld.sh train raw_skill_prompt
 
 - `resolved_config.json` 与 `provenance.json` 的 `mode` 均为
   `raw_skill_prompt`；
-- `skill_conditioning` 记录 `retrieval_mode=embedding`、规范化 skill bank SHA-256、
+- `skill_conditioning` 记录 `retrieval_mode=embedding`、`prompt_format=compact`、
+  规范化 skill bank SHA-256、
   223 条 train 轨迹来源 manifest、embedding 模型内容校验值、train 与固定 140 条
   `valid_seen` 的逐任务检索计划、Top-K 与 raw skill block token 统计；
 - trace 每条轨迹的 `candidate_skill_ids` 非空，同一 episode 的候选 ID 保持不变；
@@ -498,11 +503,13 @@ nohup env \
   EVAL_BACKEND=verl \
   CHECKPOINT_STEP=0 \
   POLICY_CHECKPOINT= \
+  RETRIEVAL_MODE=embedding \
+  RAW_SKILL_PROMPT_FORMAT=compact \
   PERSISTENT_ROLLOUT_SESSION=1 \
   ENVIRONMENT_BACKEND=native_batch \
   ENVIRONMENT_WORKERS=1 \
   INFO_SKILL_CPU_THREADS=1 \
-  RUN_NAME=raw-skill-valid-seen-update0 \
+  RUN_NAME=qwen25-raw-skill-embedding-compact-valid-seen-update0 \
   bash scripts/run_alfworld.sh eval raw_skill_prompt \
   >"${LOG}" 2>&1 &
 PID=$!
@@ -518,7 +525,9 @@ portable checkpoint 的评测应为 `loaded`，并记录各 rank 的 base-sync �
 checkpoint load、rollout、runtime close、trace write 和总耗时。终端只额外显示一行
 精简耗时汇总。
 
-如果 update-0 的 `embedding + full` raw prompt 明显退化，不要立即启动 25-update
+历史 `embedding + full` update-0 为 38/140、macro `0.25145`、非法动作率
+`0.09540`；它只用于和本节 compact update-0 做一次严格对照，不再作为正式默认。
+如果 compact raw prompt 明显退化，不要立即启动 25-update
 pilot。先运行固定 12 条任务（六类各 2 条）的诊断矩阵，区分检索方式与 prompt
 格式的影响。该命令只初始化一次 VERL/vLLM，并补测尚未测量的三个组合：
 `embedding + SkillRL concise`、`template + full`、`template + SkillRL concise`。
@@ -719,6 +728,7 @@ nohup env \
   ENVIRONMENT_WORKERS=1 \
   POLICY_MAX_TOKENS_PER_GPU=16384 \
   BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  RAW_SKILL_PROMPT_FORMAT=compact \
   INFO_SKILL_CPU_THREADS=1 \
   RUN_NAME=raw-skill-embedding-pilot-u25 \
   bash scripts/run_alfworld.sh train raw_skill_prompt \

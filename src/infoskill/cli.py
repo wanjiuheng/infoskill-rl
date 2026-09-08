@@ -56,6 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--config", required=True)
     evaluate.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
     _add_retrieval_mode_argument(evaluate)
+    _add_raw_skill_prompt_format_argument(evaluate)
     evaluate.add_argument("--run-name")
     evaluate.add_argument("--checkpoint-step", type=int, default=0)
     evaluate.add_argument(
@@ -134,6 +135,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--config", required=True)
     train.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
     _add_retrieval_mode_argument(train)
+    _add_raw_skill_prompt_format_argument(train)
     train.add_argument(
         "--profile",
         choices=[profile.value for profile in TrainingProfile],
@@ -199,6 +201,18 @@ def _add_retrieval_mode_argument(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_raw_skill_prompt_format_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--raw-skill-prompt-format",
+        choices=("compact", "full"),
+        default="compact",
+        help=(
+            "model-visible serialization for raw_skill_prompt; compact is the "
+            "registered default and full preserves the historical diagnostic"
+        ),
+    )
+
+
 def _train(config: AppConfig, args: argparse.Namespace) -> int:
     mode = SkillMode(args.mode)
     if mode is SkillMode.INFO_SKILL:
@@ -236,6 +250,11 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "action": "train",
                     "mode": mode.value,
                     "retrieval_mode": config.retrieval_mode,
+                    "raw_skill_prompt_format": (
+                        args.raw_skill_prompt_format
+                        if mode is SkillMode.RAW_SKILL_PROMPT
+                        else None
+                    ),
                     "profile": plan.profile.value,
                     "max_updates": plan.max_updates,
                     "task_groups_per_update": plan.task_groups_per_update,
@@ -284,6 +303,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         balance_policy_tokens_across_ranks=(
             args.balance_policy_tokens_across_ranks
         ),
+        raw_skill_prompt_format=args.raw_skill_prompt_format,
     )
 
 
@@ -375,6 +395,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         build_raw_skill_setup(
             config,
             retrieval_queries={task.task_id: task.goal for task in tasks},
+            prompt_format=args.raw_skill_prompt_format,
         )
         if mode is SkillMode.RAW_SKILL_PROMPT
         else None

@@ -149,7 +149,7 @@ def build_raw_skill_setup(
     retrieval_queries: Mapping[str, str] | Sequence[str],
     embedding_device: str = "cuda:0",
     retrieval_mode: Literal["embedding", "template"] | None = None,
-    prompt_format: Literal["full", "skillrl"] = "full",
+    prompt_format: Literal["compact", "full", "skillrl"] = "compact",
 ) -> RawSkillSetup:
     """Build one immutable raw-skill conditioner for a complete run corpus."""
 

@@ -37,7 +37,7 @@ reference logprob 复用 actor 的同一个冻结 FSDP Qwen 基座，通过同�
 _Avoid_: second frozen base、CPU-offloaded reference swapping、concurrent actor/reference access
 
 **Unified Policy Prompt Protocol**:
-每步把统一英文 ALFWorld 指令作为单条 `user` message 交给当前模型 chat template；no-skill 与 INFO-SKILL 文本完全相同，raw-skill 只多固定位置的完整技能块。
+每步把统一英文 ALFWorld 指令作为单条 `user` message 交给当前模型 chat template；no-skill 与 INFO-SKILL 文本完全相同，raw-skill 只多固定位置、保留可执行语义的 compact 技能块。
 _Avoid_: extra system message、step-zero special template、model-specific special tokens
 
 **Fast-Update Method (M1)**:
@@ -58,6 +58,16 @@ prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动�
 六类各 2 条 `valid_seen`、同一模型和环境种子，在一次 runtime 中补测
 `embedding + SkillRL concise`、`template + full`、`template + SkillRL concise`；
 这些 12-task 结果只用于归因，明确不得作为正式 `valid_seen` 指标。
+
+以上 0/140 均是发布的 `Alfworld-7B-SFT/checkpoint-140` 上的历史诊断，不能外推到
+当前登记的原版 Qwen 起点。修复有限动作格式兼容后，原版
+`Qwen2.5-7B-Instruct` 在统一框架的 `no_skill` update 0 为 33/140、macro
+`0.21777`、非法动作率 `0.10108`；相同模型的 `embedding + full` raw prompt 为
+38/140、macro `0.25145`、非法动作率 `0.09540`。因此 raw 技能并未在当前基座上
+造成整体崩溃，但完整字段使 prompt 明显增长。正式 raw control 改用 compact v1：
+候选 ID、顺序、Top-K 和检索 provenance 不变，仅从模型可见文本移除存储 ID、重复
+type 与 `why_it_happens`；`full` 保留为显式历史诊断格式，compact 的 140 条 update-0
+结果必须重新测量，不能与 full 曲线拼接。
 
 上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
 框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成

@@ -6,6 +6,8 @@ ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab 
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
+# Registered raw control uses compact; full remains available for historical A/B.
+RAW_SKILL_PROMPT_FORMAT="${RAW_SKILL_PROMPT_FORMAT:-compact}" # compact | full
 GPUS="${GPUS:-${4:-0}}"                       # examples: 0 or 0,1 or 0,1,2,3
 RUN_NAME="${RUN_NAME:-}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-0}"
@@ -57,6 +59,10 @@ if [[ "${ENVIRONMENT_BACKEND}" != "individual" && "${ENVIRONMENT_BACKEND}" != "n
 fi
 if [[ "${ENVIRONMENT_BACKEND}" == "native_batch" && "${ENVIRONMENT_WORKERS}" != "1" ]]; then
   echo "native_batch owns its process count; ENVIRONMENT_WORKERS must remain 1" >&2
+  exit 2
+fi
+if [[ "${RAW_SKILL_PROMPT_FORMAT}" != "compact" && "${RAW_SKILL_PROMPT_FORMAT}" != "full" ]]; then
+  echo "RAW_SKILL_PROMPT_FORMAT must be compact or full" >&2
   exit 2
 fi
 if [[ ! "${CUDA_MEMORY_POLL_INTERVAL_MS}" =~ ^[0-9]+$ ]]; then
@@ -117,6 +123,7 @@ case "${ACTION}" in
       --config "${CONFIG}"
       --mode "${MODE}"
       "${RETRIEVAL_ARGS[@]}"
+      --raw-skill-prompt-format "${RAW_SKILL_PROMPT_FORMAT}"
       --checkpoint-step "${CHECKPOINT_STEP}"
       --backend "${EVAL_BACKEND}"
       --num-gpus "${#GPU_IDS[@]}"
@@ -263,6 +270,7 @@ case "${ACTION}" in
       --config "${CONFIG}"
       --mode "${MODE}"
       "${RETRIEVAL_ARGS[@]}"
+      --raw-skill-prompt-format "${RAW_SKILL_PROMPT_FORMAT}"
       --profile "${PROFILE}"
       --num-gpus "${#GPU_IDS[@]}"
       --environment-workers "${ENVIRONMENT_WORKERS}"
