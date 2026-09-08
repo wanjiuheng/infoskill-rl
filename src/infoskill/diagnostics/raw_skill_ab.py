@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Literal, Sequence
@@ -32,6 +33,15 @@ class RawSkillAbVariant:
             raise ValueError("deterministic diagnostic variants require temperature=0")
         if not 0 < self.top_p <= 1:
             raise ValueError("diagnostic variant top_p must be in (0, 1]")
+
+    @property
+    def trace_slug(self) -> str:
+        """Return a filesystem-safe label without changing the public name."""
+
+        slug = re.sub(r"[^A-Za-z0-9-]+", "-", self.name).strip("-")
+        if not slug:
+            raise ValueError("diagnostic variant name has no trace-safe characters")
+        return slug
 
 
 RAW_SKILL_AB_VARIANTS = (
@@ -103,7 +113,10 @@ def resolve_raw_skill_diagnostic_variants(
         )
     if len(set(names)) != len(names):
         raise ValueError("raw-skill diagnostic variants must be unique")
-    return tuple(available[name] for name in names)
+    selected = tuple(available[name] for name in names)
+    if len({item.trace_slug for item in selected}) != len(selected):
+        raise ValueError("raw-skill diagnostic trace labels must be unique")
+    return selected
 
 
 def select_stratified_tasks(

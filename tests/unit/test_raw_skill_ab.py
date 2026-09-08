@@ -94,6 +94,15 @@ class RawSkillAbTests(unittest.TestCase):
         self.assertEqual(selected, SKILLRL_SFT_CAUSAL_VARIANTS)
         self.assertTrue(all(item.top_p == 1.0 for item in selected))
 
+    def test_decimal_sampling_name_has_a_trace_safe_slug(self) -> None:
+        sampled = next(
+            item
+            for item in SKILLRL_SFT_CAUSAL_VARIANTS
+            if item.name == "no-skill-sampled-t0.4"
+        )
+
+        self.assertEqual(sampled.trace_slug, "no-skill-sampled-t0-4")
+
     def test_unknown_diagnostic_variant_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown raw-skill diagnostic"):
             resolve_raw_skill_diagnostic_variants(("missing",))

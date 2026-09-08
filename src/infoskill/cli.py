@@ -943,7 +943,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
             rollout_seconds = time.perf_counter() - rollout_started
             summary = summarize_probe_groups(groups)
             trace_path = trace_writer.write_diagnostic_groups(
-                label=f"raw-skill-ab-{variant.name}",
+                label=f"raw-skill-ab-{variant.trace_slug}",
                 groups=groups,
             )
             result = {
