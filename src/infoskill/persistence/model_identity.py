@@ -37,6 +37,11 @@ _PINNED_POLICY_MODELS = {
         revision="Alfworld-7B-SFT/checkpoint-140",
         sha256="ede304d8ae0fb27df55a9bcf22482b8a7d83626a4711f9525e0388f7b3d39d99",
     ),
+    "qwen2.5-7b-instruct": PinnedPolicyModel(
+        model_id="qwen2.5-7b-instruct",
+        revision="Qwen/Qwen2.5-7B-Instruct",
+        sha256="8305dee0a659a8f9e0650129eaaf584006338a42f237d071ef5cdbaed91fc14a",
+    ),
 }
 
 

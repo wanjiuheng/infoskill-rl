@@ -110,6 +110,21 @@ class PolicyModelIdentityTests(unittest.TestCase):
             "alfworld-7b-sft-checkpoint-140",
         )
 
+    def test_original_qwen_config_pins_registered_base_model(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b_instruct.yaml")
+        pinned = model_identity.get_pinned_policy_model(config.policy_model_id)
+
+        self.assertEqual(config.policy_model_id, "qwen2.5-7b-instruct")
+        self.assertEqual(
+            config.paths.policy_model,
+            "/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct",
+        )
+        self.assertEqual(pinned.revision, "Qwen/Qwen2.5-7B-Instruct")
+        self.assertEqual(
+            pinned.sha256,
+            "8305dee0a659a8f9e0650129eaaf584006338a42f237d071ef5cdbaed91fc14a",
+        )
+
     def test_policy_model_id_rejects_surrounding_whitespace(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
 
