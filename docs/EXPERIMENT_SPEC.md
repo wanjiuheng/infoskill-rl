@@ -74,6 +74,16 @@ general skills、检测类别中的全部 task skills 和 5 条 mistakes。该�
 出现 `find ...`、`hot ...` 等 `valid_seen` 措辞，因此这些任务上的 template 分类结果
 只能解释为分布外 heuristic，不能当成发布 SFT 生成逻辑的逐字复现，也不能暗中改用
 环境 task type 作为 oracle。需要验证这一因素时必须单独报告 oracle-category A/B。
+
+在进入 oracle-category A/B 前，先运行固定 12 条、单 runtime 的三项 SFT 因果诊断：
+`skillrl-sft-shell-no-skills-deterministic` 保留发布 SFT 的任务/观察规范化、五步历史、
+动作列表与输出协议，但完全移除检索及技能段；`no-skill-sampled-t0.4` 只在统一
+no-skill prompt 上将 greedy 改为带固定语义种子的 `temperature=0.4, top_p=1.0`
+采样；`skillrl-sft-exact-sampled-t0.4` 则只在 SFT exact prompt 上做相同采样。
+三项使用同一模型、12 个任务、环境配置、动作解析器、步数上限和 master seed，且在
+同一 VERL/vLLM runtime 中依次执行。采样只属于本诊断，正式 140 条评测、pilot 与
+formal 继续使用确定性解码。其结果强制标记 `diagnostic_only=true` 和
+`reportable_as_valid_seen=false`，不得用于 checkpoint 选择或论文主表。
 _Avoid_: mode-specific base prompt、system-message drift、raw-skill truncation、admissible leakage into compression、manual special-token assembly
 
 **Frozen Semantic Feature Encoder**:

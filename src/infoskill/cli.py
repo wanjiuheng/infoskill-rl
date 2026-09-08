@@ -92,6 +92,9 @@ def _parser() -> argparse.ArgumentParser:
             "template-skillrl",
             "skillrl-rl-exact",
             "skillrl-sft-exact",
+            "skillrl-sft-shell-no-skills-deterministic",
+            "no-skill-sampled-t0.4",
+            "skillrl-sft-exact-sampled-t0.4",
         ),
         help=(
             "run only the selected diagnostic variants; omission preserves "
@@ -699,6 +702,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         audit_raw_skill_prompt_budget_for_model,
         build_raw_skill_setup,
         build_skillrl_grpo_prompt_setup,
+        build_skillrl_sft_no_skills_prompt_setup,
         build_skillrl_sft_prompt_setup,
         build_verl_policy_evaluation,
     )
@@ -712,6 +716,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
     from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
     from infoskill.persistence import MetricLogger, ZstdJsonlTraceWriter
     from infoskill.persistence.model_identity import verify_policy_model_identity
+    from infoskill.rollout import GenerationParameters
 
     if VerlRuntime is None or VerlRuntimeConfig is None:
         raise RuntimeError("the pinned VERL runtime is unavailable")
@@ -735,12 +740,36 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
 
     setups = {}
     prompt_budgets = {}
+    conditioning_provenance = {}
     for variant in variants:
-        if variant.prompt_format == "skillrl_rl_exact":
+        if variant.policy_mode == "no_skill":
+            setup = None
+            conditioning_provenance[variant.name] = {
+                "retrieval_mode": None,
+                "prompt_format": "unified_no_skill",
+                "skills_injected": False,
+                "history_length": config.history_length,
+                "policy_prompt_schema_version": 1,
+                "diagnostic_only": True,
+            }
+            prompt_budgets[variant.name] = {
+                "raw_skill_block_count": 0,
+                "raw_skill_block_tokens_min": 0,
+                "raw_skill_block_tokens_max": 0,
+                "raw_skill_prompt_token_limit": config.max_prompt_tokens,
+                "raw_skill_block_fits_prompt_limit": True,
+            }
+        elif variant.prompt_format == "skillrl_rl_exact":
             setup = build_skillrl_grpo_prompt_setup(config)
         elif variant.prompt_format == "skillrl_sft_exact":
             setup = build_skillrl_sft_prompt_setup(config)
+        elif variant.prompt_format == "skillrl_sft_no_skills":
+            setup = build_skillrl_sft_no_skills_prompt_setup(config)
         else:
+            if variant.retrieval_mode is None:
+                raise ValueError(
+                    f"diagnostic variant {variant.name} requires retrieval"
+                )
             setup = build_raw_skill_setup(
                 config,
                 retrieval_queries=retrieval_queries,
@@ -748,11 +777,13 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
                 prompt_format=variant.prompt_format,
             )
         setups[variant.name] = setup
-        prompt_budgets[variant.name] = audit_raw_skill_prompt_budget_for_model(
-            setup,
-            model_path=config.paths.policy_model,
-            max_prompt_tokens=config.max_prompt_tokens,
-        )
+        if setup is not None:
+            conditioning_provenance[variant.name] = dict(setup.provenance)
+            prompt_budgets[variant.name] = audit_raw_skill_prompt_budget_for_model(
+                setup,
+                model_path=config.paths.policy_model,
+                max_prompt_tokens=config.max_prompt_tokens,
+            )
 
     policy_identity = verify_policy_model_identity(
         config.paths.policy_model,
@@ -794,6 +825,14 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
             "name": variant.name,
             "retrieval_mode": variant.retrieval_mode,
             "prompt_format": variant.prompt_format,
+            "policy_mode": variant.policy_mode,
+            "generation": {
+                "do_sample": variant.do_sample,
+                "temperature": variant.temperature,
+                "top_p": variant.top_p,
+                "max_new_tokens": config.max_response_tokens,
+                "master_seed": config.master_seed,
+            },
         }
         for variant in variants
     ]
@@ -822,10 +861,10 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
     resolved["policy_model_identity"] = policy_identity.as_dict()
     resolved["skill_conditioning"] = {
         name: {
-            **setup.provenance,
+            **conditioning_provenance[name],
             **prompt_budgets[name],
         }
-        for name, setup in setups.items()
+        for name in setups
     }
     _write_json(run_directory / "resolved_config.json", resolved)
     _write_json(
@@ -867,14 +906,24 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
     try:
         for variant in variants:
             setup = setups[variant.name]
+            mode = SkillMode(variant.policy_mode)
             collector = build_verl_policy_evaluation(
                 config,
-                mode=SkillMode.RAW_SKILL_PROMPT,
+                mode=mode,
                 backend=runtime,
-                conditioner=setup.conditioner,
+                conditioner=(None if setup is None else setup.conditioner),
                 environment_backend=args.environment_backend,
                 history_limit=(
-                    5 if variant.prompt_format == "skillrl_sft_exact" else None
+                    5
+                    if variant.prompt_format
+                    in {"skillrl_sft_exact", "skillrl_sft_no_skills"}
+                    else None
+                ),
+                generation_parameters=GenerationParameters(
+                    do_sample=variant.do_sample,
+                    temperature=variant.temperature,
+                    top_p=variant.top_p,
+                    max_new_tokens=config.max_response_tokens,
                 ),
             )
             rollout_started = time.perf_counter()
@@ -901,6 +950,10 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
                 "variant": variant.name,
                 "retrieval_mode": variant.retrieval_mode,
                 "prompt_format": variant.prompt_format,
+                "policy_mode": variant.policy_mode,
+                "do_sample": variant.do_sample,
+                "temperature": variant.temperature,
+                "top_p": variant.top_p,
                 "rollout_seconds": rollout_seconds,
                 "trace": str(trace_path),
                 **summary,

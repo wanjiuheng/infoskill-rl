@@ -11,6 +11,7 @@ from infoskill.conditioning import (
     NoSkillConditioner,
     RawSkillPromptConditioner,
     SkillRlGrpoPromptConditioner,
+    SkillRlSftNoSkillsPromptConditioner,
     SkillRlSftPromptConditioner,
     SkillConditioner,
     format_raw_skill_block,
@@ -104,6 +105,14 @@ def audit_raw_skill_prompt_budget(
         len(tokenizer.encode(block, add_special_tokens=False))  # type: ignore[attr-defined]
         for block in unique_blocks
     )
+    if not token_counts:
+        return {
+            "raw_skill_block_count": 0,
+            "raw_skill_block_tokens_min": 0,
+            "raw_skill_block_tokens_max": 0,
+            "raw_skill_prompt_token_limit": max_prompt_tokens,
+            "raw_skill_block_fits_prompt_limit": True,
+        }
     maximum = max(token_counts)
     return {
         "raw_skill_block_count": len(unique_blocks),
@@ -463,6 +472,62 @@ def build_skillrl_sft_prompt_setup(config: AppConfig) -> RawSkillSetup:
     )
 
 
+def build_skillrl_sft_no_skills_prompt_setup(config: AppConfig) -> RawSkillSetup:
+    """Build the released SFT prompt shell without retrieved experience.
+
+    The fixed library is loaded only to retain a complete, comparable artifact
+    provenance record; no retrieval is performed and no skill text is exposed
+    to the policy.
+    """
+
+    library = FixedSkillLibrary.load(config.paths.skill_bank)
+    skill_library_provenance = _load_skill_library_provenance(
+        library,
+        manifest_path=config.paths.skill_bank_manifest,
+    )
+    return RawSkillSetup(
+        conditioner=SkillRlSftNoSkillsPromptConditioner(history_length=5),
+        library=library,
+        provenance={
+            "retrieval_schema_version": 1,
+            "retrieval_mode": None,
+            "retrieval_query_source": None,
+            "task_text_normalization": "strip-terminal-period",
+            "observation_normalization": "strip-textworld-welcome-banner",
+            "prompt_format": "skillrl_sft_no_skills",
+            "prompt_reference": "Jianwen/SkillRL-SFT-Data ALFWorld parquet",
+            "skills_injected": False,
+            "step_zero_skill_injection": False,
+            "semantic_model_identity": None,
+            "skill_library_provenance_id": skill_library_provenance[
+                "provenance_id"
+            ],
+            "skill_library_provenance": skill_library_provenance,
+            "retrieval_query_count": 0,
+            "retrieval_plan_sha256": None,
+            "retrieval_plan": None,
+            "skill_bank_sha256": library.source_sha256,
+            "skill_count": (
+                len(library.general)
+                + len(library.task_specific)
+                + len(library.mistakes)
+            ),
+            "general_top_k": 0,
+            "task_top_k": 0,
+            "mistake_count": 0,
+            "history_length": 5,
+            "policy_prompt_schema_version": "skillrl-sft-alfworld-v1-no-skills",
+            "reference_scope": "released-sft-instruction-shell-without-skills",
+            "admissible_action_rendering": "unquoted-comma-separated",
+            "evaluation_action_pool": "all-current-environment-commands",
+            "action_resolution": "infoskill-current",
+            "environment_max_steps": config.max_steps,
+            "diagnostic_only": True,
+        },
+        skill_blocks=(),
+    )
+
+
 def _load_skill_library_provenance(
     library: FixedSkillLibrary,
     *,
@@ -614,8 +679,13 @@ def build_verl_policy_evaluation(
     conditioner: SkillConditioner | None = None,
     environment_backend: str = "native_batch",
     history_limit: int | None = None,
+    generation_parameters: GenerationParameters | None = None,
 ):
-    """Build deterministic no-skill/raw-skill evaluation on the VERL backend."""
+    """Build no-skill/raw-skill evaluation on the VERL backend.
+
+    Evaluation remains deterministic unless a diagnostic explicitly provides
+    generation parameters.
+    """
 
     if mode is SkillMode.NO_SKILL:
         if conditioner is not None:
@@ -642,11 +712,14 @@ def build_verl_policy_evaluation(
         max_steps=config.max_steps,
         history_limit=(config.history_length if history_limit is None else history_limit),
         invalid_action_penalty=0.01,
-        generation_parameters=GenerationParameters(
-            do_sample=False,
-            temperature=0.0,
-            top_p=1.0,
-            max_new_tokens=config.max_response_tokens,
+        generation_parameters=(
+            generation_parameters
+            or GenerationParameters(
+                do_sample=False,
+                temperature=0.0,
+                top_p=1.0,
+                max_new_tokens=config.max_response_tokens,
+            )
         ),
         environment_workers=1,
         environment_backend=environment_backend,  # type: ignore[arg-type]

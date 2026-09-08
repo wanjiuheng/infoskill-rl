@@ -52,7 +52,10 @@ class RunScriptTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact)", script)
+        self.assertIn(
+            "raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)",
+            script,
+        )
         self.assertIn(
             '--tasks-per-type "${RAW_SKILL_AB_TASKS_PER_TYPE}"',
             script,
@@ -64,7 +67,10 @@ class RunScriptTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact)", script)
+        self.assertIn(
+            "raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)",
+            script,
+        )
         self.assertIn(
             'RAW_SKILL_AB_ARGS+=(--variants skillrl-rl-exact)',
             script,
@@ -76,11 +82,28 @@ class RunScriptTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact)", script)
+        self.assertIn(
+            "raw-skill-ab|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)",
+            script,
+        )
         self.assertIn(
             'RAW_SKILL_AB_ARGS+=(--variants skillrl-sft-exact)',
             script,
         )
+
+    def test_skillrl_sft_causal_action_selects_three_causal_variants(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("skillrl-sft-causal", script)
+        for variant in (
+            "skillrl-sft-shell-no-skills-deterministic",
+            "no-skill-sampled-t0.4",
+            "skillrl-sft-exact-sampled-t0.4",
+        ):
+            self.assertIn(variant, script)
 
 
 if __name__ == "__main__":

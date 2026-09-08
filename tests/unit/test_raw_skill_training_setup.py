@@ -3,19 +3,78 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from infoskill.app_config import AppConfig
 from infoskill.builders import (
     audit_raw_skill_prompt_budget,
     build_raw_skill_setup,
     build_skillrl_grpo_prompt_setup,
+    build_skillrl_sft_no_skills_prompt_setup,
     build_skillrl_sft_prompt_setup,
+    build_verl_policy_evaluation,
 )
 from infoskill.conditioning import ConditioningRequest
 from infoskill.domain.state import CanonicalAgentState, render_state_views
+from infoskill.config import SkillMode
+from infoskill.rollout import GenerationParameters
+
+
+class _WordTokenizer:
+    def encode(self, text: str, *, add_special_tokens: bool) -> list[str]:
+        del add_special_tokens
+        return text.split()
 
 
 class RawSkillTrainingSetupTests(unittest.TestCase):
+    def test_skillrl_sft_no_skills_setup_has_no_retrieval_or_skill_budget(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+        skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"
+        config = replace(
+            config,
+            paths=replace(
+                config.paths,
+                skill_bank=str(skill_bank),
+                skill_bank_manifest=str(skill_bank.with_name("skills.manifest.json")),
+            ),
+        )
+
+        setup = build_skillrl_sft_no_skills_prompt_setup(config)
+        audit = audit_raw_skill_prompt_budget(
+            setup,
+            tokenizer=_WordTokenizer(),
+            max_prompt_tokens=4096,
+        )
+
+        self.assertEqual(setup.provenance["retrieval_mode"], None)
+        self.assertEqual(setup.provenance["prompt_format"], "skillrl_sft_no_skills")
+        self.assertFalse(setup.provenance["skills_injected"])
+        self.assertEqual(setup.skill_blocks, ())
+        self.assertEqual(audit["raw_skill_block_count"], 0)
+        self.assertEqual(audit["raw_skill_block_tokens_max"], 0)
+
+    def test_verl_evaluation_sampling_override_is_explicit(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+        parameters = GenerationParameters(
+            do_sample=True,
+            temperature=0.4,
+            top_p=1.0,
+            max_new_tokens=config.max_response_tokens,
+        )
+
+        with patch(
+            "infoskill.builders.AlfworldEnvironmentFactory.from_paths",
+            return_value=object(),
+        ):
+            collector = build_verl_policy_evaluation(
+                config,
+                mode=SkillMode.NO_SKILL,
+                backend=object(),
+                generation_parameters=parameters,
+            )
+
+        self.assertEqual(collector._generation_parameters, parameters)
+
     def test_skillrl_sft_setup_uses_dataset_observed_prompt_shape(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
         skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"

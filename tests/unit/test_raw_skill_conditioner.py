@@ -8,6 +8,7 @@ from infoskill.conditioning import (
     RawSkillPromptConditioner,
     SkillRlGrpoPromptConditioner,
     SkillRlSftPromptConditioner,
+    SkillRlSftNoSkillsPromptConditioner,
     format_raw_skill_block,
 )
 from infoskill.domain import (
@@ -19,6 +20,43 @@ from infoskill.skills import FixedSkillLibrary, TemplateRetriever
 
 
 class RawSkillConditionerTests(unittest.TestCase):
+    def test_skillrl_sft_no_skills_keeps_shell_without_skill_section(self) -> None:
+        conditioner = SkillRlSftNoSkillsPromptConditioner(history_length=5)
+        state = CanonicalAgentState(
+            task_id="task",
+            split="valid_seen",
+            task_type="pick_and_place_simple",
+            goal="put a book in sofa.",
+            step_index=0,
+            observation=(
+                "-= Welcome to TextWorld, ALFRED! =-\n\n"
+                "You are in the middle of a room."
+            ),
+            history=(),
+            admissible_commands=("go to sofa 1", "look"),
+        )
+        context = conditioner.prepare_group(state)
+        conditioned = conditioner.condition_batch(
+            (
+                ConditioningRequest(
+                    state=state,
+                    views=render_state_views(state),
+                    rollout_id=0,
+                    global_update=0,
+                    latent_seed=1,
+                ),
+            ),
+            context,
+        )[0]
+
+        self.assertEqual(context.candidate_skill_ids, ())
+        self.assertEqual(conditioned.candidate_skill_ids, ())
+        self.assertNotIn("Retrieved Relevant Experience", conditioned.user_message)
+        self.assertNotIn("Welcome to TextWorld", conditioned.user_message)
+        self.assertIn("Your task is to: put a book in sofa\n", conditioned.user_message)
+        self.assertIn("## Current Progress\n", conditioned.user_message)
+        self.assertFalse(conditioned.conditioning_trace["skills_injected"])
+
     def test_skillrl_sft_prompt_injects_skills_on_initial_step(self) -> None:
         library = FixedSkillLibrary.load(
             Path(__file__).parents[1] / "fixtures" / "skills.json"

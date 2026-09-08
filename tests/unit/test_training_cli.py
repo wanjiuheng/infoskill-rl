@@ -420,6 +420,28 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(probe.call_args.args[1].variants, ["skillrl-sft-exact"])
 
+    def test_raw_skill_ab_accepts_the_sft_causal_variants(self) -> None:
+        variants = [
+            "skillrl-sft-shell-no-skills-deterministic",
+            "no-skill-sampled-t0.4",
+            "skillrl-sft-exact-sampled-t0.4",
+        ]
+        arguments = [
+            "raw-skill-ab",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--num-gpus",
+            "4",
+            "--variants",
+            *variants,
+        ]
+
+        with patch("infoskill.cli._raw_skill_ab", return_value=0, create=True) as probe:
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(probe.call_args.args[1].variants, variants)
+
 
 if __name__ == "__main__":
     unittest.main()

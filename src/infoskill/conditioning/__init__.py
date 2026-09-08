@@ -12,6 +12,7 @@ from .raw_skill import (
     RawSkillPromptConditioner,
     SkillRlGrpoPromptConditioner,
     SkillRlSftPromptConditioner,
+    SkillRlSftNoSkillsPromptConditioner,
     format_raw_skill_block,
 )
 
@@ -34,6 +35,7 @@ __all__ = [
     "RawSkillPromptConditioner",
     "SkillRlGrpoPromptConditioner",
     "SkillRlSftPromptConditioner",
+    "SkillRlSftNoSkillsPromptConditioner",
     "SkillConditioner",
     "format_raw_skill_block",
 ]

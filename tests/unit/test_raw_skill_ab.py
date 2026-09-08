@@ -6,6 +6,7 @@ from collections import Counter
 from infoskill.diagnostics.raw_skill_ab import (
     RAW_SKILL_AB_VARIANTS,
     SKILLRL_RL_EXACT_VARIANT,
+    SKILLRL_SFT_CAUSAL_VARIANTS,
     SKILLRL_SFT_EXACT_VARIANT,
     resolve_raw_skill_diagnostic_variants,
     select_stratified_tasks,
@@ -50,6 +51,48 @@ class RawSkillAbTests(unittest.TestCase):
             SKILLRL_SFT_EXACT_VARIANT.prompt_format,
             "skillrl_sft_exact",
         )
+
+    def test_skillrl_sft_causal_matrix_changes_one_axis_per_cell(self) -> None:
+        self.assertEqual(
+            tuple(
+                (
+                    item.name,
+                    item.policy_mode,
+                    item.prompt_format,
+                    item.do_sample,
+                    item.temperature,
+                )
+                for item in SKILLRL_SFT_CAUSAL_VARIANTS
+            ),
+            (
+                (
+                    "skillrl-sft-shell-no-skills-deterministic",
+                    "raw_skill_prompt",
+                    "skillrl_sft_no_skills",
+                    False,
+                    0.0,
+                ),
+                (
+                    "no-skill-sampled-t0.4",
+                    "no_skill",
+                    "unified_no_skill",
+                    True,
+                    0.4,
+                ),
+                (
+                    "skillrl-sft-exact-sampled-t0.4",
+                    "raw_skill_prompt",
+                    "skillrl_sft_exact",
+                    True,
+                    0.4,
+                ),
+            ),
+        )
+        selected = resolve_raw_skill_diagnostic_variants(
+            tuple(item.name for item in SKILLRL_SFT_CAUSAL_VARIANTS)
+        )
+        self.assertEqual(selected, SKILLRL_SFT_CAUSAL_VARIANTS)
+        self.assertTrue(all(item.top_p == 1.0 for item in selected))
 
     def test_unknown_diagnostic_variant_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown raw-skill diagnostic"):

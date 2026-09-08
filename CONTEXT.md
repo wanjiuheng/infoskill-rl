@@ -85,6 +85,12 @@ prompt 截断，但检索类别匹配弱、轨迹大量退化为 `look`/旧动�
 使用独立 `Examine Skills`，两者并不逐字一致。`valid_seen` 中的 `find ...`、`hot ...`
 等表达也未出现在已审计 SFT 任务文本中，属于训练文本分布外措辞，不允许在 exact 诊断
 中静默使用环境 task type 进行 oracle 分类；如需验证类别归因，应另做显式 oracle A/B。
+
+下一步先做三项单因素 SFT 因果诊断，而不是直接改技能或换基座：固定同一 12 条任务、
+同一 seed 和单个 runtime，分别测 SFT 外壳但无技能的确定性版本、统一 no-skill
+prompt 的 `temperature=0.4` 采样版本、SFT exact prompt 的 `temperature=0.4` 采样版本。
+这三项用于区分“提示词外壳”“确定性解码”“技能内容”三种可能原因；正式评测仍保持
+greedy，诊断结果不得当作 140 条 `valid_seen` 成功率。
 _Avoid_: unrelated baseline、different evaluation pipeline
 
 ## Skills and State

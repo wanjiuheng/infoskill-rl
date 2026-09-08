@@ -242,6 +242,59 @@ class SkillRlSftPromptConditioner:
         return tuple(conditioned)
 
 
+class SkillRlSftNoSkillsPromptConditioner:
+    """Keep the released SFT instruction shell while injecting no skills.
+
+    This diagnostic conditioner isolates the prompt-shape effect from the
+    retrieved-experience effect.  It deliberately performs no retrieval.
+    """
+
+    def __init__(self, *, history_length: int = 5) -> None:
+        if history_length != 5:
+            raise ValueError("SkillRL SFT prompt requires history_length=5")
+        self._history_length = history_length
+
+    def prepare_group(self, initial_state: CanonicalAgentState) -> ConditioningContext:
+        del initial_state
+        return ConditioningContext(candidate_skill_ids=())
+
+    def condition_batch(
+        self,
+        requests: tuple[ConditioningRequest, ...],
+        context: ConditioningContext,
+    ) -> tuple[ConditionedPolicyInput, ...]:
+        if context.retrieval is not None or context.candidate_skill_ids:
+            raise ValueError("SkillRL SFT no-skills prompt forbids retrieval")
+        conditioned = []
+        for request in requests:
+            state = request.state
+            history_limit = (
+                request.history_limit
+                if request.history_limit is not None
+                else self._history_length
+            )
+            recent = state.history[-history_limit:] if history_limit else ()
+            message = _render_skillrl_sft_message(
+                state,
+                skill_block=None,
+                recent_history=recent,
+            )
+            omitted = max(0, len(state.history) - history_limit)
+            conditioned.append(
+                ConditionedPolicyInput(
+                    user_message=message,
+                    candidate_skill_ids=(),
+                    conditioning_trace={
+                        "prompt_protocol": "skillrl-sft-alfworld-v1-no-skills",
+                        "skills_injected": False,
+                    },
+                    history_entries_omitted=omitted,
+                    history_entries_omitted_by_window=omitted,
+                )
+            )
+        return tuple(conditioned)
+
+
 def _skillrl_admissible_actions(state: CanonicalAgentState) -> str:
     return "\n ".join(
         f"'{command}'"
@@ -270,16 +323,19 @@ def _render_skillrl_sft_history(entries: Sequence[AgentHistoryEntry]) -> str:
 def _render_skillrl_sft_message(
     state: CanonicalAgentState,
     *,
-    skill_block: str,
+    skill_block: str | None,
     recent_history: Sequence[AgentHistoryEntry],
 ) -> str:
     prefix = (
         "You are an expert agent operating in the ALFRED Embodied Environment.\n"
         f"Your task is to: {_normalize_skillrl_sft_task(state.goal)}\n\n"
-        "## Retrieved Relevant Experience\n\n"
-        f"{skill_block}\n\n"
-        "## Current Progress\n"
     )
+    if skill_block is not None:
+        prefix += (
+            "## Retrieved Relevant Experience\n\n"
+            f"{skill_block}\n\n"
+        )
+    prefix += "## Current Progress\n"
     actions = ", ".join(state.admissible_commands)
     observation = _normalize_skillrl_sft_observation(state.observation)
     if state.step_index == 0:

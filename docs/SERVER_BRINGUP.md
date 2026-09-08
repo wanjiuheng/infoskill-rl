@@ -616,6 +616,35 @@ echo "pid=${PID} log=${LOG}"
 发布训练任务文本未覆盖的 `find ...`、`hot ...`，其结果属于分布外措辞诊断，不能据此
 宣称 template 分类器逐字复现了数据生成过程，也不能在本入口中静默改用环境 task type。
 
+在做 oracle 分类或替换基座前，先运行三项 SFT 因果诊断。该入口固定复用同一 12 条
+任务、`master_seed=0`、动作解析器和一个 VERL/vLLM runtime；三组依次是：SFT
+外壳但无技能的 greedy、统一 no-skill prompt 的 `temperature=0.4` 采样、SFT exact
+prompt 的 `temperature=0.4` 采样。它不训练、不写 checkpoint，也不改变任何正式评测
+默认值。预计四卡总耗时约 13–18 分钟，可后台运行：
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="logs/skillrl-sft-causal-${STAMP}.log"
+nohup env \
+  GPUS=0,1,2,3 \
+  RAW_SKILL_AB_TASKS_PER_TYPE=2 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=skillrl-sft-causal-valid-seen-12 \
+  bash scripts/run_alfworld.sh skillrl-sft-causal raw_skill_prompt \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+`raw_skill_ab_summary.json`、`resolved_config.json` 与 `provenance.json` 会逐项记录
+`policy_mode`、prompt 格式、`do_sample`、temperature、top-p、最大输出长度和 seed；
+三份 trace 仍保留每步模型原始输出、动作解析与环境结果。该矩阵强制标记为诊断，不能
+替代 140 条正式 `valid_seen`。
+
 ```bash
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)

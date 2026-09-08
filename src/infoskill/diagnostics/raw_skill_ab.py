@@ -11,13 +11,27 @@ from infoskill.integrations.alfworld import ALFWORLD_TASK_TYPES
 @dataclass(frozen=True, slots=True)
 class RawSkillAbVariant:
     name: str
-    retrieval_mode: Literal["embedding", "template"]
+    retrieval_mode: Literal["embedding", "template"] | None
     prompt_format: Literal[
         "full",
         "skillrl",
         "skillrl_rl_exact",
         "skillrl_sft_exact",
+        "skillrl_sft_no_skills",
+        "unified_no_skill",
     ]
+    policy_mode: Literal["no_skill", "raw_skill_prompt"] = "raw_skill_prompt"
+    do_sample: bool = False
+    temperature: float = 0.0
+    top_p: float = 1.0
+
+    def __post_init__(self) -> None:
+        if self.do_sample and self.temperature <= 0:
+            raise ValueError("sampled diagnostic variants require temperature > 0")
+        if not self.do_sample and self.temperature != 0:
+            raise ValueError("deterministic diagnostic variants require temperature=0")
+        if not 0 < self.top_p <= 1:
+            raise ValueError("diagnostic variant top_p must be in (0, 1]")
 
 
 RAW_SKILL_AB_VARIANTS = (
@@ -41,6 +55,32 @@ SKILLRL_SFT_EXACT_VARIANT = RawSkillAbVariant(
     "skillrl_sft_exact",
 )
 
+# A three-cell causal diagnostic for the released SFT policy.  These variants
+# intentionally remain outside RAW_SKILL_AB_VARIANTS so the registered default
+# matrix and formal deterministic evaluation are unchanged.
+SKILLRL_SFT_CAUSAL_VARIANTS = (
+    RawSkillAbVariant(
+        "skillrl-sft-shell-no-skills-deterministic",
+        None,
+        "skillrl_sft_no_skills",
+    ),
+    RawSkillAbVariant(
+        "no-skill-sampled-t0.4",
+        None,
+        "unified_no_skill",
+        policy_mode="no_skill",
+        do_sample=True,
+        temperature=0.4,
+    ),
+    RawSkillAbVariant(
+        "skillrl-sft-exact-sampled-t0.4",
+        "template",
+        "skillrl_sft_exact",
+        do_sample=True,
+        temperature=0.4,
+    ),
+)
+
 
 def resolve_raw_skill_diagnostic_variants(
     names: Sequence[str] | None,
@@ -53,6 +93,7 @@ def resolve_raw_skill_diagnostic_variants(
             *RAW_SKILL_AB_VARIANTS,
             SKILLRL_RL_EXACT_VARIANT,
             SKILLRL_SFT_EXACT_VARIANT,
+            *SKILLRL_SFT_CAUSAL_VARIANTS,
         )
     }
     unknown = tuple(name for name in names if name not in available)
