@@ -93,7 +93,7 @@ GPUS=0 RETRIEVAL_MODE=template \
 # 训练后的 LoRA + INFO-SKILL 模块；先在 YAML 中填写 checkpoint/adapter
 GPUS=0 bash scripts/run_alfworld.sh eval infoskill
 
-# 与 M0 训练完全相同的四卡 VERL/vLLM 路径，评测共同 SFT 起点（update 0）
+# 与 M0 训练完全相同的四卡 VERL/vLLM 路径，评测共同原版 Qwen 起点（update 0）
 GPUS=0,1,2,3 EVAL_BACKEND=verl \
   RUN_NAME=m0-valid-seen-update0 \
   bash scripts/run_alfworld.sh eval no_skill
@@ -159,7 +159,7 @@ GPUS=0,1 PROFILE=smoke MAX_UPDATES=2 \
 正式结果只有在 140 条任务全部得到明确终态、六类固定分母一致且无基础设施失败时才标记 complete。
 
 补测已有 M0 checkpoint 时，推荐使用 `scripts/run_m0_valid_seen_pair.sh`。它先评测
-共同 SFT 起点，再在全新的运行时中加载指定 checkpoint；两侧固定使用相同的
+共同原版 Qwen 起点，再在全新的运行时中加载指定 checkpoint；两侧固定使用相同的
 `valid_seen` manifest、任务顺序、环境种子、greedy 解码、prompt、最大步数和
 VERL/vLLM 调用链。checkpoint 的 update 号只用于输出标签，不参与随机数派生。
 checkpoint 不完整、不是 portable、训练模式或基座模型指纹不匹配时会直接停止，
@@ -176,8 +176,10 @@ prompt 仍逐步严格检查，超限时先移除最旧历史并记录，历史�
 Qwen2.5-7B BF16 的 cross-backend Hybrid Prefix parity 结论阻塞。A800 上的真实
 smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植 checkpoint
 恢复已经通过；进入 M1 开发前的长稳门使用与正式训练相同形状的 25-update pilot。
-首轮 Qwen2.5-7B 训练统一从配置中的 `Alfworld-7B-SFT/checkpoint-140` 完整模型
-独立初始化，M0、`raw_skill_prompt` 与 M1 不互相 warm-start。
+首轮 Qwen2.5-7B 主实验统一从配置中的原版 `Qwen2.5-7B-Instruct` 完整模型
+独立初始化，M0、`raw_skill_prompt` 与 M1 不互相 warm-start。发布的
+`Alfworld-7B-SFT/checkpoint-140` 仅由 `configs/alfworld_qwen25_7b_sft.yaml`
+保留为明确的 SFT 对照，不再是默认训练起点。
 `raw_skill_prompt` 尚需在目标 Linux/A800 服务器通过真实 smoke 与 checkpoint
 评测门；`infoskill` 顶层训练仍保持 fail-fast。M1 已具备独立可测试的 online
 fidelity/rate + offline grounding/rate Auxiliary Updater，但 trajectory

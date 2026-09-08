@@ -55,3 +55,7 @@ reference policy 不再按 VERL 默认方式创建并 CPU-offload 第二套 Qwen
 M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` 在同任务组内标准化得到的 Shaped Policy Advantage，以保留合法动作密集反馈；M1 的 fidelity predictor 改用仅由二值 `won` 组内标准化得到的 Task-Success Fidelity Target。两者使用同一批轨迹但不能共用一个无语义区分的 `advantage` 接口。每个 update 同时记录混合结果组、全失败组、全成功组、Shaping-Only Group、零策略信号组以及按任务类型拆分的任务成功信号覆盖率。
 
 75-update M0 审计发现 596 个具有非零策略优势的组中有 351 个组内 `won` 恒定，其梯度只来自非法动作数差异；由于组内标准化会消除正比例系数，单纯继续减小 `0.01` 不能削弱这些组中的相对整形信号。若 fidelity 继续拟合同一个整形优势，压缩器可能主要学习动作合法性而不是技能对任务成功的贡献。完全去除策略整形会丢失稀疏成功奖励下的可用反馈并改变已验证的 SkillRL 相近基线，因此不采用；分离两个目标保留策略学习信号，同时让 fidelity 的含义可解释且可审计。
+
+## D012：首轮 7B 主实验改用原版 Qwen2.5-7B-Instruct 初始化
+
+首轮 M0、`raw_skill_prompt` 与 M1 的共同初始化由 `Alfworld-7B-SFT/checkpoint-140` 改为注册指纹的原版 `Qwen2.5-7B-Instruct`。在固定 140 条 `valid_seen`、统一 no-skill prompt、greedy 解码和同一 VERL/vLLM 评测链上，原版 Qwen 在有限显式动作标记兼容后达到 macro success `0.21777`、overall success `33/140`、非法动作率 `0.10108`；SFT 模型为 macro `0.14713`、overall `25/140`、非法动作率 `0.55350`。原版 Qwen 结果也与旧独立框架的 `31/140` 接近，且所有兼容动作仍要求与当步 `admissible_commands` 精确匹配。因此正式主对比统一从原版 Qwen 独立开始，SFT 权重只保留为明确配置的附加对照；此前以 SFT 为起点的 M0 训练仅作为工程闭环证据，不与新主实验曲线拼接或用于选模。

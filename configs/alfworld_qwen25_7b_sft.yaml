@@ -1,6 +1,6 @@
 paths:
-  # Main 7B protocol starts from the registered original instruct model.
-  policy_model: /root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct
+  # Retained SFT comparison initialization; it is no longer the main 7B default.
+  policy_model: /root/autodl-tmp/wjh/models/Alfworld-7B-SFT/checkpoint-140
   policy_adapter: null
   semantic_model: /root/autodl-tmp/wjh/models/Qwen/Qwen3-Embedding-0.6B
   skillrl_source: /root/autodl-tmp/wjh/alfworld_eval/SkillRL
@@ -10,19 +10,15 @@ paths:
   skill_bank: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/memory_data/alfworld/claude_style_skills.json
   skill_bank_manifest: configs/alfworld_skill_bank_manifest.json
   output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
-  # Required only for mode=infoskill. Point at the exported inference .pt file.
   infoskill_checkpoint: null
 
-# Selects the immutable shared 7B initialization registered in code.
-# The local path may move, but training rejects any content mismatch.
-policy_model_id: qwen2.5-7b-instruct
+policy_model_id: alfworld-7b-sft-checkpoint-140
 
 max_steps: 30
 history_length: 2
 max_prompt_tokens: 4096
 max_response_tokens: 256
 
-# Main setting is embedding. Change to template only for the explicit ablation.
 retrieval_mode: embedding
 general_top_k: 6
 task_top_k: 6

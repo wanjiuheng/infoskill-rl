@@ -102,8 +102,17 @@ class PolicyModelIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "weight files"):
             fingerprint_policy_model(model)
 
-    def test_primary_config_pins_the_verified_sft_fingerprint(self) -> None:
+    def test_primary_config_pins_the_registered_base_model(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+
+        self.assertEqual(config.policy_model_id, "qwen2.5-7b-instruct")
+        self.assertEqual(
+            config.paths.policy_model,
+            "/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct",
+        )
+
+    def test_sft_comparison_config_remains_registered(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b_sft.yaml")
 
         self.assertEqual(
             config.policy_model_id,
@@ -129,7 +138,7 @@ class PolicyModelIdentityTests(unittest.TestCase):
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
 
         with self.assertRaisesRegex(ValueError, "surrounding whitespace"):
-            replace(config, policy_model_id=" alfworld-7b-sft-checkpoint-140 ").validate()
+            replace(config, policy_model_id=" qwen2.5-7b-instruct ").validate()
 
     def test_m0_rejects_adapter_as_shared_initialization(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
@@ -167,7 +176,7 @@ class PolicyModelIdentityTests(unittest.TestCase):
 
         verify.assert_called_once_with(
             config.paths.policy_model,
-            model_id="alfworld-7b-sft-checkpoint-140",
+            model_id="qwen2.5-7b-instruct",
         )
         discover.assert_not_called()
 

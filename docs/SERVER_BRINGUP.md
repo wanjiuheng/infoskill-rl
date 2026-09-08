@@ -62,13 +62,16 @@ export CONFIG=configs/alfworld_qwen25_7b.local.yaml
 `policy_model` 可以放在不同的绝对路径，但训练前必须验证它确实是约定的共同初始化，
 而不是另一个同名目录。下面的命令只读模型配置、tokenizer 与权重并输出组合 SHA-256，
 不会加载 GPU；首轮 7B 的 `sha256` 必须为
-`ede304d8ae0fb27df55a9bcf22482b8a7d83626a4711f9525e0388f7b3d39d99`：
+`8305dee0a659a8f9e0650129eaaf584006338a42f237d071ef5cdbaed91fc14a`：
 
 ```bash
 PYTHONPATH=src python -m infoskill.persistence.model_identity \
-  /root/autodl-tmp/wjh/models/Alfworld-7B-SFT/checkpoint-140 \
-  --model-id alfworld-7b-sft-checkpoint-140
+  /root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct \
+  --model-id qwen2.5-7b-instruct
 ```
+
+若需要复现旧 SFT 对照，复制
+`configs/alfworld_qwen25_7b_sft.yaml`，不要把主配置的模型 ID 临时改回 SFT。
 
 YAML 只保存 `policy_model_id`，可信 revision 与 SHA-256 独立登记在代码中，避免同时
 修改模型路径和本地指纹绕过校验。训练入口会在启动 Ray/GPU 前复算并 fail-fast；实际
@@ -288,7 +291,7 @@ GPUS=0,1,2,3 PROFILE=formal RUN_NAME=m0-formal \
 ### 用固定 140 条 valid_seen 补测旧 M0 pilot
 
 旧版 pilot 若只保存了 train-monitor 结果，不需要重训即可补测。下面的包装脚本会
-依次评测共同 SFT 起点（update 0）和 portable checkpoint；两次均使用四卡
+依次评测共同原版 Qwen 起点（update 0）和 portable checkpoint；两次均使用四卡
 VERL/vLLM、固定 140 条 `valid_seen` 与完全相同的确定性随机协议。它不会修改源
 checkpoint，但会占用指定 GPU，并在 `runs/` 新建两份完整评测目录。
 
@@ -558,6 +561,7 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 LOG="logs/skillrl-rl-exact-${STAMP}.log"
 nohup env \
   GPUS=0,1,2,3 \
+  CONFIG=configs/alfworld_qwen25_7b_sft.yaml \
   RAW_SKILL_AB_TASKS_PER_TYPE=2 \
   PERSISTENT_ROLLOUT_SESSION=1 \
   ENVIRONMENT_BACKEND=native_batch \
@@ -589,6 +593,7 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 LOG="logs/skillrl-sft-exact-${STAMP}.log"
 nohup env \
   GPUS=0,1,2,3 \
+  CONFIG=configs/alfworld_qwen25_7b_sft.yaml \
   RAW_SKILL_AB_TASKS_PER_TYPE=2 \
   PERSISTENT_ROLLOUT_SESSION=1 \
   ENVIRONMENT_BACKEND=native_batch \
@@ -628,6 +633,7 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 LOG="logs/skillrl-sft-causal-${STAMP}.log"
 nohup env \
   GPUS=0,1,2,3 \
+  CONFIG=configs/alfworld_qwen25_7b_sft.yaml \
   RAW_SKILL_AB_TASKS_PER_TYPE=2 \
   PERSISTENT_ROLLOUT_SESSION=1 \
   ENVIRONMENT_BACKEND=native_batch \
@@ -658,6 +664,7 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 LOG="logs/unified-skill-causal-${STAMP}.log"
 nohup env \
   GPUS=0,1,2,3 \
+  CONFIG=configs/alfworld_qwen25_7b_sft.yaml \
   RAW_SKILL_AB_TASKS_PER_TYPE=2 \
   PERSISTENT_ROLLOUT_SESSION=1 \
   ENVIRONMENT_BACKEND=native_batch \
