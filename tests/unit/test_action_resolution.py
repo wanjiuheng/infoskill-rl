@@ -60,6 +60,19 @@ class ResolveActionTests(unittest.TestCase):
         self.assertTrue(result.is_executable)
         self.assertFalse(result.format_compliant)
 
+    def test_mixed_square_opener_and_angle_closer_with_bracket_resolves(self) -> None:
+        result = resolve_action(
+            "<think>Go to the cabinet.</think>\n[action> go to cabinet 1 </action>]",
+            ("look", "go to cabinet 1"),
+        )
+
+        self.assertEqual(result.candidate, "go to cabinet 1")
+        self.assertEqual(result.resolved_action, "go to cabinet 1")
+        self.assertEqual(result.extraction_method, "action_tag")
+        self.assertTrue(result.is_executable)
+        self.assertTrue(result.had_action_tag)
+        self.assertFalse(result.format_compliant)
+
     def test_unclosed_square_action_marker_resolves_on_final_line(self) -> None:
         result = resolve_action(
             "<think>Examine the desk.</think>\n[action] examine desk 1",

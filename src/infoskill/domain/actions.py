@@ -17,7 +17,7 @@ _EXPLICIT_SQUARE_ACTION_PREFIX = re.compile(
     re.IGNORECASE,
 )
 _EXPLICIT_SQUARE_ACTION_SUFFIX = re.compile(
-    r"\s*(?:\[/action\]|</action>)\s*$",
+    r"\s*(?:\[/action\]|</action>\]?)\s*$",
     re.IGNORECASE,
 )
 
