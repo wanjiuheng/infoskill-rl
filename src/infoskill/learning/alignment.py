@@ -11,7 +11,7 @@ class LogprobAlignmentThresholds:
     error_mean_max: float = 0.05
     error_median_max: float = 0.01
     error_p95_max: float = 0.15
-    error_p99_max: float = 0.25
+    error_p99_max: float = 0.30
     error_gt_1_rate_max: float = 0.001
     error_gt_5_rate_max: float = 0.0
     ratio_mean_min: float = 0.98

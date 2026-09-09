@@ -79,6 +79,14 @@ logprob 分桶写入 `rollout-recompute-alignment-failure.json`。下一步从�
 原地恢复以复现首个 update，先用该产物区分 full 长上下文的正常 BF16 尾差与
 padding/EOS、rank 或样本重排错误，再决定是否修改任何门禁或实现。
 
+复现 benchmark 保存的完整分布确认只有 P99 超过旧门限：mean=`0.03010`、
+median=`0.00267`、P95=`0.14057`、P99=`0.28432`、误差大于 `1` 的比例
+=`0.0212%`、误差大于 `5` 的比例=`0`、ratio mean=`0.99976`，且最大误差不在首尾
+token。作为对照，同一原版 Qwen 的 no-skill 首更新 P99=`0.24966`，旧 `0.25`
+门限只留 `0.00034` 余量，实际过度贴合单次 no-skill 观测。经确认，统一 P99 门限
+校准为 `0.30`，其他六项门限不变，且所有模式必须使用同一阈值；下一步以单个正式
+形状 benchmark update 验证 optimizer 与 checkpoint 链路，不直接恢复 50 updates。
+
 上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
 框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成
 负向条件效应。进一步核对锁定 SkillRL 源码后确认，其 GRPO prompt 与 SFT prompt、

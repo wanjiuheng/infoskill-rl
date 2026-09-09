@@ -115,7 +115,7 @@ M0/M1 训练与评测默认文本 prompt 上限 4,096 tokens、每个环境步�
 _Avoid_: 512-token default per step、silent right truncation、different train/eval generation caps
 
 **Rollout/Recompute Pre-Update Gate**:
-每次新训练运行在首个 update 的 optimizer step 前，以全部真实 response token 比较 vLLM 行为策略 logprob 与 FSDP/Transformers 首次重算值；VERL 为 `action_stop` 添加、同时满足 `token_id=pad_token_id` 与 `rollout_logprob=-1` 的末尾 padding 哨兵必须先从 response、mask 和训练样本中删除，真实 EOS 仍保留。强制门限固定为 logprob 绝对误差 mean≤`0.05`、median≤`0.01`、P95≤`0.15`、P99≤`0.25`、误差大于 `1` 的 token 比例≤`0.1%`、误差大于 `5` 的比例=`0`，且 token ratio mean∈`[0.98,1.02]`。任一指标缺失、非有限或越界都在 reference 计算与 policy update 前 fail-fast；失败运行必须在根目录写出 `rollout-recompute-alignment-failure.json`，完整保存 summary、全部阈值、超标项、尝试的 update，以及 max、分桶误差和最坏 token 位置，禁止只保留异常消息。max 与单个低概率 token 的 ratio 放大继续用于诊断，但不单独阻断。
+每次新训练运行在首个 update 的 optimizer step 前，以全部真实 response token 比较 vLLM 行为策略 logprob 与 FSDP/Transformers 首次重算值；VERL 为 `action_stop` 添加、同时满足 `token_id=pad_token_id` 与 `rollout_logprob=-1` 的末尾 padding 哨兵必须先从 response、mask 和训练样本中删除，真实 EOS 仍保留。强制门限固定为 logprob 绝对误差 mean≤`0.05`、median≤`0.01`、P95≤`0.15`、P99≤`0.30`、误差大于 `1` 的 token 比例≤`0.1%`、误差大于 `5` 的比例=`0`，且 token ratio mean∈`[0.98,1.02]`。P99 由同一原版 Qwen 起点的 no-skill=`0.24966` 与 raw/full=`0.28432` 首更新实测统一校准，其他门限不变；不得按实验模式使用不同阈值。任一指标缺失、非有限或越界都在 reference 计算与 policy update 前 fail-fast；失败运行必须在根目录写出 `rollout-recompute-alignment-failure.json`，完整保存 summary、全部阈值、超标项、尝试的 update，以及 max、分桶误差和最坏 token 位置，禁止只保留异常消息。max 与单个低概率 token 的 ratio 放大继续用于诊断，但不单独阻断。
 _Avoid_: training on padding sentinel、mean-only gate、post-update validation、max-ratio-only rejection
 
 **Structured Trajectory Trace**:

@@ -65,3 +65,7 @@ M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` �
 `raw_skill_prompt` 的正式模型可见技能块继续采用 `full`：保留检索所得候选的 ID、type、category 及全部原始语义字段。`compact` v1 保留为显式消融；它不改变检索算法、候选数、候选 ID、候选顺序或逐任务检索计划，只从模型可见文本移除存储 ID、重复 type 与 `why_it_happens`。
 
 固定原版 Qwen、140 条 `valid_seen`、检索计划和其余设置的 update-0 A/B 中，`full` 为 38/140、macro `0.25145`，`compact` 为 35/140、macro `0.23886`；compact 虽将技能块缩短约 26%，但端到端只提速约 2%，且主次成功率均下降。因此节省不足以抵消观测到的效果风险，正式 raw control 恢复 `full`，`RAW_SKILL_PROMPT_FORMAT=compact` 仅用于消融。格式名称必须写入 run provenance、resolved config 与 portable checkpoint 兼容条件；compact 与 full checkpoint/曲线不能混用。
+
+## D014：统一校准 rollout/recompute P99 门限为 0.30
+
+首个 optimizer step 前的 rollout/recompute 联合门禁保留 mean、median、P95、P99、误差大于 `1`/`5` 的比例及 ratio mean，不删除尾部检查。相同原版 Qwen 起点和正式 update 形状下，no-skill 的 P99=`0.24966`，raw/full 的 P99=`0.28432`；raw/full 同时满足 mean=`0.03010`、median=`0.00267`、P95=`0.14057`、误差大于 `1` 的比例=`0.0212%`、误差大于 `5` 的比例=`0`、ratio mean=`0.99976`，最大误差也不在首尾 token。旧 P99≤`0.25` 因而过度贴合单次 no-skill 观测，并会把长但合法的 full prompt 数值尾差误判为序列错位。P99 上限统一校准为 `0.30`，其余门限不变；所有 control modes 与 M1 必须使用同一阈值，失败仍在 reference 与 optimizer 前停止并保存完整诊断。不得为某个方法设置专用阈值，也不得删除 P99 后只依赖平均误差。

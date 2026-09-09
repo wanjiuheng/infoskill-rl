@@ -24,7 +24,7 @@ class TrainingFailureArtifactTests(unittest.TestCase):
         error = LogprobAlignmentError(
             summary=summary,
             thresholds=DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS,
-            failures=("logprob_abs_error_p99=0.28432059 > 0.25",),
+            failures=("logprob_abs_error_p99=0.31 > 0.3",),
         )
         run_directory = Path("run")
 
@@ -46,7 +46,7 @@ class TrainingFailureArtifactTests(unittest.TestCase):
         self.assertEqual(payload["attempted_global_update"], 0)
         self.assertFalse(payload["passed"])
         self.assertEqual(payload["summary"], summary)
-        self.assertEqual(payload["thresholds"]["error_p99_max"], 0.25)
+        self.assertEqual(payload["thresholds"]["error_p99_max"], 0.30)
 
 
 if __name__ == "__main__":

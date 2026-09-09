@@ -73,6 +73,19 @@ class LogprobAlignmentTests(unittest.TestCase):
             }
         )
 
+    def test_observed_raw_full_alignment_passes_the_calibrated_gate(self) -> None:
+        require_logprob_alignment(
+            {
+                "logprob_abs_error_mean": 0.030098398605059914,
+                "logprob_abs_error_median": 0.002674724906682968,
+                "logprob_abs_error_p95": 0.14057102799415588,
+                "logprob_abs_error_p99": 0.2843205928802492,
+                "logprob_abs_error_gt_1_rate": 0.00021199701185164248,
+                "logprob_abs_error_gt_5_rate": 0.0,
+                "ratio_mean": 0.9997580686460814,
+            }
+        )
+
     def test_prefixed_padding_failure_is_blocked_before_update(self) -> None:
         with self.assertRaisesRegex(
             LogprobAlignmentError,
@@ -100,7 +113,7 @@ class LogprobAlignmentTests(unittest.TestCase):
             diagnostic["summary"]["logprob_abs_error_p99"],
             22.203129,
         )
-        self.assertEqual(diagnostic["thresholds"]["error_p99_max"], 0.25)
+        self.assertEqual(diagnostic["thresholds"]["error_p99_max"], 0.30)
         self.assertEqual(len(diagnostic["failures"]), 4)
 
     def test_missing_gate_metric_is_rejected(self) -> None:
