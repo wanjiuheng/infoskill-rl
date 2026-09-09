@@ -233,7 +233,33 @@ GPUS=0,1,2,3 PROFILE=smoke RUN_NAME=m0-smoke-u2 \
 VERL `action_stop` 末尾 padding 哨兵后，观测到 mean/median/P95/P99 为
 `0.0212/0.00175/0.1028/0.1826`、ratio mean 为 `1.0005`，且无误差大于 `1`
 的 token。若门禁失败，训练在 reference 计算和 optimizer update 前停止，错误消息
-列出所有超标项；不得绕过后继续放大训练。
+列出所有超标项，并在 run 根目录写出
+`rollout-recompute-alignment-failure.json`。该文件包含完整 summary、固定阈值、全部
+失败条件、最坏 token 的 sample/position/token ID、首尾位置标记及 rollout logprob
+分桶统计；不得绕过后继续放大训练，也不得只凭一个 P99 数值放宽阈值。
+
+若 update 0 已评测并提交 `step-000000`，但首个训练 update 在该门禁停止，可从这个
+checkpoint 原地恢复。恢复会跳过已经完成的 update-0 `valid_seen`，并重新执行首个训练
+update；如果问题可复现，新版代码会留下上述诊断文件：
+
+```bash
+RUN=/absolute/path/to/failed-raw-skill-run
+GPUS=0,1,2,3 \
+  PROFILE=pilot \
+  MAX_UPDATES=50 \
+  RESUME="$RUN/checkpoints/step-000000" \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  ENVIRONMENT_WORKERS=1 \
+  POLICY_MAX_TOKENS_PER_GPU=16384 \
+  BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  RAW_SKILL_PROMPT_FORMAT=full \
+  INFO_SKILL_CPU_THREADS=1 \
+  bash scripts/run_alfworld.sh train raw_skill_prompt
+```
+
+恢复时必须保持源运行的训练计划和不可变配置一致。若门禁意外通过，该命令会继续原定
+训练，而不会在诊断点自动停止。
 
 验证恢复时，源运行必须原本就按 `MAX_UPDATES=2` 规划，并且
 `step-000001/checkpoint.complete.json` 已原子提交。源运行可以随后生成 step 2；

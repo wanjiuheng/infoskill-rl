@@ -22,7 +22,7 @@ from infoskill.integrations.alfworld import (
     discover_tasks,
     task_manifest_sha256,
 )
-from infoskill.learning import group_relative_advantages
+from infoskill.learning import LogprobAlignmentError, group_relative_advantages
 from infoskill.persistence import (
     CheckpointManager,
     MetricLogger,
@@ -324,6 +324,7 @@ def run_policy_training(
         )
     )
     logger.info("Runtime ready in %.1f seconds", time.perf_counter() - runtime_started)
+    trainer: InfoSkillTrainer | None = None
     try:
         factory = AlfworldEnvironmentFactory.from_paths(
             alfworld_source=config.paths.alfworld_source,
@@ -482,6 +483,19 @@ def run_policy_training(
                     "mode": mode.value,
                     **error.as_dict(),
                 },
+            )
+        if isinstance(error, LogprobAlignmentError):
+            diagnostic_path = _persist_logprob_alignment_failure(
+                run_directory=run_directory,
+                error=error,
+                mode=mode,
+                attempted_global_update=(
+                    trainer.global_update if trainer is not None else 0
+                ),
+            )
+            logger.error(
+                "Persisted rollout/recompute alignment diagnostics: %s",
+                diagnostic_path,
             )
         # The uncaught exception below prints the complete traceback once.
         logger.error("Policy training failed: %s", error)
@@ -726,3 +740,23 @@ def _write_json(path: Path, payload: object) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _persist_logprob_alignment_failure(
+    *,
+    run_directory: Path,
+    error: LogprobAlignmentError,
+    mode: SkillMode,
+    attempted_global_update: int,
+) -> Path:
+    path = run_directory / "rollout-recompute-alignment-failure.json"
+    _write_json(
+        path,
+        {
+            "schema_version": 1,
+            "mode": mode.value,
+            "attempted_global_update": attempted_global_update,
+            **error.as_dict(),
+        },
+    )
+    return path

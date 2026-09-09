@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import statistics
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +19,33 @@ class LogprobAlignmentThresholds:
 
 
 DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS = LogprobAlignmentThresholds()
+
+
+class LogprobAlignmentError(RuntimeError):
+    """A failed pre-update alignment gate with durable diagnostics."""
+
+    def __init__(
+        self,
+        *,
+        summary: dict[str, float | int],
+        thresholds: LogprobAlignmentThresholds,
+        failures: Sequence[str],
+    ) -> None:
+        self.summary = dict(summary)
+        self.thresholds = thresholds
+        self.failures = tuple(failures)
+        super().__init__(
+            "rollout/recompute alignment gate failed before policy update: "
+            + "; ".join(self.failures)
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "passed": False,
+            "summary": dict(self.summary),
+            "thresholds": asdict(self.thresholds),
+            "failures": list(self.failures),
+        }
 
 
 def require_logprob_alignment(
@@ -63,9 +90,10 @@ def require_logprob_alignment(
             f"[{thresholds.ratio_mean_min:.8g}, {thresholds.ratio_mean_max:.8g}]"
         )
     if failures:
-        raise RuntimeError(
-            "rollout/recompute alignment gate failed before policy update: "
-            + "; ".join(failures)
+        raise LogprobAlignmentError(
+            summary=summary,
+            thresholds=thresholds,
+            failures=failures,
         )
 
 

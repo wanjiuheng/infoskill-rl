@@ -3,6 +3,7 @@
 from .advantages import group_relative_advantages
 from .alignment import (
     DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS,
+    LogprobAlignmentError,
     LogprobAlignmentThresholds,
     require_logprob_alignment,
     summarize_logprob_alignment,
@@ -45,6 +46,7 @@ __all__ = [
     "CompressionReplayBatch",
     "GrpoLoss",
     "DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS",
+    "LogprobAlignmentError",
     "LogprobAlignmentThresholds",
     "OfflineGroundingBatch",
     "OnlineAuxiliaryBatch",

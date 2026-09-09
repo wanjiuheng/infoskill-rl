@@ -4,6 +4,7 @@ import math
 import unittest
 
 from infoskill.learning import (
+    LogprobAlignmentError,
     require_logprob_alignment,
     summarize_logprob_alignment,
 )
@@ -74,7 +75,7 @@ class LogprobAlignmentTests(unittest.TestCase):
 
     def test_prefixed_padding_failure_is_blocked_before_update(self) -> None:
         with self.assertRaisesRegex(
-            RuntimeError,
+            LogprobAlignmentError,
             "alignment gate failed before policy update",
         ) as raised:
             require_logprob_alignment(
@@ -93,6 +94,14 @@ class LogprobAlignmentTests(unittest.TestCase):
         self.assertIn("logprob_abs_error_mean", message)
         self.assertIn("logprob_abs_error_p99", message)
         self.assertIn("logprob_abs_error_gt_5_rate", message)
+        diagnostic = raised.exception.as_dict()
+        self.assertFalse(diagnostic["passed"])
+        self.assertEqual(
+            diagnostic["summary"]["logprob_abs_error_p99"],
+            22.203129,
+        )
+        self.assertEqual(diagnostic["thresholds"]["error_p99_max"], 0.25)
+        self.assertEqual(len(diagnostic["failures"]), 4)
 
     def test_missing_gate_metric_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing required metric"):

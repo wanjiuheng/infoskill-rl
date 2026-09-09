@@ -70,6 +70,15 @@ provenance 不变的严格 A/B 中，compact 将技能块 token 缩短约 26%，
 因此正式 raw control 恢复 `full`；compact 仅作为显式消融，不能与 full 曲线或
 checkpoint 混用。
 
+2026-09-09 的 `raw_skill_prompt + embedding + full` 50-update 扩展 pilot 在正确复现
+update-0（38/140、macro `0.25145`）并提交 `step-000000` 后，于首个 policy update
+前被 rollout/recompute 门禁停止：唯一打印的超标项为 P99=`0.28432` > `0.25`，因此
+没有 optimizer step、训练轨迹或 update-1 checkpoint。该结果不能当作模型训练失败或
+放宽阈值的依据；代码现会将完整对齐分布、固定阈值、全部失败条件、最坏 token 与
+logprob 分桶写入 `rollout-recompute-alignment-failure.json`。下一步从现有 step 0
+原地恢复以复现首个 update，先用该产物区分 full 长上下文的正常 BF16 尾差与
+padding/EOS、rank 或样本重排错误，再决定是否修改任何门禁或实现。
+
 上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
 框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成
 负向条件效应。进一步核对锁定 SkillRL 源码后确认，其 GRPO prompt 与 SFT prompt、
