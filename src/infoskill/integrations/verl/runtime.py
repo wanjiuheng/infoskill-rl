@@ -11,6 +11,7 @@ from typing import Mapping
 
 import ray
 
+from infoskill.config import DEFAULT_POLICY_MAX_TOKENS_PER_GPU
 from infoskill.distributed import pad_batch_to_divisor, policy_rank_balanced_order
 from infoskill.episode import TrajectoryGroup
 from infoskill.learning import require_logprob_alignment, summarize_logprob_alignment
@@ -39,7 +40,7 @@ class VerlRuntimeConfig:
     lora_alpha: int = 32
     actor_learning_rate: float = 1e-6
     action_minibatch_size: int = 256
-    policy_max_tokens_per_gpu: int = 16_384
+    policy_max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU
     rollout_max_batched_tokens: int = 16_384
     gpu_memory_utilization: float = 0.50
     allow_unkeyed_vllm_sampling: bool = False

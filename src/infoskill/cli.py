@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from infoskill.app_config import AppConfig
-from infoskill.config import EvaluationConfig, SkillMode
+from infoskill.config import (
+    DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
+    EvaluationConfig,
+    SkillMode,
+)
 from infoskill.training import TrainingProfile, resolve_training_plan
 
 
@@ -180,7 +184,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument(
         "--policy-max-tokens-per-gpu",
         type=int,
-        default=16_384,
+        default=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
         help="old/ref/actor dynamic micro-batch token budget per GPU",
     )
     train.add_argument(
@@ -539,7 +543,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     max_response_tokens=config.max_response_tokens,
                     total_training_steps=max(1, evaluation_step),
                     action_minibatch_size=256,
-                    policy_max_tokens_per_gpu=16_384,
+                    policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
                     gpu_memory_utilization=0.45,
                     require_hybrid_prefix=False,
                     master_seed=config.master_seed,
@@ -865,7 +869,7 @@ def _raw_skill_ab(config: AppConfig, args: argparse.Namespace) -> int:
         max_response_tokens=config.max_response_tokens,
         total_training_steps=1,
         action_minibatch_size=256,
-        policy_max_tokens_per_gpu=16_384,
+        policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
         gpu_memory_utilization=0.45,
         require_hybrid_prefix=False,
         master_seed=config.master_seed,
@@ -1168,7 +1172,7 @@ def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:
         max_response_tokens=config.max_response_tokens,
         total_training_steps=max(1, checkpoint.global_update),
         action_minibatch_size=256,
-        policy_max_tokens_per_gpu=16_384,
+        policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
         gpu_memory_utilization=0.45,
         require_hybrid_prefix=False,
         master_seed=config.master_seed,

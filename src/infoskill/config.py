@@ -10,6 +10,9 @@ class SkillMode(str, Enum):
     INFO_SKILL = "infoskill"
 
 
+DEFAULT_POLICY_MAX_TOKENS_PER_GPU = 12_288
+
+
 @dataclass(frozen=True, slots=True)
 class EpisodeConfig:
     max_steps: int = 30
@@ -22,7 +25,7 @@ class BatchConfig:
     task_groups_per_update: int = 8
     rollouts_per_task: int = 8
     action_minibatch_size: int = 256
-    max_tokens_per_gpu: int = 16_384
+    max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU
 
     @property
     def trajectories_per_update(self) -> int:

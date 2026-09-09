@@ -5,6 +5,17 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_safe_policy_token_budget_is_the_shell_default(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-12288}"',
+            script,
+        )
+
     def test_m0_pair_explicitly_clears_checkpoint_for_update_zero(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_m0_valid_seen_pair.sh").read_text(

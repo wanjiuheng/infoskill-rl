@@ -48,7 +48,7 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["environment_backend"], "native_batch")
         self.assertFalse(payload["verbose_runtime_logs"])
         self.assertEqual(payload["cuda_memory_poll_interval_ms"], 0)
-        self.assertEqual(payload["policy_max_tokens_per_gpu"], 16_384)
+        self.assertEqual(payload["policy_max_tokens_per_gpu"], 12_288)
         self.assertTrue(payload["balance_policy_tokens_across_ranks"])
 
     def test_raw_skill_prompt_dry_run_uses_the_shared_training_interface(self) -> None:

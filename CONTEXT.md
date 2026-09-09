@@ -87,6 +87,15 @@ token。作为对照，同一原版 Qwen 的 no-skill 首更新 P99=`0.24966`，
 校准为 `0.30`，其他六项门限不变，且所有模式必须使用同一阈值；下一步以单个正式
 形状 benchmark update 验证 optimizer 与 checkpoint 链路，不直接恢复 50 updates。
 
+该 raw/full benchmark 在 P99=`0.30` 下已完成 optimizer 与 portable checkpoint，
+但 `POLICY_MAX_TOKENS_PER_GPU=16384` 的阶段快照一度仅剩约 `2.51 GiB` 物理显存。
+使用 `12288` 与 200ms 物理采样重跑后，policy/rollout 最差空闲显存为
+`18.64/12.46 GiB`，64 条轨迹和完整对齐统计与 `16384` 运行一致；core/policy 耗时
+观测增加约 `13.4%/10.1%`，且包含高频采样开销。经确认，三个训练模式的正式 policy
+动态微批默认统一为 `12288`，vLLM rollout 预算仍为 `16384`；长时 pilot/formal 建议
+显式使用 `CUDA_MEMORY_POLL_INTERVAL_MS=1000`。旧 checkpoint 继续按其 resolved config
+或历史缺省 `16384` 恢复，不能在原 run 中静默切换。
+
 上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
 框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成
 负向条件效应。进一步核对锁定 SkillRL 源码后确认，其 GRPO prompt 与 SFT prompt、

@@ -69,3 +69,7 @@ M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` �
 ## D014：统一校准 rollout/recompute P99 门限为 0.30
 
 首个 optimizer step 前的 rollout/recompute 联合门禁保留 mean、median、P95、P99、误差大于 `1`/`5` 的比例及 ratio mean，不删除尾部检查。相同原版 Qwen 起点和正式 update 形状下，no-skill 的 P99=`0.24966`，raw/full 的 P99=`0.28432`；raw/full 同时满足 mean=`0.03010`、median=`0.00267`、P95=`0.14057`、误差大于 `1` 的比例=`0.0212%`、误差大于 `5` 的比例=`0`、ratio mean=`0.99976`，最大误差也不在首尾 token。旧 P99≤`0.25` 因而过度贴合单次 no-skill 观测，并会把长但合法的 full prompt 数值尾差误判为序列错位。P99 上限统一校准为 `0.30`，其余门限不变；所有 control modes 与 M1 必须使用同一阈值，失败仍在 reference 与 optimizer 前停止并保存完整诊断。不得为某个方法设置专用阈值，也不得删除 P99 后只依赖平均误差。
+
+## D015：统一采用 12,288 policy token budget
+
+`no_skill`、`raw_skill_prompt` 与 `infoskill` 的 old/ref/actor 动态微批预算统一为每 GPU `12,288` tokens；vLLM rollout 调度预算继续保持 `16,384`，两者不得混为一个参数。正式形状的 raw/full 运行在 `16,384` 下曾观测到约 `2.51 GiB` 的 policy 阶段物理空闲显存；`12,288` 的 200ms 监控重跑把 policy/rollout 最差余量提高到 `18.64/12.46 GiB`，同时保持 64 条 rollout 与对齐统计完全一致，并完成 optimizer 与 portable checkpoint。观测到的 core/policy 耗时约增加 `13.4%/10.1%`，其中含 200ms 监控开销；在可接受的吞吐代价下优先保留跨模式、长 prompt 与后续 M1 的显存安全余量。长时 pilot/formal 建议显式设置 `CUDA_MEMORY_POLL_INTERVAL_MS=1000`，但代码默认仍为 `0`，显式参数优先。历史 checkpoint 缺少该字段时仍按旧默认 `16,384` 解释，禁止在原地 resume 中静默改成 `12,288`。

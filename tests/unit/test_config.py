@@ -12,6 +12,7 @@ class ExperimentConfigTests(unittest.TestCase):
         self.assertEqual(config.episode.max_steps, 30)
         self.assertEqual(config.episode.history_length, 2)
         self.assertEqual(config.batch.trajectories_per_update, 64)
+        self.assertEqual(config.batch.max_tokens_per_gpu, 12_288)
         self.assertEqual(config.generation.max_prompt_tokens, 4096)
         self.assertEqual(config.generation.max_response_tokens, 256)
         self.assertFalse(config.generation.eval_do_sample)

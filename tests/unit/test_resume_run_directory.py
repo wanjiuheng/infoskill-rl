@@ -141,6 +141,30 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                     allow_gpu_change=False,
                 )
 
+    def test_historical_checkpoint_cannot_silently_adopt_new_token_budget(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 4,
+            "runtime_options": {"persistent_rollout_session": True},
+        }
+        current = {
+            "num_gpus": 4,
+            "runtime_options": {
+                "persistent_rollout_session": True,
+                "policy_max_tokens_per_gpu": 12_288,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_registered_policy_model_may_move_without_changing_identity(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
         previous = {

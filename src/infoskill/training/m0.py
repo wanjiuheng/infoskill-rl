@@ -10,7 +10,11 @@ from typing import Literal, Mapping, Sequence
 
 from infoskill.app_config import AppConfig
 from infoskill.conditioning import NoSkillConditioner, SkillConditioner
-from infoskill.config import EvaluationConfig, SkillMode
+from infoskill.config import (
+    DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
+    EvaluationConfig,
+    SkillMode,
+)
 from infoskill.episode import TaskSpec, TrajectoryCollector
 from infoskill.evaluation import (
     EvaluationCheckpointScore,
@@ -53,7 +57,7 @@ def run_m0_training(
     environment_backend: str = "native_batch",
     verbose_runtime_logs: bool = False,
     cuda_memory_poll_interval_ms: int = 0,
-    policy_max_tokens_per_gpu: int = 16_384,
+    policy_max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
     balance_policy_tokens_across_ranks: bool = True,
 ) -> int:
     """Backward-compatible entry point for the token-only M0 baseline."""
@@ -88,7 +92,7 @@ def run_policy_training(
     environment_backend: str = "native_batch",
     verbose_runtime_logs: bool = False,
     cuda_memory_poll_interval_ms: int = 0,
-    policy_max_tokens_per_gpu: int = 16_384,
+    policy_max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
     balance_policy_tokens_across_ranks: bool = True,
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
 ) -> int:

@@ -28,11 +28,11 @@ ENVIRONMENT_BACKEND="${ENVIRONMENT_BACKEND:-native_batch}" # native_batch | indi
 INFO_SKILL_CPU_THREADS="${INFO_SKILL_CPU_THREADS:-1}"
 # Default keeps only INFO-SKILL milestones, errors and progress bars in terminal.
 VERBOSE_RUNTIME_LOGS="${VERBOSE_RUNTIME_LOGS:-0}"
-# Diagnostic only. Zero avoids polling overhead in normal/formal runs.
+# Diagnostic switch. Long runs should use 1000ms; zero explicitly disables it.
 CUDA_MEMORY_POLL_INTERVAL_MS="${CUDA_MEMORY_POLL_INTERVAL_MS:-0}"
 # Dynamic old/ref/actor micro-batch budget. This does not alter vLLM rollout
-# scheduling. Keep the validated default unless running a monitored A/B gate.
-POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-16384}"
+# scheduling. The validated cross-mode default preserves physical headroom.
+POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-12288}"
 # Validated default. Reassigns samples among ranks while preserving each
 # global GRPO minibatch's membership; set to 0 for rollback.
 BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-1}"

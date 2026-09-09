@@ -498,7 +498,7 @@ MAX_UPDATES=1 \
 PERSISTENT_ROLLOUT_SESSION=1 \
 ENVIRONMENT_BACKEND=native_batch \
 ENVIRONMENT_WORKERS=1 \
-POLICY_MAX_TOKENS_PER_GPU=16384 \
+POLICY_MAX_TOKENS_PER_GPU=12288 \
 BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
 RAW_SKILL_PROMPT_FORMAT=full \
 INFO_SKILL_CPU_THREADS=1 \
@@ -758,8 +758,9 @@ nohup env \
   PERSISTENT_ROLLOUT_SESSION=1 \
   ENVIRONMENT_BACKEND=native_batch \
   ENVIRONMENT_WORKERS=1 \
-  POLICY_MAX_TOKENS_PER_GPU=16384 \
+  POLICY_MAX_TOKENS_PER_GPU=12288 \
   BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  CUDA_MEMORY_POLL_INTERVAL_MS=1000 \
   RAW_SKILL_PROMPT_FORMAT=full \
   INFO_SKILL_CPU_THREADS=1 \
   RUN_NAME=raw-skill-embedding-full-pilot-u25 \
@@ -846,7 +847,9 @@ allocator 的逻辑峰值可能超过物理卡容量，不能解释为单卡物�
 INFO-SKILL 的显式诊断模式使用后台线程定期调用 CUDA driver 的 `mem_get_info`，分别
 记录 rollout 与 old/ref/actor policy 阶段每个 rank 的最小物理 free memory；同时按
 VERL 实际连续分片记录每个 rank 的训练 token 数。该监控不改变张量、随机数、batch
-或模型状态，但会产生极小的轮询开销，因此正式运行默认关闭。
+或模型状态，但会产生轮询开销。未显式设置时仍为 `0`；200ms 只用于短时显存诊断，
+长时 pilot/formal 建议显式使用 `CUDA_MEMORY_POLL_INTERVAL_MS=1000`，若要关闭必须在
+运行命令中明确设为 `0` 并接受失去阶段内物理峰值证据。
 
 先按当前正式默认值运行一个完整形状 benchmark：
 
@@ -908,16 +911,16 @@ python scripts/compare_rollout_session_runs.py \
 默认门禁同时要求轨迹语义完全一致、rollout logprob 最大绝对误差不超过 `1e-3`、
 完整 core update 至少提速 `3%`，并且 candidate 在 rollout 和 policy 两阶段的最差
 物理空闲显存都不低于 `8 GiB`。只有 `passed=true` 才允许把 `20480` 提升为正式默认；
-OOM、余量不足或收益不足均保持 `16384`。`POLICY_MAX_TOKENS_PER_GPU` 会写入 resolved config，
-恢复时不得静默修改。物理采样本身只用于诊断，正式 run 仍设
-`CUDA_MEMORY_POLL_INTERVAL_MS=0`。
+OOM、余量不足或收益不足均保持当时的 `16384` 基线。`POLICY_MAX_TOKENS_PER_GPU` 会写入
+resolved config，恢复时不得静默修改。后续长时运行使用 1,000ms 低频物理采样；200ms
+仍只用于短时诊断。
 
 真实 A/B 结果拒绝了 `20480`：轨迹与 logprob 完全一致，policy 从 `185.76s`
 降到 `173.53s`，但 rollout 波动到 `218.32s` 后，core 只从 `400.10s` 降到
 `391.85s`，仅提速 `2.1%`，未达到 `3%` 门限；policy 最差物理空闲显存同时从
-`14.76 GiB` 降到 `8.06 GiB`，只比安全线高约 `64 MiB`。因此正式默认继续固定
-`16384`，不再尝试更大的 policy token budget；`20480` 只保留为已拒绝候选的显式
-复现实验参数。
+`14.76 GiB` 降到 `8.06 GiB`，只比安全线高约 `64 MiB`。因此拒绝向上放大到
+`20480`；该值只保留为已拒绝候选的显式复现实验参数。随后 raw/full 长 prompt 的
+跨模式安全门发现 `16384` 余量不足，并据下文结果把统一默认下调到 `12288`。
 
 ### 跨 rank 策略 token 均衡
 
@@ -964,6 +967,30 @@ logprob 完全一致，policy 最差物理空闲显存从 `14.76 GiB` 增加到 
 在该默认值启用前创建、且 resolved config 中没有该字段的历史 checkpoint 仍按
 `false` 解释；恢复这类 checkpoint 时必须显式设置
 `BALANCE_POLICY_TOKENS_ACROSS_RANKS=0`，系统不会在续训中静默改变样本分配。
+
+### 正式 policy token budget 与长时显存监控
+
+`raw_skill_prompt + embedding + full` 的正式形状首更新暴露了比 no-skill 更长的输入，
+`POLICY_MAX_TOKENS_PER_GPU=16384` 的阶段快照一度只剩约 `2.51 GiB` 物理空闲显存。
+把 old/ref/actor 动态微批预算降到 `12288` 并以 200ms 采样重跑后，policy 与 rollout
+最差物理空闲显存分别为 `18.64 GiB` 和 `12.46 GiB`；64 条轨迹、任务、动作、奖励及
+rollout/recompute 对齐统计与 `16384` 运行完全一致，optimizer 和 portable checkpoint
+均正常提交。代价是该次观测的 core/policy 时间约增加 `13.4%/10.1%`，其中包含高频
+200ms 监控开销，不能解释为纯 token-budget 开销。
+
+因此 `12288` 是 `no_skill`、`raw_skill_prompt`、`infoskill` 共用的正式默认；它只改变
+old/ref/actor 的动态装箱，不改变全局样本集合、GRPO minibatch、优化目标或 vLLM
+rollout 的 `16384` 调度预算。长时运行建议：
+
+```bash
+POLICY_MAX_TOKENS_PER_GPU=12288 \
+CUDA_MEMORY_POLL_INTERVAL_MS=1000 \
+bash scripts/run_alfworld.sh train raw_skill_prompt
+```
+
+命令行显式值始终优先。旧 checkpoint 的 resolved config 若记录 `16384`，续训必须继续
+显式传入 `16384`；更早、缺少该字段的 checkpoint 也按历史默认 `16384` 解释。若要改用
+`12288`，必须创建新 run，并按新的实验分支记录，不能原地恢复后静默切换。
 
 ### portable checkpoint 推理效果诊断门
 
