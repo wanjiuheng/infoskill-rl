@@ -992,6 +992,14 @@ bash scripts/run_alfworld.sh train raw_skill_prompt
 显式传入 `16384`；更早、缺少该字段的 checkpoint 也按历史默认 `16384` 解释。若要改用
 `12288`，必须创建新 run，并按新的实验分支记录，不能原地恢复后静默切换。
 
+1,000ms 监控的两 update 寿命门随后通过：两个 update 各含 8 个任务、64 条轨迹，任务
+集合互斥，游标从 8 前进到 16；core 耗时为 `668.52s` 和 `679.99s`，跨 update 最差
+policy/rollout 物理空闲显存为 `18.64/13.02 GiB`，CPU 内存为 `45.86/46.18 GiB`，
+`environment_forced_terminations=0`。首更新通过完整 rollout/recompute 门禁，两个
+checkpoint 都声明完整 LoRA optimizer/scheduler 状态，最终 checkpoint 标记为 permanent。
+全部 3,141 个环境步骤都保留模型、动作和环境输出；没有 prompt-budget 历史删减，只有
+18 步以长度上限结束（两个 update 各 9 步），不足以支持扩大 256-token response 上限。
+
 ### portable checkpoint 推理效果诊断门
 
 如果同一份固定 `valid_seen` manifest 上，update 0 与非零 checkpoint 的 140 条轨迹、

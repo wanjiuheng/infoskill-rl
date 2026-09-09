@@ -96,6 +96,16 @@ token。作为对照，同一原版 Qwen 的 no-skill 首更新 P99=`0.24966`，
 显式使用 `CUDA_MEMORY_POLL_INTERVAL_MS=1000`。旧 checkpoint 继续按其 resolved config
 或历史缺省 `16384` 恢复，不能在原 run 中静默切换。
 
+`12288 + CUDA_MEMORY_POLL_INTERVAL_MS=1000` 的两个连续 raw/full benchmark update
+现已完成。两批各含 8 个互不重复任务和 64 条完整轨迹，训练游标依次为 8、16；首更新
+通过完整 rollout/recompute 门禁，两次 optimizer 指标均有限，step 1/2 可移植 checkpoint
+均提交，最终 step 2 为 permanent。跨两次 update 的最差 policy/rollout 物理空闲显存为
+`18.64/13.02 GiB`，core 耗时为 `668.52/679.99s`，CPU 内存从 `45.86` 增至
+`46.18 GiB`，无环境强制终止。全部 3,141 个步骤都保留模型响应、动作决议和环境输出，
+没有 prompt-budget 历史删减；每个 update 只有 9 步因 256-token 长度上限停止。该寿命门
+通过，下一步应从原版 Qwen 起点运行新的 25-update raw/full pilot，并只用 update 0 与
+update 25 的相同 140 条 `valid_seen` 判断训练趋势。
+
 上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
 框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成
 负向条件效应。进一步核对锁定 SkillRL 源码后确认，其 GRPO prompt 与 SFT prompt、
