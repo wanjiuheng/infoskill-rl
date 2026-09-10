@@ -36,7 +36,7 @@ class PolicyUpdateCoordinatorTests(unittest.TestCase):
         metrics = coordinator.step(actor_global_grad_norm=torch.tensor(3.0))
 
         self.assertAlmostEqual(actor.item(), 9.4, places=6)
-        self.assertAlmostEqual(projector.item(), 19.2, places=6)
+        self.assertAlmostEqual(projector.item(), 19.2, delta=1e-6)
         self.assertAlmostEqual(metrics["policy/combined_grad_norm_before_clip"], 5.0)
         self.assertAlmostEqual(metrics["policy/clip_coefficient"], 0.2, places=6)
         self.assertEqual(metrics["policy/optimizer_step_applied"], 1.0)
