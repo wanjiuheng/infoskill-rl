@@ -39,6 +39,9 @@ class VerlRuntimeConfigTests(unittest.TestCase):
         )
         self.assertEqual(settings.soft_prefix_length, 5)
         self.assertEqual(settings.infoskill_latent_dim, 32)
+        self.assertEqual(settings.infoskill_projector_learning_rate, 1e-4)
+        self.assertEqual(settings.infoskill_projector_weight_decay, 0.01)
+        self.assertEqual(settings.infoskill_policy_warmup_ratio, 0.03)
 
     def test_conditioning_rpc_preserves_rows_across_world_size_padding(self) -> None:
         import numpy as np

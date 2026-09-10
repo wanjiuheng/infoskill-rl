@@ -61,6 +61,9 @@ class VerlRuntimeConfig:
     skill_bank_path: str | None = None
     infoskill_latent_dim: int = 32
     infoskill_initialization_seed: int = 0
+    infoskill_projector_learning_rate: float = 1e-4
+    infoskill_projector_weight_decay: float = 0.01
+    infoskill_policy_warmup_ratio: float = 0.03
 
     def __post_init__(self) -> None:
         if self.soft_prefix_length <= 0:
@@ -79,6 +82,12 @@ class VerlRuntimeConfig:
             raise ValueError("INFO-SKILL latent dimension must be positive")
         if self.infoskill_initialization_seed < 0:
             raise ValueError("INFO-SKILL initialization seed must be non-negative")
+        if self.infoskill_projector_learning_rate <= 0:
+            raise ValueError("INFO-SKILL projector learning rate must be positive")
+        if self.infoskill_projector_weight_decay < 0:
+            raise ValueError("INFO-SKILL projector weight decay must be non-negative")
+        if not 0 <= self.infoskill_policy_warmup_ratio <= 1:
+            raise ValueError("INFO-SKILL policy warmup ratio must be in [0, 1]")
 
 
 class VerlRuntime:
@@ -355,10 +364,13 @@ class VerlRuntime:
                 for key, value in alignment.items()
             }
         data = data.union(old)
-        stage_started = time.perf_counter()
-        reference = self.worker_group.compute_ref_log_prob(data)
-        reference_logprob_seconds = time.perf_counter() - stage_started
-        data = data.union(reference)
+        if self.config.enable_infoskill_modules:
+            reference_logprob_seconds = None
+        else:
+            stage_started = time.perf_counter()
+            reference = self.worker_group.compute_ref_log_prob(data)
+            reference_logprob_seconds = time.perf_counter() - stage_started
+            data = data.union(reference)
         stage_started = time.perf_counter()
         result = self.worker_group.update_actor(data)
         actor_update_seconds = time.perf_counter() - stage_started
@@ -374,6 +386,10 @@ class VerlRuntime:
         )
         self._completed_updates = global_update + 1
         metrics = _reduce_metrics(result.meta_info.get("metrics", {}))
+        if reference_logprob_seconds is None:
+            reference_logprob_seconds = metrics.get(
+                "perf/reference_logprob_seconds", 0.0
+            )
         metrics.update(
             {
                 "runtime/training_sample_count": float(real_sample_count),
@@ -499,6 +515,16 @@ def _actor_config(settings: VerlRuntimeConfig):
         actor_ref.model.infoskill_prefix_length = settings.soft_prefix_length
         actor_ref.model.infoskill_initialization_seed = (
             settings.infoskill_initialization_seed
+        )
+        actor_ref.model.infoskill_total_policy_steps = settings.total_training_steps
+        actor_ref.model.infoskill_projector_learning_rate = (
+            settings.infoskill_projector_learning_rate
+        )
+        actor_ref.model.infoskill_projector_weight_decay = (
+            settings.infoskill_projector_weight_decay
+        )
+        actor_ref.model.infoskill_policy_warmup_ratio = (
+            settings.infoskill_policy_warmup_ratio
         )
     actor_ref.actor.strategy = "fsdp"
     actor_ref.actor.optim.lr = settings.actor_learning_rate

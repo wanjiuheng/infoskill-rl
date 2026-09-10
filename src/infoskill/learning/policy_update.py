@@ -112,6 +112,7 @@ def _require_exact_optimizer_parameters(
         id(parameter)
         for group in optimizer.param_groups
         for parameter in group["params"]
+        if parameter.requires_grad
     }
     expected = {id(parameter) for parameter in parameters}
     if optimized != expected:

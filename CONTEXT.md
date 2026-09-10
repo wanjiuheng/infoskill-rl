@@ -48,11 +48,12 @@ M1 实现已进入分阶段接线。第一批基础契约已经落地：训练 r
 prefix 占位位置、exact detached latent、rollout 时旧 prefix、动作 token 与行为策略
 logprob 放入同一个 tensor batch；旧 prefix 仅用于审计，训练前向重算器会用保存的
 detached latent 和当前 projector 生成 inputs embeddings，并只向 projector 回传梯度；
-该重算器尚待接入 FSDP worker。grounding 产物已有 train-only 正式门禁
+该重算现已通过模型 embedding forward 内部的受控注入点接入 FSDP worker，避免在
+FSDP forward 外直接访问已分片 token-embedding 权重。grounding 产物已有 train-only 正式门禁
 加载器，并按“不同专家游戏各抽一个状态”确定性采样。LoRA 与 projector 的两个
 optimizer 已有共同 finite gate、合并梯度范数、统一裁剪和一起 step/skip 的
 `PolicyUpdateCoordinator`。当前 `infoskill` 训练入口仍保持 fail-fast，直到这些契约
-接入 DDP 小模块 worker、auxiliary update 和完整可移植 checkpoint；不得把基础契约
+完成 auxiliary update 和完整可移植 checkpoint；不得把策略侧接线
 已完成表述为 M1 已可训练。
 
 worker 条件化边界现已落地：driver 只负责 episode-level 候选检索，并把压缩视图、
@@ -60,8 +61,17 @@ worker 条件化边界现已落地：driver 只负责 episode-level 候选检索
 冻结语义编码器、预热完整固定库的技能特征 cache、compressor 和 projector，返回 soft
 prefix 及 exact replay trace。该专属加载与初始化使用隔离 RNG，不改变 control modes
 或后续配对采样的随机流。RPC 会按 world size padding 并核验返回顺序，M1 配置缺少 hybrid-prefix、
-语义模型或技能库路径时在启动前失败。该阶段还没有把小模块包装成 DDP，也没有把
-projector 重算接进 actor loss，因此 `infoskill` 入口继续 fail-fast。
+语义模型或技能库路径时在启动前失败。
+
+策略侧分布式接线现已继续完成：compressor 与 projector 在每个 worker 上以复制式
+DDP 管理；projector 拥有独立 AdamW（`lr=1e-4`、`weight_decay=0.01`、
+`betas=(0.9,0.95)`）并与 LoRA optimizer 共享一次 finite gate、合并 norm、统一裁剪及
+step/skip。M1 专用 actor 在 dynamic micro-batch 中显式保留 replay latent 和 prefix mask；
+GRPO/entropy 分支使用保存的 detached latent 与当前 projector，actor/reference KL 分支
+使用同一当前 prefix 但在 projector 输出处 detach，因此 KL 只约束 LoRA。没有 M1 张量的
+batch 会 fail-fast，避免 partial policy update；`no_skill` 与 `raw_skill_prompt` 未启用
+M1 worker modules，仍委托固定 VERL 原路径。尚未完成的是 auxiliary DDP optimizer、
+M1 全状态 checkpoint/恢复与 GPU 集成门，因此正式 `infoskill` 入口仍关闭。
 
 **Skill-Injection Control Mode**:
 共享同一训练评测框架、但改变技能信息如何进入策略的实验模式；首阶段包括 `no_skill`、`raw_skill_prompt` 和 `infoskill`。

@@ -46,6 +46,30 @@ class PolicyPrefixRecomputeTests(unittest.TestCase):
         self.assertIsNone(latent.grad)
         self.assertTrue(torch.equal(projector.weight.grad, torch.tensor([9.0, 9.0])))
 
+    def test_can_detach_current_prefix_for_actor_reference_kl(self) -> None:
+        from infoskill.integrations.verl.policy_prefix import (
+            recompute_policy_inputs_embeds,
+        )
+
+        embedding = torch.nn.Embedding(8, 2)
+        projector = _Projector()
+        latent = torch.tensor([[1.0]], requires_grad=True)
+        inputs_embeds = recompute_policy_inputs_embeds(
+            embedding=embedding,
+            projector=projector,
+            input_ids=torch.tensor([[0, 0, 3, 4]]),
+            attention_mask=torch.ones((1, 4), dtype=torch.long),
+            prefix_mask=torch.tensor([[True, True, False, False]]),
+            replay_latents=latent,
+            detach_projector_output=True,
+        )
+
+        inputs_embeds.sum().backward()
+
+        self.assertIsNone(latent.grad)
+        self.assertIsNone(projector.weight.grad)
+        self.assertIsNotNone(embedding.weight.grad)
+
     def test_rejects_noncontiguous_or_unattended_prefix_slots(self) -> None:
         from infoskill.integrations.verl.policy_prefix import (
             recompute_policy_inputs_embeds,

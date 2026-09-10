@@ -25,6 +25,21 @@ from infoskill.checkpoint_effect import (
 from infoskill.integrations.verl.memory_metrics import PhysicalMemorySampler
 
 
+class _CoordinatedPolicySchedulers:
+    """Let VERL's one scheduler event advance both M1 policy schedules."""
+
+    def __init__(self, actor: object) -> None:
+        self._actor = actor
+
+    def get_last_lr(self):
+        return self._actor.infoskill_actor_scheduler.get_last_lr()
+
+    def step(self) -> None:
+        if self._actor.infoskill_update_applied:
+            self._actor.infoskill_actor_scheduler.step()
+            self._actor.infoskill_projector_scheduler.step()
+
+
 class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
     """Pinned FSDP1 worker with authoritative rank-0 LoRA optimizer export."""
 
@@ -54,6 +69,12 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
     def _initialize_infoskill_conditioning_modules(self) -> None:
         from infoskill.integrations.verl.worker_conditioning import (
             InfoSkillWorkerConditioner,
+        )
+        from infoskill.integrations.verl.distributed_modules import (
+            build_distributed_infoskill_modules,
+        )
+        from infoskill.integrations.verl.policy_actor import (
+            build_infoskill_policy_actor_class,
         )
         from infoskill.models import InfoSkillCompressor, LatentProjector
         from infoskill.semantic import FrozenSemanticEncoder, SemanticFeatureCache
@@ -95,17 +116,63 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                 policy_hidden_size=int(self.actor_model_config.hidden_size),
                 prefix_length=prefix_length,
             ).to(device)
-        self._infoskill_compressor = compressor
-        self._infoskill_projector = projector
+        distributed = build_distributed_infoskill_modules(
+            compressor=compressor,
+            projector=projector,
+            device_index=device_index,
+            total_policy_steps=int(
+                self.config.model.get("infoskill_total_policy_steps", 445)
+            ),
+            projector_learning_rate=float(
+                self.config.model.get(
+                    "infoskill_projector_learning_rate", 1e-4
+                )
+            ),
+            projector_weight_decay=float(
+                self.config.model.get(
+                    "infoskill_projector_weight_decay", 0.01
+                )
+            ),
+            warmup_ratio=float(
+                self.config.model.get("infoskill_policy_warmup_ratio", 0.03)
+            ),
+        )
+        self._infoskill_compressor = distributed.compressor
+        self._infoskill_projector = distributed.projector
+        self._infoskill_projector_optimizer = distributed.projector_optimizer
+        self._infoskill_projector_scheduler = distributed.projector_scheduler
         self._infoskill_semantic_encoder = semantic
         self._infoskill_feature_cache = feature_cache
         self._infoskill_worker_conditioner = InfoSkillWorkerConditioner(
             library=library,
             semantic_encoder=semantic,
             feature_cache=feature_cache,
-            compressor=compressor,
-            projector=projector,
+            compressor=distributed.compressor,
+            projector=distributed.projector,
         )
+        actor_class = build_infoskill_policy_actor_class()
+        self.actor = actor_class(
+            config=self.config.actor,
+            actor_module=self.actor_module_fsdp,
+            actor_optimizer=self.actor_optimizer,
+            actor_scheduler=self.actor_lr_scheduler,
+            adapter_module=self.actor_module,
+            token_embedding=self.actor_module.get_input_embeddings(),
+            projector=distributed.projector,
+            projector_optimizer=distributed.projector_optimizer,
+            projector_scheduler=distributed.projector_scheduler,
+        )
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def update_actor(self, data):
+        if self._infoskill_worker_conditioner is None:
+            return super().update_actor(data)
+        scheduler = self.actor_lr_scheduler
+        self.actor_lr_scheduler = _CoordinatedPolicySchedulers(self.actor)
+        try:
+            return super().update_actor(data)
+        finally:
+            self.actor_lr_scheduler = scheduler
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def condition_infoskill(self, data):

@@ -14,6 +14,7 @@ def recompute_policy_inputs_embeds(
     attention_mask: Tensor,
     prefix_mask: Tensor,
     replay_latents: Tensor,
+    detach_projector_output: bool = False,
 ) -> Tensor:
     """Replace explicit prefix slots with the current projector output.
 
@@ -41,6 +42,8 @@ def recompute_policy_inputs_embeds(
             dtype=latent_dtype,
         )
     )
+    if detach_projector_output:
+        prefix = prefix.detach()
     projector_module = getattr(projector, "module", projector)
     expected = (
         input_ids.shape[0],

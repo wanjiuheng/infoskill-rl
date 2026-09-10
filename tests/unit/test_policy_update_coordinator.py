@@ -74,6 +74,24 @@ class PolicyUpdateCoordinatorTests(unittest.TestCase):
         self.assertEqual(actor_scheduler.last_epoch, 0)
         self.assertEqual(projector_scheduler.last_epoch, 0)
 
+    def test_allows_frozen_parameters_in_pinned_actor_optimizer(self) -> None:
+        from infoskill.learning import PolicyUpdateCoordinator
+
+        actor = torch.nn.Parameter(torch.tensor([1.0]))
+        frozen = torch.nn.Parameter(torch.tensor([2.0]), requires_grad=False)
+        projector = torch.nn.Parameter(torch.tensor([3.0]))
+        actor_optimizer = torch.optim.SGD([actor, frozen], lr=0.1)
+        projector_optimizer = torch.optim.SGD([projector], lr=0.1)
+
+        coordinator = PolicyUpdateCoordinator(
+            actor_parameters=(actor, frozen),
+            projector_parameters=(projector,),
+            actor_optimizer=actor_optimizer,
+            projector_optimizer=projector_optimizer,
+        )
+
+        self.assertEqual(coordinator.actor_parameters, (actor,))
+
 
 if __name__ == "__main__":
     unittest.main()
