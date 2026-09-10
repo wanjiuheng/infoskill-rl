@@ -106,6 +106,22 @@ token。作为对照，同一原版 Qwen 的 no-skill 首更新 P99=`0.24966`，
 通过，下一步应从原版 Qwen 起点运行新的 25-update raw/full pilot，并只用 update 0 与
 update 25 的相同 140 条 `valid_seen` 判断训练趋势。
 
+该 25-update raw/full pilot 后来从四卡 `step-000005` 权威 checkpoint 分叉到两卡并
+完整结束：任务游标为 200，updates 1–25 连续，LoRA、完整 optimizer/scheduler 与
+portable checkpoint 均通过结构审计。固定 140 条 `valid_seen` 从 update 0 的
+38/140、macro `0.25145` 变为 update 25 的 35/140、macro `0.24332`；非法动作率从
+`0.09540` 小幅降至 `0.09137`。17 个任务发生结果翻转（7 个失败转成功、10 个成功转
+失败），clean 类下降而 heat/cool 类上升，因此这是类别间迁移而非稳定净提升。200 个
+训练任务组中仅成功混合信号组占 `45.5%`，shaping-only 组占 `52.5%`；最后 5 updates
+后者升至 `65%`。这支持“策略更多学到动作合法性而非终局成功”的诊断假设，但尚不能
+单凭一次 pilot 断言因果，也不能据此用 `valid_seen` 调奖励权重。两卡阶段物理最小空闲
+显存一度仅约 `1.32 GiB`，只能视为故障恢复路径，不能作为后续 M1 长跑的安全默认。
+
+审计同时发现历史实现的命名分叉只在目标目录记录 update 25，因而把 update 25 错标为
+`best-valid`；合并整条曲线后真实最佳是 update 0。现已规定分叉恢复必须继承源 checkpoint
+之前的评测历史并保留来源路径。该问题只影响 checkpoint 选择元数据，不改变上述权重、
+轨迹或成功率。
+
 上述三个 raw 变体在固定 12 条任务上均为 0/12，而同一任务、模型、种子和评测
 框架的 `no_skill` 为 2/12，说明当前“每步统一 prompt + 可见技能块”本身已经造成
 负向条件效应。进一步核对锁定 SkillRL 源码后确认，其 GRPO prompt 与 SFT prompt、

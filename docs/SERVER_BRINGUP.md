@@ -302,6 +302,22 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=2 \
 GPU 数变化。训练档位、预算、模型、数据及其他 resolved config 在两种方式下都
 必须与源 checkpoint 一致。分叉运行的 `provenance.json` 会记录源 checkpoint、
 源 GPU 数和 `resume_forked=true`。
+
+新版代码还会在启动 runtime 前继承源 checkpoint 当时已经完成的 `valid_seen` 记录，
+并在目标 run 的 `checkpoint_selection.json` 中和后续评测合并。旧版已经完成的命名分叉
+若只保留目标 run 的最后一次评测，可只修复这份选择元数据；命令会先保存
+`checkpoint_selection.pre-fork-merge.json`，不修改模型、optimizer、trace 或成功率：
+
+```bash
+python scripts/repair_forked_checkpoint_selection.py \
+  /absolute/source-run/checkpoints/step-000005 \
+  /absolute/destination-run
+```
+
+输出必须列出完整 `evaluated_steps`，并按注册规则给出整条曲线的 `best_valid`。风险仅是
+重写目标 run 的选择 JSON；原文件有一次备份，脚本可重复执行且会校验 manifest 和同一步
+指标冲突。
+
 完成 smoke 与两种恢复检查后，运行一个与正式训练相同形状、覆盖完整评测周期的
 25-update pilot。`integration` 保留为需要用较小 G 和 batch 定位问题时的可选档位，
 不再与 pilot 串行作为必经门禁：

@@ -19,7 +19,9 @@ from infoskill.episode import TaskSpec, TrajectoryCollector
 from infoskill.evaluation import (
     EvaluationCheckpointScore,
     EvaluationRunner,
-    select_best_valid,
+    inherit_forked_checkpoint_selection,
+    load_checkpoint_scores,
+    write_checkpoint_selection,
 )
 from infoskill.integrations.alfworld import (
     AlfworldEnvironmentFactory,
@@ -295,6 +297,23 @@ def run_policy_training(
         )
     _write_json(run_directory / "provenance.json", provenance)
 
+    if (
+        forked_resume
+        and restored is not None
+        and checkpoint_to_load is not None
+        and plan.evaluation_kind == "valid_seen"
+    ):
+        if valid_seen_manifest_sha256 is None:
+            raise RuntimeError(
+                "forked valid_seen resume requires a registered manifest identity"
+            )
+        inherit_forked_checkpoint_selection(
+            source_run=checkpoint_to_load.parent.parent,
+            destination_run=run_directory,
+            max_source_step=restored.global_update,
+            task_manifest_sha256=valid_seen_manifest_sha256,
+        )
+
     from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
 
     if VerlRuntime is None or VerlRuntimeConfig is None:
@@ -559,7 +578,11 @@ def _evaluation_callback(
         raise RuntimeError("valid_seen evaluation requires a registered manifest identity")
     evaluation_config = EvaluationConfig()
     phase = "valid_seen"
-    valid_scores = _load_valid_scores(run_directory)
+    selection_path = run_directory / "checkpoint_selection.json"
+    valid_scores = load_checkpoint_scores(
+        selection_path,
+        expected_manifest_sha256=task_manifest_sha256_value,
+    )
 
     def evaluate(global_update: int) -> None:
         from tqdm.auto import tqdm
@@ -624,27 +647,13 @@ def _evaluation_callback(
                 macro_success=summary.macro_success,
                 overall_success=summary.overall_success,
                 invalid_action_rate=summary.invalid_action_rate,
+                checkpoint=f"checkpoints/step-{global_update:06d}",
             )
         )
-        best = select_best_valid(valid_scores)
-        _write_json(
-            run_directory / "checkpoint_selection.json",
-            {
-                "schema_version": 1,
-                "disclosure": "validation-selected performance on valid_seen",
-                "task_manifest_sha256": task_manifest_sha256_value,
-                "rule": [
-                    "max_macro_success",
-                    "max_overall_success",
-                    "min_invalid_action_rate",
-                    "earliest_update",
-                ],
-                "evaluations": [
-                    _checkpoint_score_payload(score) for score in valid_scores
-                ],
-                "last": _checkpoint_score_payload(valid_scores[-1]),
-                "best_valid": _checkpoint_score_payload(best),
-            },
+        write_checkpoint_selection(
+            selection_path,
+            scores=valid_scores,
+            task_manifest_sha256=task_manifest_sha256_value,
         )
         logger.info(
             "%s update=%d macro=%s overall=%s",
@@ -657,44 +666,6 @@ def _evaluation_callback(
             checkpoint(0, schedule)
 
     return evaluate
-
-
-def _checkpoint_score_payload(
-    score: EvaluationCheckpointScore,
-) -> dict[str, float | int | str]:
-    return {
-        "step": score.step,
-        "macro_success": score.macro_success,
-        "overall_success": score.overall_success,
-        "invalid_action_rate": score.invalid_action_rate,
-        "checkpoint": f"checkpoints/step-{score.step:06d}",
-    }
-
-
-def _load_valid_scores(run_directory: Path) -> list[EvaluationCheckpointScore]:
-    path = run_directory / "checkpoint_selection.json"
-    if not path.is_file():
-        return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    records = payload.get("evaluations")
-    if not isinstance(records, list):
-        raise RuntimeError(f"invalid checkpoint selection history: {path}")
-    scores: list[EvaluationCheckpointScore] = []
-    seen_steps: set[int] = set()
-    for record in records:
-        if not isinstance(record, dict):
-            raise RuntimeError(f"invalid checkpoint selection record: {path}")
-        score = EvaluationCheckpointScore(
-            step=int(record["step"]),
-            macro_success=float(record["macro_success"]),
-            overall_success=float(record["overall_success"]),
-            invalid_action_rate=float(record["invalid_action_rate"]),
-        )
-        if score.step in seen_steps:
-            raise RuntimeError(f"duplicate checkpoint selection step: {score.step}")
-        seen_steps.add(score.step)
-        scores.append(score)
-    return scores
 
 
 def _require_finite_metrics(values: Mapping[str, float]) -> None:

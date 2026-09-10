@@ -222,6 +222,12 @@ pilot 和 formal 按上一条固定检查点，对完整 140 条 `valid_seen` �
 报告的标签，不得进入评测环境或生成随机数的派生。补测旧 checkpoint 时，update 0
 与目标 checkpoint 也必须走同一 VERL/vLLM rollout adapter；加载失败必须 fail-fast，
 不得改用 Transformers 或未加载 adapter 的基座结果替代。
+
+命名分叉或跨 world-size 恢复不得重置 checkpoint 选择历史。目标 run 在启动 runtime
+前必须验证相同 `valid_seen` manifest，继承源 checkpoint 的 committed update 及之前
+全部评测，并保留每条记录的源 checkpoint 路径；目标 run 的后续评测与其合并后重新
+计算 `last` 和 `best-valid`。缺少源选择记录、manifest 不同、同一步指标冲突或重复
+记录均必须 fail-fast。
 _Avoid_: final-only health check、valid-seen hyperparameter tuning、highest-score-only reporting
 
 **Complete Valid-Seen Denominators**:

@@ -8,7 +8,14 @@ from .artifacts import (
 )
 from .metrics import EpisodeEvaluation, EvaluationSummary, aggregate_valid_seen
 from .runner import EvaluationRun, EvaluationRunner
-from .selection import EvaluationCheckpointScore, select_best_valid
+from .selection import (
+    EvaluationCheckpointScore,
+    checkpoint_score_payload,
+    inherit_forked_checkpoint_selection,
+    load_checkpoint_scores,
+    select_best_valid,
+    write_checkpoint_selection,
+)
 
 __all__ = [
     "EpisodeEvaluation",
@@ -18,7 +25,11 @@ __all__ = [
     "EvaluationSummary",
     "aggregate_valid_seen",
     "checkpoint_load_payload",
+    "checkpoint_score_payload",
+    "inherit_forked_checkpoint_selection",
+    "load_checkpoint_scores",
     "select_best_valid",
+    "write_checkpoint_selection",
     "write_checkpoint_load",
     "write_evaluation_provenance",
     "write_evaluation_timing",

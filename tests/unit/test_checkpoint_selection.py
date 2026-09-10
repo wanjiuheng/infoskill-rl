@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from infoskill.evaluation import EvaluationCheckpointScore, select_best_valid
+from infoskill.evaluation import (
+    EvaluationCheckpointScore,
+    inherit_forked_checkpoint_selection,
+    select_best_valid,
+)
 
 
 class CheckpointSelectionTests(unittest.TestCase):
@@ -14,6 +21,86 @@ class CheckpointSelectionTests(unittest.TestCase):
         ]
 
         self.assertEqual(select_best_valid(scores).step, 25)
+
+    def test_forked_resume_inherits_source_scores_and_preserves_checkpoint_paths(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            destination = root / "destination"
+            source.mkdir()
+            destination.mkdir()
+            manifest = "registered-manifest"
+            (source / "checkpoint_selection.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "task_manifest_sha256": manifest,
+                        "evaluations": [
+                            {
+                                "step": 0,
+                                "macro_success": 0.30,
+                                "overall_success": 0.25,
+                                "invalid_action_rate": 0.10,
+                                "checkpoint": "checkpoints/step-000000",
+                            },
+                            {
+                                "step": 10,
+                                "macro_success": 0.90,
+                                "overall_success": 0.90,
+                                "invalid_action_rate": 0.01,
+                                "checkpoint": "checkpoints/step-000010",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (destination / "checkpoint_selection.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "task_manifest_sha256": manifest,
+                        "evaluations": [
+                            {
+                                "step": 25,
+                                "macro_success": 0.20,
+                                "overall_success": 0.24,
+                                "invalid_action_rate": 0.08,
+                                "checkpoint": "checkpoints/step-000025",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            inherit_forked_checkpoint_selection(
+                source_run=source,
+                destination_run=destination,
+                max_source_step=5,
+                task_manifest_sha256=manifest,
+            )
+
+            payload = json.loads(
+                (destination / "checkpoint_selection.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                [record["step"] for record in payload["evaluations"]],
+                [0, 25],
+            )
+            self.assertEqual(payload["best_valid"]["step"], 0)
+            self.assertEqual(
+                payload["evaluations"][0]["checkpoint"],
+                str((source / "checkpoints/step-000000").resolve()),
+            )
+            self.assertEqual(
+                payload["evaluations"][1]["checkpoint"],
+                "checkpoints/step-000025",
+            )
 
 
 if __name__ == "__main__":

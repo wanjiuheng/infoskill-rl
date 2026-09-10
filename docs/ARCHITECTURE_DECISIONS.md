@@ -50,6 +50,8 @@ reference policy 不再按 VERL 默认方式创建并 CPU-offload 第二套 Qwen
 
 取消从 ALFWorld train 派生的 355 条内部 monitor；所有训练档位都从完整 3,553 条 train 清单按同一规则取样。pilot 在 update 0 和 25、formal 在 update 0、每 25 个 update 及最终 update 445，使用同一个以 SHA-256 预注册身份的固定 140 条 `valid_seen` manifest、确定性解码和完整六类分母；身份不符时必须在加载模型前失败。这样缩短 pilot 的评测时间，并让 pilot 与正式曲线直接可比；代价是曲线、`best-valid` 和最终报告使用同一集合，因此必须标注为 validation-selected performance，且不得根据该曲线调整损失权重、学习率等超参数。旧 train-monitor pilot 只保留为工程稳定性证据，不与新曲线拼接。
 
+跨拓扑或命名分叉恢复时，目标 run 必须继承源 checkpoint 所在 update 及之前的全部有效评测历史，并把源 run 的相对 checkpoint 路径改写为带来源的绝对路径；随后目标 run 的新评测与继承历史合并，再按同一预注册规则选择 `best-valid`。只在分叉目录内比较恢复后的评测会把较差的最后 checkpoint 错标为最佳，因此属于必须阻断或修复的结果选择错误，尽管它不改变模型权重、优化器或已计算成功率。
+
 ## D011：策略整形优势与任务成功 fidelity 目标分离
 
 M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` 在同任务组内标准化得到的 Shaped Policy Advantage，以保留合法动作密集反馈；M1 的 fidelity predictor 改用仅由二值 `won` 组内标准化得到的 Task-Success Fidelity Target。两者使用同一批轨迹但不能共用一个无语义区分的 `advantage` 接口。每个 update 同时记录混合结果组、全失败组、全成功组、Shaping-Only Group、零策略信号组以及按任务类型拆分的任务成功信号覆盖率。
