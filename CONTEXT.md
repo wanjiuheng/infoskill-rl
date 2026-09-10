@@ -44,6 +44,16 @@ _Avoid_: extra system message、step-zero special template、model-specific spec
 在固定技能库上联合使用状态条件随机压缩、soft prefix 和策略强化学习的 INFO-SKILL 第一阶段完整方法。
 _Avoid_: ordinary GRPO、skill-library evolution
 
+M1 实现已进入分阶段接线。第一批基础契约已经落地：训练 replay 会把 5 个显式
+prefix 占位位置、exact detached latent、rollout 时旧 prefix、动作 token 与行为策略
+logprob 放入同一个 tensor batch；旧 prefix 仅用于审计，后续 FSDP worker 必须用
+保存的 latent 和当前 projector 重算 prefix。grounding 产物已有 train-only 正式门禁
+加载器，并按“不同专家游戏各抽一个状态”确定性采样。LoRA 与 projector 的两个
+optimizer 已有共同 finite gate、合并梯度范数、统一裁剪和一起 step/skip 的
+`PolicyUpdateCoordinator`。当前 `infoskill` 训练入口仍保持 fail-fast，直到这些契约
+接入 DDP 小模块 worker、auxiliary update 和完整可移植 checkpoint；不得把基础契约
+已完成表述为 M1 已可训练。
+
 **Skill-Injection Control Mode**:
 共享同一训练评测框架、但改变技能信息如何进入策略的实验模式；首阶段包括 `no_skill`、`raw_skill_prompt` 和 `infoskill`。
 

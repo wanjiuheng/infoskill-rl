@@ -19,6 +19,7 @@ class RuntimePaths:
     output_root: str
     infoskill_checkpoint: str | None
     skill_bank_manifest: str | None = None
+    grounding_data: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

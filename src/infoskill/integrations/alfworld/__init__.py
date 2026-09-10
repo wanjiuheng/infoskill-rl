@@ -5,6 +5,7 @@ from .batch_environment import AlfworldEnvironmentBatch
 from .expert_replay import ExpertReplayResult, GroundingSample, StrictExpertReplay
 from .factory import AlfworldEnvironmentFactory
 from .grounding_io import (
+    GroundingDataset,
     GroundingManifest,
     build_grounding_manifest,
     sha256_file,
@@ -21,6 +22,7 @@ __all__ = [
     "ExpertReplayResult",
     "GroundingSample",
     "GroundingManifest",
+    "GroundingDataset",
     "StrictExpertReplay",
     "build_grounding_manifest",
     "discover_tasks",

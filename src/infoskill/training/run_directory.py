@@ -67,6 +67,16 @@ def validate_resume_config(
 
 def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
     normalized = dict(config)
+    app_config = normalized.get("app_config")
+    if isinstance(app_config, Mapping):
+        normalized_app = dict(app_config)
+        paths = normalized_app.get("paths")
+        if isinstance(paths, Mapping):
+            normalized_paths = dict(paths)
+            if normalized_paths.get("grounding_data") is None:
+                normalized_paths.pop("grounding_data", None)
+            normalized_app["paths"] = normalized_paths
+        normalized["app_config"] = normalized_app
     runtime_options = normalized.get("runtime_options")
     if isinstance(runtime_options, Mapping):
         normalized_options = dict(runtime_options)

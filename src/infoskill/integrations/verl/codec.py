@@ -12,6 +12,7 @@ from infoskill.rollout import GenerationRequest, GenerationResult, PromptLengthE
 
 from .generation_boundary import trim_vllm_padding_sentinel
 from .hybrid_prefix import build_hybrid_vllm_inputs
+from .policy_replay import PolicyReplayExample, build_policy_replay_tensors
 
 
 @dataclass(frozen=True)
@@ -148,65 +149,31 @@ class VerlBatchCodec:
     ):
         from verl import DataProto
 
-        examples: list[
-            tuple[tuple[int, ...], tuple[int, ...], tuple[float, ...], float]
-        ] = []
+        examples: list[PolicyReplayExample] = []
         for group, group_advantages in zip(groups, advantages):
             for trajectory, advantage in zip(group.trajectories, group_advantages):
                 for step in trajectory.steps:
-                    if step.conditioned_input.soft_prefix is not None:
-                        raise RuntimeError(
-                            "INFO-SKILL policy recomputation is not installed; refusing prefix-free training"
-                        )
+                    trace = step.conditioned_input.conditioning_trace
+                    latent = getattr(trace, "latent", None)
                     examples.append(
-                        (
-                            self._prompt_ids(step.conditioned_input.user_message),
-                            step.generation.token_ids,
-                            step.generation.token_logprobs,
-                            float(advantage),
+                        PolicyReplayExample(
+                            prompt_ids=self._prompt_ids(
+                                step.conditioned_input.user_message
+                            ),
+                            response_ids=step.generation.token_ids,
+                            response_logprobs=step.generation.token_logprobs,
+                            advantage=float(advantage),
+                            latent=latent,
+                            rollout_prefix=step.conditioned_input.soft_prefix,
                         )
                     )
-        if not examples:
-            raise ValueError("policy update requires at least one generated environment step")
-        prompt_width = max(len(prompt) for prompt, _, _, _ in examples)
-        response_width = max(len(response) for _, response, _, _ in examples)
-        response_width = max(response_width, 1)
-        total_width = prompt_width + response_width
-        input_ids = torch.full((len(examples), total_width), self.pad_token_id, dtype=torch.long)
-        prompts = torch.full((len(examples), prompt_width), self.pad_token_id, dtype=torch.long)
-        responses = torch.full((len(examples), response_width), self.pad_token_id, dtype=torch.long)
-        attention = torch.zeros_like(input_ids)
-        advantage_tensor = torch.zeros((len(examples), response_width), dtype=torch.float32)
-        rollout_logprobs = torch.zeros(
-            (len(examples), response_width), dtype=torch.float32
+        tensors = build_policy_replay_tensors(
+            examples,
+            pad_token_id=self.pad_token_id,
         )
-        for row, (prompt, response, response_logprobs, advantage) in enumerate(examples):
-            prompt_start = prompt_width - len(prompt)
-            prompt_tensor = torch.tensor(prompt, dtype=torch.long)
-            prompts[row, prompt_start:] = prompt_tensor
-            input_ids[row, prompt_start:prompt_width] = prompt_tensor
-            attention[row, prompt_start:prompt_width] = 1
-            if response:
-                response_tensor = torch.tensor(response, dtype=torch.long)
-                responses[row, : len(response)] = response_tensor
-                input_ids[row, prompt_width : prompt_width + len(response)] = response_tensor
-                attention[row, prompt_width : prompt_width + len(response)] = 1
-                advantage_tensor[row, : len(response)] = advantage
-                rollout_logprobs[row, : len(response)] = torch.tensor(
-                    response_logprobs, dtype=torch.float32
-                )
-        positions = (attention.cumsum(dim=-1) - 1).clamp_min(0)
-        global_token_num = attention.sum(dim=-1).tolist()
+        global_token_num = tensors["attention_mask"].sum(dim=-1).tolist()
         return DataProto.from_dict(
-            tensors={
-                "prompts": prompts,
-                "responses": responses,
-                "input_ids": input_ids,
-                "attention_mask": attention,
-                "position_ids": positions,
-                "advantages": advantage_tensor,
-                "rollout_log_probs": rollout_logprobs,
-            },
+            tensors=tensors,
             meta_info={
                 "temperature": 1.0,
                 "global_token_num": global_token_num,

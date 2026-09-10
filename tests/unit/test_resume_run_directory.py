@@ -116,6 +116,33 @@ class ResumeRunDirectoryTests(unittest.TestCase):
 
         self.assertEqual(source_gpus, 4)
 
+    def test_new_null_m1_path_does_not_break_historical_control_resume(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 4,
+            "app_config": {"paths": {"policy_model": "/same/model"}},
+        }
+        current = {
+            "num_gpus": 4,
+            "app_config": {
+                "paths": {
+                    "policy_model": "/same/model",
+                    "grounding_data": None,
+                }
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=False,
+            )
+
+        self.assertEqual(source_gpus, 4)
+
     def test_historical_checkpoint_cannot_silently_adopt_native_batch(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
         previous = {

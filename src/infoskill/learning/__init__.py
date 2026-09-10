@@ -13,7 +13,6 @@ from .signals import (
     build_group_advantage_signals,
     summarize_grpo_signals,
 )
-
 try:
     from .auxiliary import (
         AuxiliaryTrainingBatch,
@@ -24,6 +23,7 @@ try:
         OnlineAuxiliaryBatch,
     )
     from .losses import AuxiliaryLoss, GrpoLoss, auxiliary_loss, clipped_grpo_loss
+    from .policy_update import PolicyUpdateCoordinator
 except ModuleNotFoundError as error:
     if error.name != "torch":
         raise
@@ -35,6 +35,7 @@ except ModuleNotFoundError as error:
     GrpoLoss = None  # type: ignore[assignment,misc]
     OfflineGroundingBatch = None  # type: ignore[assignment,misc]
     OnlineAuxiliaryBatch = None  # type: ignore[assignment,misc]
+    PolicyUpdateCoordinator = None  # type: ignore[assignment,misc]
     auxiliary_loss = None  # type: ignore[assignment]
     clipped_grpo_loss = None  # type: ignore[assignment]
 
@@ -57,5 +58,6 @@ __all__ = [
     "build_group_advantage_signals",
     "require_logprob_alignment",
     "summarize_logprob_alignment",
+    "PolicyUpdateCoordinator",
     "summarize_grpo_signals",
 ]

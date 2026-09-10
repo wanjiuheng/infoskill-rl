@@ -3,12 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
-from .expert_replay import ExpertReplayResult
+from infoskill.domain.state import AgentHistoryEntry, CanonicalAgentState
+
+from .expert_replay import ExpertReplayResult, GroundingSample
 
 
 def sha256_file(path: str | Path) -> str:
@@ -39,6 +42,100 @@ class GroundingManifest:
     persist_horizon: int
     formal_gate_passed: bool
     formal_gate_failures: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GroundingDataset:
+    """Validated train-only expert states grouped by source game."""
+
+    root: Path
+    manifest: Mapping[str, object]
+    manifest_sha256: str
+    samples_by_game: Mapping[str, tuple[GroundingSample, ...]]
+
+    @property
+    def game_count(self) -> int:
+        return len(self.samples_by_game)
+
+    @property
+    def sample_count(self) -> int:
+        return sum(len(samples) for samples in self.samples_by_game.values())
+
+    @classmethod
+    def load(cls, directory: str | Path) -> "GroundingDataset":
+        root = Path(directory).expanduser().resolve()
+        manifest_path = root / "manifest.json"
+        samples_path = root / "grounding_samples.jsonl"
+        if not manifest_path.is_file() or not samples_path.is_file():
+            raise FileNotFoundError(
+                "grounding dataset requires manifest.json and grounding_samples.jsonl"
+            )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("grounding manifest must be a JSON object")
+        if manifest.get("schema_version") != 1:
+            raise ValueError("unsupported grounding manifest schema")
+        if manifest.get("source_split") != "train":
+            raise ValueError("grounding dataset must be train-only")
+        if manifest.get("formal_gate_passed") is not True:
+            failures = manifest.get("formal_gate_failures", [])
+            raise ValueError(f"grounding formal gate did not pass: {failures}")
+
+        grouped: dict[str, list[GroundingSample]] = defaultdict(list)
+        with samples_path.open("r", encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                    sample = _decode_grounding_sample(payload)
+                except (KeyError, TypeError, ValueError) as error:
+                    raise ValueError(
+                        f"invalid grounding sample at line {line_number}: {error}"
+                    ) from error
+                if sample.state.split != "train":
+                    raise ValueError("grounding dataset must be train-only")
+                if sample.expert_action not in sample.state.admissible_commands:
+                    raise ValueError(
+                        "grounding expert action must be an exact admissible command"
+                    )
+                if not sample.state.candidate_skill_ids:
+                    raise ValueError("grounding state requires candidate skill IDs")
+                grouped[sample.state.task_id].append(sample)
+        if not grouped:
+            raise ValueError("grounding dataset contains no successful samples")
+        expected_games = manifest.get("successful_games")
+        if isinstance(expected_games, int) and expected_games != len(grouped):
+            raise ValueError(
+                "grounding successful game count does not match the sample file"
+            )
+        return cls(
+            root=root,
+            manifest=manifest,
+            manifest_sha256=sha256_file(manifest_path),
+            samples_by_game={
+                task_id: tuple(samples)
+                for task_id, samples in sorted(grouped.items())
+            },
+        )
+
+    def sample_games(self, *, game_count: int, seed: int) -> tuple[GroundingSample, ...]:
+        """Choose distinct games, then one uniformly random state per game."""
+
+        if game_count <= 0:
+            raise ValueError("grounding game_count must be positive")
+        if seed < 0:
+            raise ValueError("grounding seed must be non-negative")
+        if game_count > self.game_count:
+            raise ValueError(
+                f"requested {game_count} grounding games from only {self.game_count}"
+            )
+        generator = random.Random(seed)
+        task_ids = generator.sample(sorted(self.samples_by_game), game_count)
+        return tuple(
+            generator.choice(self.samples_by_game[task_id])
+            for task_id in task_ids
+        )
 
 
 def build_grounding_manifest(
@@ -162,3 +259,29 @@ def _atomic_write(path: Path, content: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(content, encoding="utf-8")
     os.replace(temporary, path)
+
+
+def _decode_grounding_sample(payload: object) -> GroundingSample:
+    if not isinstance(payload, dict) or not isinstance(payload.get("state"), dict):
+        raise TypeError("grounding row requires a state object")
+    state_payload = dict(payload["state"])
+    history_payload = state_payload.get("history", [])
+    if not isinstance(history_payload, list):
+        raise TypeError("grounding state history must be a list")
+    state_payload["history"] = tuple(
+        AgentHistoryEntry(**entry) for entry in history_payload
+    )
+    for field in ("admissible_commands", "candidate_skill_ids"):
+        value = state_payload.get(field, [])
+        if not isinstance(value, list):
+            raise TypeError(f"grounding state {field} must be a list")
+        state_payload[field] = tuple(value)
+    state = CanonicalAgentState(**state_payload)
+    if payload.get("task_id") != state.task_id:
+        raise ValueError("grounding row task_id does not match state.task_id")
+    if payload.get("task_type") != state.task_type:
+        raise ValueError("grounding row task_type does not match state.task_type")
+    action = payload.get("expert_action")
+    if not isinstance(action, str) or not action.strip():
+        raise ValueError("grounding row requires a non-empty expert_action")
+    return GroundingSample(state=state, expert_action=action)

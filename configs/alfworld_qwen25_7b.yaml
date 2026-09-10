@@ -12,6 +12,8 @@ paths:
   output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
   # Required only for mode=infoskill. Point at the exported inference .pt file.
   infoskill_checkpoint: null
+  # Required for M1 training. Point at a completed `grounding` run directory.
+  grounding_data: null
 
 # Selects the immutable shared 7B initialization registered in code.
 # The local path may move, but training rejects any content mismatch.
