@@ -7,10 +7,15 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Literal, Mapping
 
 import ray
 
+from infoskill.conditioning import (
+    ConditioningRequest,
+    InfoSkillConditioningResult,
+    InfoSkillConditioningWorkItem,
+)
 from infoskill.config import DEFAULT_POLICY_MAX_TOKENS_PER_GPU
 from infoskill.distributed import pad_batch_to_divisor, policy_rank_balanced_order
 from infoskill.episode import TrajectoryGroup
@@ -51,12 +56,41 @@ class VerlRuntimeConfig:
     verbose_runtime_logs: bool = False
     cuda_memory_poll_interval_ms: int = 0
     balance_policy_tokens_across_ranks: bool = True
+    enable_infoskill_modules: bool = False
+    semantic_model_path: str | None = None
+    skill_bank_path: str | None = None
+    infoskill_latent_dim: int = 32
+    infoskill_initialization_seed: int = 0
+
+    def __post_init__(self) -> None:
+        if self.soft_prefix_length <= 0:
+            raise ValueError("soft prefix length must be positive")
+        if not self.enable_infoskill_modules:
+            return
+        if not self.require_hybrid_prefix:
+            raise ValueError(
+                "INFO-SKILL runtime modules require hybrid-prefix rollout"
+            )
+        if not self.semantic_model_path or not self.semantic_model_path.strip():
+            raise ValueError("INFO-SKILL runtime requires a semantic model path")
+        if not self.skill_bank_path or not self.skill_bank_path.strip():
+            raise ValueError("INFO-SKILL runtime requires a skill bank path")
+        if self.infoskill_latent_dim <= 0:
+            raise ValueError("INFO-SKILL latent dimension must be positive")
+        if self.infoskill_initialization_seed < 0:
+            raise ValueError("INFO-SKILL initialization seed must be non-negative")
 
 
 class VerlRuntime:
     """Own only worker initialization, generation, logprobs, and LoRA updates."""
 
-    def __init__(self, *, worker_group: object, codec: VerlBatchCodec, config: VerlRuntimeConfig) -> None:
+    def __init__(
+        self,
+        *,
+        worker_group: object,
+        codec: VerlBatchCodec,
+        config: VerlRuntimeConfig,
+    ) -> None:
         self.worker_group = worker_group
         self.codec = codec
         self.config = config
@@ -161,6 +195,61 @@ class VerlRuntime:
         self._generation_worker_seconds += worker_seconds
         self._generation_seconds += time.perf_counter() - generation_started
         return decoded
+
+    def condition_infoskill(
+        self,
+        requests: tuple[ConditioningRequest, ...],
+        candidate_skill_ids: tuple[str, ...],
+        *,
+        latent_mode: Literal["sample", "mean"],
+    ) -> tuple[InfoSkillConditioningResult, ...]:
+        """Condition states on the same workers that own trainable M1 modules."""
+
+        if not self.config.enable_infoskill_modules:
+            raise RuntimeError("INFO-SKILL runtime modules are not enabled")
+        if not requests:
+            return ()
+        import numpy as np
+        import torch
+        from verl import DataProto
+        from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
+
+        items = tuple(
+            InfoSkillConditioningWorkItem(
+                compression_view=request.views.compression_view,
+                candidate_skill_ids=candidate_skill_ids,
+                latent_seed=request.latent_seed,
+                latent_mode=latent_mode,
+            )
+            for request in requests
+        )
+        data = DataProto.from_dict(
+            tensors={"infoskill_row_id": torch.arange(len(items))},
+            non_tensors={
+                "infoskill_work_item": np.asarray(items, dtype=object),
+            },
+        )
+        padded, pad_size = pad_dataproto_to_divisor(
+            data,
+            self.worker_group.world_size,
+        )
+        output = self.worker_group.condition_infoskill(padded)
+        output = unpad_dataproto(output, pad_size=pad_size)
+        row_ids = tuple(
+            int(value)
+            for value in output.batch["infoskill_row_id"].tolist()
+        )
+        if row_ids != tuple(range(len(items))):
+            raise RuntimeError("INFO-SKILL worker conditioning changed row order")
+        results = tuple(
+            output.non_tensor_batch["infoskill_conditioning_result"].tolist()
+        )
+        if len(results) != len(items) or not all(
+            isinstance(result, InfoSkillConditioningResult)
+            for result in results
+        ):
+            raise RuntimeError("INFO-SKILL worker returned an invalid conditioning batch")
+        return results
 
     @contextmanager
     def rollout_session(self):
@@ -400,6 +489,16 @@ def _actor_config(settings: VerlRuntimeConfig):
         actor_ref.model.initialization_seed = settings.master_seed
         actor_ref.model.infoskill_cuda_memory_poll_interval_ms = (
             settings.cuda_memory_poll_interval_ms
+        )
+        actor_ref.model.infoskill_modules_enabled = (
+            settings.enable_infoskill_modules
+        )
+        actor_ref.model.infoskill_semantic_model_path = settings.semantic_model_path
+        actor_ref.model.infoskill_skill_bank_path = settings.skill_bank_path
+        actor_ref.model.infoskill_latent_dim = settings.infoskill_latent_dim
+        actor_ref.model.infoskill_prefix_length = settings.soft_prefix_length
+        actor_ref.model.infoskill_initialization_seed = (
+            settings.infoskill_initialization_seed
         )
     actor_ref.actor.strategy = "fsdp"
     actor_ref.actor.optim.lr = settings.actor_learning_rate

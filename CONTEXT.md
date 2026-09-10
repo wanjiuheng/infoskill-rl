@@ -55,6 +55,14 @@ optimizer 已有共同 finite gate、合并梯度范数、统一裁剪和一起 
 接入 DDP 小模块 worker、auxiliary update 和完整可移植 checkpoint；不得把基础契约
 已完成表述为 M1 已可训练。
 
+worker 条件化边界现已落地：driver 只负责 episode-level 候选检索，并把压缩视图、
+候选 ID、latent seed 与模式作为小型 work item 发送到 Ray；每个 VERL worker 自己加载
+冻结语义编码器、预热完整固定库的技能特征 cache、compressor 和 projector，返回 soft
+prefix 及 exact replay trace。该专属加载与初始化使用隔离 RNG，不改变 control modes
+或后续配对采样的随机流。RPC 会按 world size padding 并核验返回顺序，M1 配置缺少 hybrid-prefix、
+语义模型或技能库路径时在启动前失败。该阶段还没有把小模块包装成 DDP，也没有把
+projector 重算接进 actor loss，因此 `infoskill` 入口继续 fail-fast。
+
 **Skill-Injection Control Mode**:
 共享同一训练评测框架、但改变技能信息如何进入策略的实验模式；首阶段包括 `no_skill`、`raw_skill_prompt` 和 `infoskill`。
 

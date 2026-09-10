@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 from infoskill.domain.state import CanonicalAgentState, StateViews
 from infoskill.skills import RetrievalResult
@@ -40,6 +40,41 @@ class ConditionedPolicyInput:
     history_entries_omitted_for_prompt_budget: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class InfoSkillReplayTrace:
+    latent_seed: int
+    state_summary: object
+    state_tokens: object
+    posterior_mu: object
+    posterior_logvar: object
+    latent: object
+    epsilon: object
+
+
+@dataclass(frozen=True, slots=True)
+class InfoSkillConditioningResult:
+    soft_prefix: object
+    replay_trace: InfoSkillReplayTrace
+
+
+@dataclass(frozen=True, slots=True)
+class InfoSkillConditioningWorkItem:
+    compression_view: str
+    candidate_skill_ids: tuple[str, ...]
+    latent_seed: int
+    latent_mode: Literal["sample", "mean"]
+
+    def __post_init__(self) -> None:
+        if not self.compression_view.strip():
+            raise ValueError("INFO-SKILL compression view must not be empty")
+        if not self.candidate_skill_ids:
+            raise ValueError("INFO-SKILL conditioning requires candidate skills")
+        if self.latent_seed < 0:
+            raise ValueError("INFO-SKILL latent seed must be non-negative")
+        if self.latent_mode not in {"sample", "mean"}:
+            raise ValueError(f"unsupported INFO-SKILL latent mode: {self.latent_mode}")
+
+
 class SkillConditioner(Protocol):
     def prepare_group(self, initial_state: CanonicalAgentState) -> ConditioningContext: ...
 
@@ -48,3 +83,13 @@ class SkillConditioner(Protocol):
         requests: tuple[ConditioningRequest, ...],
         context: ConditioningContext,
     ) -> tuple[ConditionedPolicyInput, ...]: ...
+
+
+class InfoSkillConditioningRuntime(Protocol):
+    def condition_infoskill(
+        self,
+        requests: tuple[ConditioningRequest, ...],
+        candidate_skill_ids: tuple[str, ...],
+        *,
+        latent_mode: Literal["sample", "mean"],
+    ) -> tuple[InfoSkillConditioningResult, ...]: ...

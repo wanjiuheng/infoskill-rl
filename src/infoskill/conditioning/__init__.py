@@ -4,9 +4,14 @@ from .contracts import (
     ConditionedPolicyInput,
     ConditioningContext,
     ConditioningRequest,
+    InfoSkillConditioningResult,
+    InfoSkillConditioningRuntime,
+    InfoSkillConditioningWorkItem,
+    InfoSkillReplayTrace,
     SkillConditioner,
 )
 from .no_skill import NoSkillConditioner
+from .runtime_info_skill import RuntimeInfoSkillConditioner
 from .raw_skill import (
     EpisodeRetriever,
     RawSkillPromptConditioner,
@@ -17,12 +22,11 @@ from .raw_skill import (
 )
 
 try:
-    from .info_skill import InfoSkillConditioner, InfoSkillReplayTrace
+    from .info_skill import InfoSkillConditioner
 except ModuleNotFoundError as error:
     if error.name != "torch":
         raise
     InfoSkillConditioner = None  # type: ignore[assignment,misc]
-    InfoSkillReplayTrace = None  # type: ignore[assignment,misc]
 
 __all__ = [
     "ConditionedPolicyInput",
@@ -31,8 +35,12 @@ __all__ = [
     "EpisodeRetriever",
     "NoSkillConditioner",
     "InfoSkillConditioner",
+    "InfoSkillConditioningResult",
+    "InfoSkillConditioningRuntime",
+    "InfoSkillConditioningWorkItem",
     "InfoSkillReplayTrace",
     "RawSkillPromptConditioner",
+    "RuntimeInfoSkillConditioner",
     "SkillRlGrpoPromptConditioner",
     "SkillRlSftPromptConditioner",
     "SkillRlSftNoSkillsPromptConditioner",

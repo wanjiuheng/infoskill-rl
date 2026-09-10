@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Literal
 
 import torch
@@ -9,19 +8,13 @@ from infoskill.domain.state import CanonicalAgentState
 from infoskill.models import InfoSkillCompressor, LatentProjector
 from infoskill.semantic import FeatureBatch, FrozenSemanticEncoder, SemanticFeatureCache
 
-from .contracts import ConditionedPolicyInput, ConditioningContext, ConditioningRequest
+from .contracts import (
+    ConditionedPolicyInput,
+    ConditioningContext,
+    ConditioningRequest,
+    InfoSkillReplayTrace,
+)
 from .raw_skill import EpisodeRetriever
-
-
-@dataclass(frozen=True)
-class InfoSkillReplayTrace:
-    latent_seed: int
-    state_summary: object
-    state_tokens: object
-    posterior_mu: object
-    posterior_logvar: object
-    latent: object
-    epsilon: object
 
 
 class InfoSkillConditioner:

@@ -133,6 +133,13 @@ class SemanticFeatureCache:
             kind_ids.unsqueeze(0).expand(batch_size, -1),
         )
 
+    def warm_skills(self, records: Sequence[SkillRecord]) -> None:
+        """Precompute the immutable token features for a fixed skill library."""
+
+        if not records:
+            raise ValueError("skill cache warmup requires at least one record")
+        self._ensure_skills(records)
+
     def heterogeneous_skill_batch(
         self,
         record_groups: Sequence[Sequence[SkillRecord]],

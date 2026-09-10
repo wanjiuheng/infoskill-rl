@@ -45,7 +45,86 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        return super().init_model()
+        result = super().init_model()
+        self._infoskill_worker_conditioner = None
+        if bool(self.config.model.get("infoskill_modules_enabled", False)):
+            self._initialize_infoskill_conditioning_modules()
+        return result
+
+    def _initialize_infoskill_conditioning_modules(self) -> None:
+        from infoskill.integrations.verl.worker_conditioning import (
+            InfoSkillWorkerConditioner,
+        )
+        from infoskill.models import InfoSkillCompressor, LatentProjector
+        from infoskill.semantic import FrozenSemanticEncoder, SemanticFeatureCache
+        from infoskill.skills import FixedSkillLibrary
+
+        semantic_path = self.config.model.get("infoskill_semantic_model_path")
+        skill_bank_path = self.config.model.get("infoskill_skill_bank_path")
+        if not isinstance(semantic_path, str) or not semantic_path.strip():
+            raise ValueError("INFO-SKILL worker requires a semantic model path")
+        if not isinstance(skill_bank_path, str) or not skill_bank_path.strip():
+            raise ValueError("INFO-SKILL worker requires a skill bank path")
+        latent_dim = int(self.config.model.get("infoskill_latent_dim", 32))
+        prefix_length = int(self.config.model.get("infoskill_prefix_length", 5))
+        initialization_seed = int(
+            self.config.model.get("infoskill_initialization_seed", 0)
+        )
+        if min(latent_dim, prefix_length) <= 0 or initialization_seed < 0:
+            raise ValueError("INFO-SKILL worker dimensions and seed are invalid")
+
+        library = FixedSkillLibrary.load(skill_bank_path)
+        records = library.general + library.task_specific + library.mistakes
+        device_index = get_torch_device().current_device()
+        device = torch.device("cuda", device_index)
+        with torch.random.fork_rng(devices=[device_index]):
+            torch.manual_seed(initialization_seed)
+            torch.cuda.manual_seed(initialization_seed)
+            semantic = FrozenSemanticEncoder.from_pretrained(
+                semantic_path,
+                device=device,
+            )
+            feature_cache = SemanticFeatureCache(semantic)
+            feature_cache.warm_skills(records)
+            compressor = InfoSkillCompressor(
+                semantic.hidden_size,
+                latent_dim=latent_dim,
+            ).to(device)
+            projector = LatentProjector(
+                latent_dim=latent_dim,
+                policy_hidden_size=int(self.actor_model_config.hidden_size),
+                prefix_length=prefix_length,
+            ).to(device)
+        self._infoskill_compressor = compressor
+        self._infoskill_projector = projector
+        self._infoskill_semantic_encoder = semantic
+        self._infoskill_feature_cache = feature_cache
+        self._infoskill_worker_conditioner = InfoSkillWorkerConditioner(
+            library=library,
+            semantic_encoder=semantic,
+            feature_cache=feature_cache,
+            compressor=compressor,
+            projector=projector,
+        )
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def condition_infoskill(self, data):
+        conditioner = self._infoskill_worker_conditioner
+        if conditioner is None:
+            raise RuntimeError("INFO-SKILL worker conditioning is not initialized")
+        from verl import DataProto
+
+        items = tuple(data.non_tensor_batch["infoskill_work_item"].tolist())
+        results = conditioner.condition(items)
+        return DataProto.from_dict(
+            tensors={"infoskill_row_id": data.batch["infoskill_row_id"]},
+            non_tensors={
+                "infoskill_conditioning_result": np.asarray(
+                    results,
+                    dtype=object,
+                )
+            },
+        )
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def begin_infoskill_rollout_session(self) -> None:
