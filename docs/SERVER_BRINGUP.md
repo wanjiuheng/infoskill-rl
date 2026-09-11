@@ -188,6 +188,62 @@ echo "ARCHIVE=$ARCHIVE"
 ls -lh "$ARCHIVE"
 ```
 
+2026-09-12 的 300 条实跑结果为 278/300 成功；22 条失败中 21 条来自双物体任务，另有
+1 条来自冷却任务，且全部在 150 步终止。成功轨迹也有 60/278 超过正式持久化上限 30
+步，因此不能直接启动 3,553 条正式 grounding，也不能把 150 步门限简单放宽后视为通过。
+先对全部 22 条失败，加上 6 条最长的双物体成功轨迹作为对照，在 300 步上做逐步循环诊断。
+该诊断仍为 CPU-only，不写正式 grounding 样本，通常约需 10–25 分钟：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+mkdir -p logs
+
+SOURCE=/root/autodl-tmp/wjh/alfworld_eval/infoskill/runs/20260911T180620Z-m1-grounding-planner-pilot
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-grounding-planner-loop-${STAMP}.log"
+
+nohup env \
+GROUNDING_SOURCE_RUN="$SOURCE" \
+PLANNER_LOOP_SUCCESS_CONTROLS=6 \
+PLANNER_LOOP_MAX_REPLAY_STEPS=300 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=m1-grounding-planner-loop-diagnostic \
+bash scripts/run_alfworld.sh grounding-planner-loop-diagnostic \
+> "$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" > "${LOG}.pid"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+`planner-loop-diagnostic.json` 汇总被更长 horizon 救回、仍失败、状态—动作循环和对照退化
+的任务；`planner-loop-traces.jsonl` 则保留每步 observation、完整 admissible commands、
+planner plan 前五项、实际动作与状态指纹。状态指纹优先使用 ALFWorld 完整 world facts，
+缺失时才退回 observation、admissible commands 与 won；第三次出现完全相同的“状态指纹
+和动作”才标为循环。该信号用于区分“只是需要更多步骤”和“planner 卡死”，不作为正式
+质量门本身。
+
+完成后打印报告并打包这三个文件：
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-planner-loop-diagnostic' | sort | tail -n 1)
+echo "RUN=$RUN"
+cat "$RUN/planner-loop-diagnostic.json"
+tail -n 40 "$RUN/console.log"
+
+STAMP=$(date +%Y%m%d_%H%M%S)
+ARCHIVE="$PWD/m1-grounding-planner-loop-${STAMP}.tar.gz"
+tar -czf "$ARCHIVE" -C "$RUN" \
+  planner-loop-diagnostic.json \
+  planner-loop-traces.jsonl \
+  console.log
+echo "ARCHIVE=$ARCHIVE"
+ls -lh "$ARCHIVE"
+```
+
 ## 6. 评测闭环
 
 先用很少任务做开发 smoke（正式结果仍必须完整 140 条），确认模型加载、环境 reset/step、日志和动作解析。当前 CLI 的正式 `eval` 会强制 140 条：

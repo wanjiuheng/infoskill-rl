@@ -27,6 +27,9 @@ GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS="${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS:-
 # Balanced CPU-only planner candidate pilot; never produces formal M1 labels.
 PLANNER_PILOT_TASKS_PER_TYPE="${PLANNER_PILOT_TASKS_PER_TYPE:-50}"
 PLANNER_PILOT_MAX_REPLAY_STEPS="${PLANNER_PILOT_MAX_REPLAY_STEPS:-150}"
+# CPU-only follow-up over planner-pilot failures and long successful controls.
+PLANNER_LOOP_SUCCESS_CONTROLS="${PLANNER_LOOP_SUCCESS_CONTROLS:-6}"
+PLANNER_LOOP_MAX_REPLAY_STEPS="${PLANNER_LOOP_MAX_REPLAY_STEPS:-300}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
@@ -109,6 +112,14 @@ if [[ ! "${PLANNER_PILOT_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "${PLANNER_PILOT_MAX_REPLAY_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "PLANNER_PILOT_MAX_REPLAY_STEPS must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${PLANNER_LOOP_SUCCESS_CONTROLS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PLANNER_LOOP_SUCCESS_CONTROLS must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${PLANNER_LOOP_MAX_REPLAY_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PLANNER_LOOP_MAX_REPLAY_STEPS must be a positive integer" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -307,6 +318,18 @@ case "${ACTION}" in
       --max-replay-steps "${PLANNER_PILOT_MAX_REPLAY_STEPS}" \
       "${EXTRA_ARGS[@]}"
     ;;
+  grounding-planner-loop-diagnostic)
+    if [[ -z "${GROUNDING_SOURCE_RUN}" ]]; then
+      echo "GROUNDING_SOURCE_RUN is required for grounding-planner-loop-diagnostic" >&2
+      exit 2
+    fi
+    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-loop-diagnostic \
+      --config "${CONFIG}" \
+      --source-pilot-run "${GROUNDING_SOURCE_RUN}" \
+      --successful-two-object-controls "${PLANNER_LOOP_SUCCESS_CONTROLS}" \
+      --max-replay-steps "${PLANNER_LOOP_MAX_REPLAY_STEPS}" \
+      "${EXTRA_ARGS[@]}"
+    ;;
   train)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
@@ -369,7 +392,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, grounding-planner-pilot, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, grounding-planner-pilot, grounding-planner-loop-diagnostic, or train" >&2
     exit 2
     ;;
 esac

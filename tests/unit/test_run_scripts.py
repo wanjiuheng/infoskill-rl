@@ -5,6 +5,27 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_planner_loop_diagnostic_is_cpu_only_and_uses_source_pilot(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'PLANNER_LOOP_SUCCESS_CONTROLS="${PLANNER_LOOP_SUCCESS_CONTROLS:-6}"',
+            script,
+        )
+        self.assertIn(
+            'PLANNER_LOOP_MAX_REPLAY_STEPS="${PLANNER_LOOP_MAX_REPLAY_STEPS:-300}"',
+            script,
+        )
+        self.assertIn("grounding-planner-loop-diagnostic)", script)
+        self.assertIn(
+            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-loop-diagnostic',
+            script,
+        )
+        self.assertIn('--source-pilot-run "${GROUNDING_SOURCE_RUN}"', script)
+
     def test_planner_pilot_is_cpu_only_balanced_and_bounded(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

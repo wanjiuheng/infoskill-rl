@@ -25,6 +25,14 @@ from .grounding_shards import (
 )
 from .handcoded_expert import load_handcoded_expert
 from .planner_expert import PlannerPayloadExpert
+from .planner_loop_diagnostic import (
+    TracingPlannerExpert,
+    build_planner_loop_report,
+    run_planner_loop_diagnostic,
+    select_loop_diagnostic_rows,
+    summarize_planner_trace,
+    write_planner_loop_rows,
+)
 from .planner_pilot import (
     build_planner_pilot_report,
     compact_result_payload,
@@ -46,18 +54,24 @@ __all__ = [
     "GroundingShardReport",
     "GroundingWorkItem",
     "PlannerPayloadExpert",
+    "TracingPlannerExpert",
     "StrictExpertReplay",
     "build_grounding_manifest",
     "build_planner_pilot_report",
+    "build_planner_loop_report",
     "compact_result_payload",
     "discover_tasks",
     "load_handcoded_expert",
     "grounding_result_payload",
     "read_grounding_results",
     "run_bounded_grounding",
+    "run_planner_loop_diagnostic",
+    "select_loop_diagnostic_rows",
     "select_stratified_tasks",
     "sha256_file",
+    "summarize_planner_trace",
     "task_manifest_sha256",
     "write_grounding_artifacts",
     "write_planner_pilot_results",
+    "write_planner_loop_rows",
 ]

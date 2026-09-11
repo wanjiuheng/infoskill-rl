@@ -254,6 +254,15 @@ ALFWorld planner 的同任务同种子诊断：18/18 手写失败被精确复现
 manifest/grounding samples。只有分析其六类覆盖率、长尾轨迹及失败原因后，才决定是否
 把正式 grounding 专家从手写专家改为 planner 并重跑全部 3,553 条。
 
+2026-09-12 planner pilot 已完成：278/300 成功（92.67%），22 条失败全部达到 150 步，
+其中 21 条是双物体、1 条是冷却任务；没有异常和动作可执行性不匹配。成功轨迹中仍有
+60/278 超过 30 步，双物体成功轨迹有 23/29 超过 30 步。生命周期门通过，但覆盖率与
+长尾门均未通过，因此尚未授权全量正式 grounding。当前下一门改为
+`grounding-planner-loop-diagnostic`：对全部 22 条失败和 6 条最长双物体成功对照提高到
+300 步，逐步保存 observation、admissible commands、planner plan、动作与状态指纹，
+区分需要更长 horizon、可复现循环和其他终止原因。该产物仅用于诊断，不能传给
+`GROUNDING_DATA`。
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation

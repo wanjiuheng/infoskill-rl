@@ -4,7 +4,10 @@ import argparse
 import hashlib
 import json
 import logging
+import os
+import shutil
 import sys
+import tempfile
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -47,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
         return _grounding_expert_diagnostic(config, args)
     if args.command == "grounding-planner-pilot":
         return _grounding_planner_pilot(config, args)
+    if args.command == "grounding-planner-loop-diagnostic":
+        return _grounding_planner_loop_diagnostic(config, args)
     if args.command == "train":
         return _train(config, args)
     parser.error(f"unsupported command: {args.command}")
@@ -166,6 +171,15 @@ def _parser() -> argparse.ArgumentParser:
     planner_pilot.add_argument("--worker-batch-size", type=int, default=64)
     planner_pilot.add_argument("--max-replay-steps", type=int, default=150)
     planner_pilot.add_argument("--run-name")
+    planner_loop = subparsers.add_parser(
+        "grounding-planner-loop-diagnostic",
+        help="trace pilot failures and long successful controls at a larger horizon",
+    )
+    planner_loop.add_argument("--config", required=True)
+    planner_loop.add_argument("--source-pilot-run", required=True)
+    planner_loop.add_argument("--successful-two-object-controls", type=int, default=6)
+    planner_loop.add_argument("--max-replay-steps", type=int, default=300)
+    planner_loop.add_argument("--run-name")
     train = subparsers.add_parser("train", help="run INFO-SKILL-owned GRPO training")
     train.add_argument("--config", required=True)
     train.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
@@ -1655,6 +1669,153 @@ def _grounding_planner_pilot(
         "Pilot-only report: %s (a full 3,553-task formal run is still required)",
         run_directory / "planner-pilot.json",
     )
+    return 0
+
+
+def _grounding_planner_loop_diagnostic(
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    _validate_paths(
+        config,
+        mode=SkillMode.NO_SKILL,
+        require_checkpoint=False,
+    )
+    if args.successful_two_object_controls <= 0 or args.max_replay_steps <= 0:
+        raise ValueError("planner loop diagnostic sizes must be positive")
+    from tqdm.auto import tqdm
+
+    from infoskill.integrations.alfworld import (
+        build_planner_loop_report,
+        discover_tasks,
+        run_planner_loop_diagnostic,
+        select_loop_diagnostic_rows,
+        sha256_file,
+        write_planner_loop_rows,
+    )
+
+    source = Path(args.source_pilot_run).expanduser().resolve()
+    source_report_path = source / "planner-pilot.json"
+    source_results_path = source / "planner-pilot-results.jsonl"
+    if not source_report_path.is_file() or not source_results_path.is_file():
+        raise FileNotFoundError(
+            "source planner pilot requires planner-pilot.json and "
+            "planner-pilot-results.jsonl"
+        )
+    source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
+    if not isinstance(source_report, dict) or source_report.get("pilot_only") is not True:
+        raise ValueError("source run is not an explicit planner-only pilot")
+    source_rows = tuple(
+        json.loads(line)
+        for line in source_results_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+    if any(not isinstance(row, dict) for row in source_rows):
+        raise ValueError("source planner pilot rows must be JSON objects")
+    if len(source_rows) != int(source_report.get("selected_games", -1)):
+        raise ValueError("source planner pilot report/result counts disagree")
+    source_max_steps = int(source_report.get("max_replay_steps", 0))
+    if source_max_steps <= 0:
+        raise ValueError("source planner pilot has an invalid replay horizon")
+    if args.max_replay_steps <= source_max_steps:
+        raise ValueError(
+            "planner loop diagnostic max replay steps must exceed the source pilot"
+        )
+
+    tasks = discover_tasks(config.paths.alfworld_data, split="train")
+    current_manifest = _task_manifest_checksum(tasks)
+    source_checksums = source_report.get("source_checksums")
+    if not isinstance(source_checksums, dict) or source_checksums.get(
+        "train_task_manifest"
+    ) != current_manifest:
+        raise ValueError("source planner pilot does not match current train tasks")
+    selected_rows = select_loop_diagnostic_rows(
+        rows=source_rows,
+        successful_two_object_controls=args.successful_two_object_controls,
+        persist_horizon=config.max_steps,
+    )
+    run_directory = _run_directory(
+        config,
+        args.run_name or "grounding-planner-loop-diagnostic",
+    )
+    logger = _configure_logging(run_directory)
+    task_by_id = {task.task_id: task for task in tasks}
+    minimum_free = shutil.disk_usage(run_directory).free
+    temporary_path: Path | None = None
+    old_tempdir = tempfile.tempdir
+    temporary_variables = {
+        name: os.environ.get(name) for name in ("TMPDIR", "TMP", "TEMP")
+    }
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="planner-loop-diagnostic-",
+            dir=run_directory,
+        ) as temporary:
+            temporary_path = Path(temporary)
+            tempfile.tempdir = temporary
+            for name in temporary_variables:
+                os.environ[name] = temporary
+
+            def update_progress(count: int) -> None:
+                nonlocal minimum_free
+                minimum_free = min(
+                    minimum_free,
+                    shutil.disk_usage(run_directory).free,
+                )
+                progress.update(count)
+
+            with tqdm(
+                total=len(selected_rows),
+                desc="grounding/planner-loop-diagnostic",
+                unit="task",
+                dynamic_ncols=True,
+            ) as progress:
+                rows = run_planner_loop_diagnostic(
+                    config=config,
+                    tasks=task_by_id,
+                    selected_rows=selected_rows,
+                    max_replay_steps=args.max_replay_steps,
+                    persist_horizon=config.max_steps,
+                    on_progress=update_progress,
+                )
+    finally:
+        tempfile.tempdir = old_tempdir
+        for name, value in temporary_variables.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    minimum_free = min(minimum_free, shutil.disk_usage(run_directory).free)
+    temporary_cleaned = temporary_path is not None and not temporary_path.exists()
+    source_checksum = _source_checksum()
+    report = build_planner_loop_report(
+        rows=rows,
+        source_pilot_run=str(source),
+        source_pilot_sha256=sha256_file(source_report_path),
+        source_results_sha256=sha256_file(source_results_path),
+        train_task_manifest_sha256=current_manifest,
+        code_revision=source_checksum,
+        source_max_replay_steps=source_max_steps,
+        diagnostic_max_replay_steps=args.max_replay_steps,
+        successful_two_object_controls=args.successful_two_object_controls,
+        temporary_directory_cleaned=temporary_cleaned,
+        minimum_free_disk_bytes=minimum_free,
+    )
+    write_planner_loop_rows(
+        run_directory / "planner-loop-traces.jsonl",
+        rows,
+    )
+    _write_json(run_directory / "planner-loop-diagnostic.json", report)
+    logger.info(
+        "Planner loop diagnostic complete: selected=%d rescued=%d "
+        "still_failed=%d cycles=%d control_regressions=%d",
+        report["selected_tasks"],
+        report["rescued_after_source_horizon"],
+        report["still_failed_at_diagnostic_horizon"],
+        report["cycles_detected"],
+        report["control_regressions"],
+    )
+    logger.info("Diagnostic report: %s", run_directory / "planner-loop-diagnostic.json")
     return 0
 
 
