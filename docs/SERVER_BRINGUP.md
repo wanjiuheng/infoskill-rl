@@ -98,10 +98,19 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 这一步会遍历全部 train 游戏，运行 ALFWorld 手写专家并占用输出磁盘，但不会修改原数据。
 
 ```bash
-GPUS=0 bash scripts/run_alfworld.sh grounding
+GPUS=0 GROUNDING_WORKER_BATCH_SIZE=64 bash scripts/run_alfworld.sh grounding
 ```
 
 只有 `manifest.json` 同时满足专家成功覆盖率不少于 99%、超过 30 步比例不高于 1%，才允许作为正式 grounding 版本。隔离原因必须检查，不能只删除失败样本后继续。
+
+grounding 默认每 64 个任务重启一次短生命周期 CPU worker，并把该 worker 的
+`TMPDIR` 限定在 run 目录内；worker 退出后立即清理 TextWorld/Fast Downward
+临时副本。`grounding-lifecycle.json` 必须显示
+`temporary_directories_cleaned=true`、`processed_tasks=3553`。这个分批只改变资源
+生命周期，不减少任务、专家步数或 formal gate。`GPUS=0` 只用于一次性 embedding
+检索，专家回放子进程会主动隐藏 GPU。报告中的每个
+`free_disk_bytes_during` 是该 shard 逐任务采样到的最低剩余空间，用于确认临时占用
+峰值确实受到约束。
 
 ## 6. 评测闭环
 

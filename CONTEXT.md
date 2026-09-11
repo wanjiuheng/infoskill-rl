@@ -234,6 +234,10 @@ _Avoid_: policy decoder、free-text action generator
 使用 ALFWorld 内置手写专家完整验证 train 游戏，并只从通过动作可执行性和终局成功校验的轨迹生成 grounding 监督；失败游戏整体隔离而不保留部分标签。
 _Avoid_: wrapper-fallback labels、partial failed demonstration
 
+**Bounded Grounding Worker**:
+只处理固定数量 Strict Expert Replay 任务的短生命周期 CPU 子进程；退出时释放 TextWorld/Fast Downward 的进程级临时资源，父进程按原任务顺序合并结果。
+_Avoid_: one-process full replay、larger TMPDIR as a leak workaround
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation

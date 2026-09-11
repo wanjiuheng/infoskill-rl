@@ -18,6 +18,8 @@ PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark 
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
 GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
+# Short-lived process boundary for TextWorld/Fast Downward resource cleanup.
+GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
@@ -80,6 +82,10 @@ if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS
 fi
 if [[ ! "${RAW_SKILL_AB_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
   echo "RAW_SKILL_AB_TASKS_PER_TYPE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_WORKER_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_WORKER_BATCH_SIZE must be a positive integer" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -253,7 +259,10 @@ case "${ACTION}" in
     python -m infoskill.cli checkpoint-effect "${EFFECT_ARGS[@]}"
     ;;
   grounding)
-    python -m infoskill.cli grounding --config "${CONFIG}" "${EXTRA_ARGS[@]}"
+    python -m infoskill.cli grounding \
+      --config "${CONFIG}" \
+      --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
+      "${EXTRA_ARGS[@]}"
     ;;
   train)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
