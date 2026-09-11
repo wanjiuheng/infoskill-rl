@@ -23,6 +23,10 @@ GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
 # Number of independent bounded grounding subprocesses allowed concurrently.
 # Default 1 preserves historical serial behavior until parity is verified.
 GROUNDING_WORKER_PROCESSES="${GROUNDING_WORKER_PROCESSES:-1}"
+# Candidate replay engine. Formal default remains individual until exact parity
+# and the 60-task lifecycle/performance gate pass on the target server.
+GROUNDING_REPLAY_BACKEND="${GROUNDING_REPLAY_BACKEND:-individual}" # individual | native_batch
+GROUNDING_NATIVE_BATCH_SIZE="${GROUNDING_NATIVE_BATCH_SIZE:-4}"
 # CPU-only strict handcoded/planner comparison against an existing grounding run.
 GROUNDING_SOURCE_RUN="${GROUNDING_SOURCE_RUN:-}"
 GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"
@@ -34,6 +38,8 @@ PLANNER_PILOT_MAX_REPLAY_STEPS="${PLANNER_PILOT_MAX_REPLAY_STEPS:-150}"
 GROUNDING_PARITY_TASKS_PER_TYPE="${GROUNDING_PARITY_TASKS_PER_TYPE:-2}"
 GROUNDING_PARITY_WORKER_BATCH_SIZE="${GROUNDING_PARITY_WORKER_BATCH_SIZE:-6}"
 GROUNDING_PARITY_PARALLEL_WORKERS="${GROUNDING_PARITY_PARALLEL_WORKERS:-2}"
+GROUNDING_PARITY_CANDIDATE_BACKEND="${GROUNDING_PARITY_CANDIDATE_BACKEND:-process_parallel}"
+GROUNDING_PARITY_MINIMUM_SPEEDUP="${GROUNDING_PARITY_MINIMUM_SPEEDUP:-0.0}"
 # CPU-only follow-up over planner-pilot failures and long successful controls.
 PLANNER_LOOP_SUCCESS_CONTROLS="${PLANNER_LOOP_SUCCESS_CONTROLS:-6}"
 PLANNER_LOOP_MAX_REPLAY_STEPS="${PLANNER_LOOP_MAX_REPLAY_STEPS:-300}"
@@ -107,6 +113,26 @@ if [[ ! "${GROUNDING_WORKER_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "${GROUNDING_WORKER_PROCESSES}" =~ ^[1-9][0-9]*$ ]]; then
   echo "GROUNDING_WORKER_PROCESSES must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${GROUNDING_REPLAY_BACKEND}" != "individual" && "${GROUNDING_REPLAY_BACKEND}" != "native_batch" ]]; then
+  echo "GROUNDING_REPLAY_BACKEND must be individual or native_batch" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_NATIVE_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_NATIVE_BATCH_SIZE must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${GROUNDING_REPLAY_BACKEND}" == "native_batch" ]] && (( GROUNDING_NATIVE_BATCH_SIZE < 2 )); then
+  echo "native_batch requires GROUNDING_NATIVE_BATCH_SIZE of at least 2" >&2
+  exit 2
+fi
+if [[ "${GROUNDING_PARITY_CANDIDATE_BACKEND}" != "process_parallel" && "${GROUNDING_PARITY_CANDIDATE_BACKEND}" != "native_batch" ]]; then
+  echo "GROUNDING_PARITY_CANDIDATE_BACKEND must be process_parallel or native_batch" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_PARITY_MINIMUM_SPEEDUP}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "GROUNDING_PARITY_MINIMUM_SPEEDUP must be a non-negative number" >&2
   exit 2
 fi
 if [[ ! "${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
@@ -321,6 +347,8 @@ case "${ACTION}" in
       --config "${CONFIG}" \
       --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
       --worker-processes "${GROUNDING_WORKER_PROCESSES}" \
+      --replay-backend "${GROUNDING_REPLAY_BACKEND}" \
+      --native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}" \
       "${EXTRA_ARGS[@]}"
     ;;
   grounding-expert-diagnostic)
@@ -341,6 +369,8 @@ case "${ACTION}" in
       --tasks-per-type "${PLANNER_PILOT_TASKS_PER_TYPE}" \
       --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
       --worker-processes "${GROUNDING_WORKER_PROCESSES}" \
+      --replay-backend "${GROUNDING_REPLAY_BACKEND}" \
+      --native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}" \
       --max-replay-steps "${PLANNER_PILOT_MAX_REPLAY_STEPS}" \
       "${EXTRA_ARGS[@]}"
     ;;
@@ -350,6 +380,9 @@ case "${ACTION}" in
       --tasks-per-type "${GROUNDING_PARITY_TASKS_PER_TYPE}" \
       --worker-batch-size "${GROUNDING_PARITY_WORKER_BATCH_SIZE}" \
       --parallel-workers "${GROUNDING_PARITY_PARALLEL_WORKERS}" \
+      --candidate-backend "${GROUNDING_PARITY_CANDIDATE_BACKEND}" \
+      --native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}" \
+      --minimum-speedup "${GROUNDING_PARITY_MINIMUM_SPEEDUP}" \
       --max-replay-steps "${PLANNER_PILOT_MAX_REPLAY_STEPS}" \
       "${EXTRA_ARGS[@]}"
     ;;

@@ -1369,3 +1369,78 @@ echo "pid=${PID} log=${LOG}"
 
 首个 smoke 通过后，下一道门是从 `step-000001` 以相同三卡恢复到 update 2；之后才
 对该 checkpoint 做固定 140 条 `valid_seen`。不要直接启动 M1 pilot 或 formal。
+
+## Planner grounding 安全提速门
+
+这些命令只使用 CPU；不会占用当前可用的三张 GPU。正式 `grounding` 默认仍是
+`individual`，下面所有候选都通过显式环境变量启用。每项都重新运行相同的串行基线，
+并比较完整逐步序列，而不是只比较成功率。
+
+先在六类各 2 条上验证 4 个独立 worker。小样本只要求完全一致与实际观察到 4 个环境
+并发，不用它判断稳定提速：
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/planner-parity-4worker-${STAMP}.log"
+nohup env \
+  GROUNDING_PARITY_TASKS_PER_TYPE=2 \
+  GROUNDING_PARITY_WORKER_BATCH_SIZE=3 \
+  GROUNDING_PARITY_PARALLEL_WORKERS=4 \
+  GROUNDING_PARITY_CANDIDATE_BACKEND=process_parallel \
+  GROUNDING_PARITY_MINIMUM_SPEEDUP=0 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-grounding-planner-parity-4worker \
+  bash scripts/run_alfworld.sh grounding-planner-parity \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+随后在同一固定 12 条上验证原生 batch size 4。串行与候选各自只有一个 bounded
+父 worker，差异仅为逐任务环境与固定四 slot TextWorld batch：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/planner-parity-native4-${STAMP}.log"
+nohup env \
+  GROUNDING_PARITY_TASKS_PER_TYPE=2 \
+  GROUNDING_PARITY_WORKER_BATCH_SIZE=12 \
+  GROUNDING_PARITY_CANDIDATE_BACKEND=native_batch \
+  GROUNDING_NATIVE_BATCH_SIZE=4 \
+  GROUNDING_PARITY_MINIMUM_SPEEDUP=0 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-grounding-planner-parity-native4 \
+  bash scripts/run_alfworld.sh grounding-planner-parity \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+两项 `passed=true` 后才运行六类各 10 条的 exact、性能与生命周期压力门。这里要求
+端到端至少提速 5%；若不足，结果仍可证明一致性，但不能批准 native batch 为正式后端：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/planner-parity-native4-stress60-${STAMP}.log"
+nohup env \
+  GROUNDING_PARITY_TASKS_PER_TYPE=10 \
+  GROUNDING_PARITY_WORKER_BATCH_SIZE=60 \
+  GROUNDING_PARITY_CANDIDATE_BACKEND=native_batch \
+  GROUNDING_NATIVE_BATCH_SIZE=4 \
+  GROUNDING_PARITY_MINIMUM_SPEEDUP=1.05 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-grounding-planner-parity-native4-stress60 \
+  bash scripts/run_alfworld.sh grounding-planner-parity \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+每次完成后检查 `planner-parity.json`。必须同时满足 `passed=true`、所有
+`field_checks/lifecycle_checks/identity_checks=true`、`performance_passed=true`，并且
+`parallel.peak_environment_slots` 与候选一致。任何失败都不要启动 3,553 条正式运行；
+保留对应 run 目录用于诊断。

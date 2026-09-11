@@ -126,6 +126,10 @@ class AlfworldEnvironmentBatchTests(unittest.TestCase):
         self.assertEqual([state.task_id for state in states], ["game-0", "game-1"])
         self.assertEqual([state.goal for state in states], ["Goal 0.", "Goal 1."])
         self.assertEqual(raw.actions, [("look", "open cabinet 1")])
+        payloads = batch.expert_payloads()
+        self.assertEqual(payloads[0]["feedback"], "After look.")
+        self.assertEqual(payloads[1]["feedback"], "After open cabinet 1.")
+        self.assertEqual(payloads[0]["admissible_commands"], ("look", "open cabinet 0"))
         self.assertEqual(
             [transition.next_state.task_id for transition in transitions if transition],
             ["game-0", "game-1"],

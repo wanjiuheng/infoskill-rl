@@ -46,6 +46,7 @@ def build_grounding_parity_report(
     train_task_manifest_sha256: str,
     code_revision: str,
     expert_binding: Mapping[str, object],
+    minimum_speedup: float = 0.0,
 ) -> dict[str, object]:
     serial_rows = serialize_grounding_results(serial_results)
     parallel_rows = serialize_grounding_results(parallel_results)
@@ -99,7 +100,7 @@ def build_grounding_parity_report(
         ),
         "serial_expert_is_planner": serial_lifecycle.expert_type == "planner",
         "parallel_expert_is_planner": parallel_lifecycle.expert_type == "planner",
-        "parallelism_observed": parallel_lifecycle.peak_worker_processes > 1,
+        "parallelism_observed": parallel_lifecycle.peak_environment_slots > 1,
     }
     identity_checks = {
         "requested_expert_is_planner": (
@@ -115,13 +116,16 @@ def build_grounding_parity_report(
             expert_binding.get("positional_binding_corrected") is True
         ),
     }
+    speedup = serial_seconds / parallel_seconds if parallel_seconds > 0 else None
+    performance_passed = speedup is not None and speedup >= minimum_speedup
     passed = (
         all(checks.values())
         and all(lifecycle_checks.values())
         and all(identity_checks.values())
+        and performance_passed
     )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "passed": passed,
         "comparison_scope": (
             "full serialized replay rows, including every persisted state, "
@@ -139,21 +143,27 @@ def build_grounding_parity_report(
         "identity_checks": identity_checks,
         "mismatch_count": len(mismatches),
         "mismatches": mismatches[:50],
+        "minimum_speedup": minimum_speedup,
+        "performance_passed": performance_passed,
         "serial": {
             "seconds": serial_seconds,
             "worker_concurrency": serial_lifecycle.worker_concurrency,
             "peak_worker_processes": serial_lifecycle.peak_worker_processes,
             "minimum_free_disk_bytes": serial_lifecycle.minimum_free_disk_bytes,
+            "replay_backend": serial_lifecycle.replay_backend,
+            "native_batch_size": serial_lifecycle.native_batch_size,
+            "peak_environment_slots": serial_lifecycle.peak_environment_slots,
         },
         "parallel": {
             "seconds": parallel_seconds,
             "worker_concurrency": parallel_lifecycle.worker_concurrency,
             "peak_worker_processes": parallel_lifecycle.peak_worker_processes,
             "minimum_free_disk_bytes": parallel_lifecycle.minimum_free_disk_bytes,
+            "replay_backend": parallel_lifecycle.replay_backend,
+            "native_batch_size": parallel_lifecycle.native_batch_size,
+            "peak_environment_slots": parallel_lifecycle.peak_environment_slots,
         },
-        "speedup": (
-            serial_seconds / parallel_seconds if parallel_seconds > 0 else None
-        ),
+        "speedup": speedup,
         "expert_binding": dict(expert_binding),
         "source_checksums": {
             "train_task_manifest": train_task_manifest_sha256,

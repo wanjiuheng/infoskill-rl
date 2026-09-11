@@ -156,6 +156,12 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     grounding.add_argument("--worker-processes", type=int, default=1)
+    grounding.add_argument(
+        "--replay-backend",
+        choices=("individual", "native_batch"),
+        default="individual",
+    )
+    grounding.add_argument("--native-batch-size", type=int, default=4)
     grounding_diagnostic = subparsers.add_parser(
         "grounding-expert-diagnostic",
         help="compare strict handcoded replay with the ALFWorld planner",
@@ -173,6 +179,12 @@ def _parser() -> argparse.ArgumentParser:
     planner_pilot.add_argument("--tasks-per-type", type=int, default=50)
     planner_pilot.add_argument("--worker-batch-size", type=int, default=64)
     planner_pilot.add_argument("--worker-processes", type=int, default=1)
+    planner_pilot.add_argument(
+        "--replay-backend",
+        choices=("individual", "native_batch"),
+        default="individual",
+    )
+    planner_pilot.add_argument("--native-batch-size", type=int, default=4)
     planner_pilot.add_argument("--max-replay-steps", type=int, default=150)
     planner_pilot.add_argument("--run-name")
     planner_parity = subparsers.add_parser(
@@ -183,6 +195,13 @@ def _parser() -> argparse.ArgumentParser:
     planner_parity.add_argument("--tasks-per-type", type=int, default=2)
     planner_parity.add_argument("--worker-batch-size", type=int, default=6)
     planner_parity.add_argument("--parallel-workers", type=int, default=2)
+    planner_parity.add_argument(
+        "--candidate-backend",
+        choices=("process_parallel", "native_batch"),
+        default="process_parallel",
+    )
+    planner_parity.add_argument("--native-batch-size", type=int, default=4)
+    planner_parity.add_argument("--minimum-speedup", type=float, default=0.0)
     planner_parity.add_argument("--max-replay-steps", type=int, default=150)
     planner_parity.add_argument("--run-name")
     planner_loop = subparsers.add_parser(
@@ -1369,7 +1388,11 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         mode=SkillMode.INFO_SKILL,
         require_checkpoint=False,
     )
-    if args.worker_batch_size <= 0 or args.worker_processes <= 0:
+    if (
+        args.worker_batch_size <= 0
+        or args.worker_processes <= 0
+        or args.native_batch_size <= 0
+    ):
         raise ValueError("grounding worker sizes must be positive")
     from tqdm.auto import tqdm
 
@@ -1443,6 +1466,8 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
             max_replay_steps=150,
             persist_horizon=config.max_steps,
             expert_type="planner",
+            replay_backend=args.replay_backend,
+            native_batch_size=args.native_batch_size,
             on_progress=progress.update,
         )
     manifest = build_grounding_manifest(
@@ -1461,11 +1486,14 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
     write_grounding_artifacts(output_directory=run_directory, results=results, manifest=manifest)
     _write_json(run_directory / "grounding-lifecycle.json", _dataclass_dict(lifecycle))
     logger.info(
-        "Grounding workers: count=%d concurrency=%d peak=%d batch_size=%d "
-        "tasks=%d temp_cleanup=%s min_free=%.2f GiB",
+        "Grounding workers: backend=%s count=%d concurrency=%d peak=%d "
+        "environment_slots=%d batch_size=%d tasks=%d temp_cleanup=%s "
+        "min_free=%.2f GiB",
+        lifecycle.replay_backend,
         lifecycle.worker_processes_started,
         lifecycle.worker_concurrency,
         lifecycle.peak_worker_processes,
+        lifecycle.peak_environment_slots,
         lifecycle.worker_batch_size,
         lifecycle.processed_tasks,
         lifecycle.temporary_directories_cleaned,
@@ -1609,6 +1637,7 @@ def _grounding_planner_pilot(
         or args.worker_batch_size <= 0
         or args.worker_processes <= 0
         or args.max_replay_steps <= 0
+        or args.native_batch_size <= 0
     ):
         raise ValueError("planner pilot sizes and replay limit must be positive")
     from tqdm.auto import tqdm
@@ -1666,6 +1695,8 @@ def _grounding_planner_pilot(
             max_replay_steps=args.max_replay_steps,
             persist_horizon=config.max_steps,
             expert_type="planner",
+            replay_backend=args.replay_backend,
+            native_batch_size=args.native_batch_size,
             on_progress=progress.update,
         )
 
@@ -1700,15 +1731,17 @@ def _grounding_planner_pilot(
     )
     logger.info(
         "Planner pilot complete: selected=%d success=%d coverage=%.4f "
-        "over_%d_steps=%d gate=%s concurrency=%d peak=%d",
+        "over_%d_steps=%d gate=%s backend=%s concurrency=%d peak=%d slots=%d",
         report["selected_games"],
         report["successful_games"],
         report["success_coverage"],
         config.max_steps,
         report["over_persist_horizon"],
         report["pilot_gate_passed"],
+        lifecycle.replay_backend,
         lifecycle.worker_concurrency,
         lifecycle.peak_worker_processes,
+        lifecycle.peak_environment_slots,
     )
     logger.info(
         "Planner identity: requested=%s effective=%s guard=%s corrected=%s",
@@ -1738,11 +1771,17 @@ def _grounding_planner_parity(
     if (
         args.tasks_per_type <= 0
         or args.worker_batch_size <= 0
-        or args.parallel_workers < 2
         or args.max_replay_steps <= 0
+        or args.native_batch_size <= 0
+        or args.minimum_speedup < 0
+        or (
+            args.candidate_backend == "process_parallel"
+            and args.parallel_workers < 2
+        )
     ):
         raise ValueError(
-            "planner parity sizes must be positive and parallel workers at least 2"
+            "planner parity sizes must be positive; process-parallel workers "
+            "must be at least 2"
         )
     from tqdm.auto import tqdm
 
@@ -1766,7 +1805,10 @@ def _grounding_planner_parity(
         tasks_per_type=args.tasks_per_type,
         selection_seed=config.master_seed,
     )
-    if len(selected) <= args.worker_batch_size:
+    if (
+        args.candidate_backend == "process_parallel"
+        and len(selected) <= args.worker_batch_size
+    ):
         raise ValueError(
             "planner parity requires more selected tasks than worker batch size "
             "so at least two worker processes can overlap"
@@ -1812,10 +1854,20 @@ def _grounding_planner_parity(
             config_path=args.config,
             run_directory=parallel_directory,
             worker_batch_size=args.worker_batch_size,
-            worker_processes=args.parallel_workers,
+            worker_processes=(
+                args.parallel_workers
+                if args.candidate_backend == "process_parallel"
+                else 1
+            ),
             max_replay_steps=args.max_replay_steps,
             persist_horizon=config.max_steps,
             expert_type="planner",
+            replay_backend=(
+                "native_batch"
+                if args.candidate_backend == "native_batch"
+                else "individual"
+            ),
+            native_batch_size=args.native_batch_size,
             on_progress=progress.update,
         )
         parallel_seconds = time.perf_counter() - started
@@ -1833,6 +1885,7 @@ def _grounding_planner_parity(
         train_task_manifest_sha256=_task_manifest_checksum(all_tasks),
         code_revision=source_checksum,
         expert_binding=expert_binding,
+        minimum_speedup=args.minimum_speedup,
     )
     write_serialized_grounding_results(
         run_directory / "serial-results.jsonl",
@@ -1853,13 +1906,17 @@ def _grounding_planner_parity(
     _write_json(run_directory / "planner-parity.json", report)
     logger.info(
         "Planner serial/parallel parity: passed=%s exact_fields=%s "
-        "serial=%.1fs parallel=%.1fs speedup=%.2fx peak_parallel_workers=%d",
+        "serial=%.1fs candidate=%.1fs speedup=%.2fx backend=%s "
+        "peak_workers=%d peak_environment_slots=%d performance_gate=%s",
         report["passed"],
         all(report["field_checks"].values()),
         serial_seconds,
         parallel_seconds,
         report["speedup"],
+        parallel_lifecycle.replay_backend,
         parallel_lifecycle.peak_worker_processes,
+        parallel_lifecycle.peak_environment_slots,
+        report["performance_passed"],
     )
     logger.info("Parity report: %s", run_directory / "planner-parity.json")
     return 0 if report["passed"] else 5

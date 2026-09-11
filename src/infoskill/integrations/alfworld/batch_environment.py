@@ -103,6 +103,7 @@ class AlfworldEnvironmentBatch:
         self._tasks = tasks
         self._states: list[CanonicalAgentState] = []
         self._last_infos: list[dict[str, object]] = []
+        self._raw_feedback: list[str] = []
         self._closed = False
         self.forced_worker_terminations = 0
 
@@ -151,6 +152,7 @@ class AlfworldEnvironmentBatch:
             )
         self._states = states
         self._last_infos = [dict(info) for info in infos]
+        self._raw_feedback = [str(observation) for observation in observations]
         return tuple(states)
 
     def step(
@@ -217,6 +219,7 @@ class AlfworldEnvironmentBatch:
             )
             self._states[index] = next_state
             self._last_infos[index] = dict(info)
+            self._raw_feedback[index] = str(raw_observation)
             transitions.append(
                 EnvironmentTransition(
                     next_state=next_state,
@@ -230,6 +233,28 @@ class AlfworldEnvironmentBatch:
                 )
             )
         return tuple(transitions)
+
+    def expert_payloads(self) -> tuple[dict[str, object], ...]:
+        """Return the planner payload for each stable batch slot."""
+
+        if (
+            len(self._states) != len(self._tasks)
+            or len(self._last_infos) != len(self._tasks)
+            or len(self._raw_feedback) != len(self._tasks)
+        ):
+            raise RuntimeError("reset must be called before requesting expert payloads")
+        payloads = []
+        for state, info, feedback in zip(
+            self._states,
+            self._last_infos,
+            self._raw_feedback,
+        ):
+            payload = dict(info)
+            payload["feedback"] = feedback
+            payload["won"] = state.won
+            payload["admissible_commands"] = state.admissible_commands
+            payloads.append(payload)
+        return tuple(payloads)
 
     def close(self) -> None:
         if self._closed:

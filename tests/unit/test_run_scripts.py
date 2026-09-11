@@ -81,6 +81,18 @@ class RunScriptTests(unittest.TestCase):
             '--parallel-workers "${GROUNDING_PARITY_PARALLEL_WORKERS}"',
             script,
         )
+        self.assertIn(
+            '--candidate-backend "${GROUNDING_PARITY_CANDIDATE_BACKEND}"',
+            script,
+        )
+        self.assertIn(
+            '--native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}"',
+            script,
+        )
+        self.assertIn(
+            '--minimum-speedup "${GROUNDING_PARITY_MINIMUM_SPEEDUP}"',
+            script,
+        )
 
     def test_grounding_uses_bounded_worker_batches_by_default(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

@@ -275,6 +275,14 @@ grounding。
 v2 并记录/强制校验专家身份。旧 schema v1 或未验证的 handcoded grounding 不能被 M1
 加载。
 
+正式 grounding 尚未切换到提速后端。当前代码提供两个可回退候选：4 个独立 bounded
+worker 的 `process_parallel`，以及单 worker 内固定 slot 的 `native_batch` planner
+replay。后者会逐 slot 保存与串行相同的状态、专家动作和终局数据，完成 slot 的占位动作
+不会落入样本；运行时按环境 slot 预留磁盘并以 0.5 秒周期执行 4 GiB 硬熔断。采用顺序
+固定为：12 条四 worker exact parity、12 条 native-batch exact parity、60 条
+native-batch exact/性能/生命周期压力门。只有候选逐字段完全一致、身份和清理门通过且
+60 条达到设定提速门槛，才能用于 3,553 条；否则回滚到已验证的双 worker individual。
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation

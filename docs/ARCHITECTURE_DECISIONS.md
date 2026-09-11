@@ -95,3 +95,12 @@ Grounding 的并发单位是相互独立的短生命周期 CPU worker，而不�
 并行 worker 各自使用独占临时目录，父进程按预注册任务顺序合并乱序完成的 shard，并记录实际峰值并发。并发启动前为每个 worker 额外预留 3 GiB 临时磁盘，同时始终保留 4 GiB 硬下限；运行中跌破硬下限立即失败。该优化不得改变任务集合、专家、标签、gate 或样本顺序，性能提升也不是一致性门通过的必要条件。
 
 固定串并行逐步一致性门通过后，双 worker 在六类各 50 条的正确 planner pilot 上达到 300/300，轨迹均不超过 11 步，身份门、覆盖率门、horizon 门与临时资源清理门全部通过。由此批准双 worker 用于 3,553 条正式 grounding。正式入口必须与 pilot 使用相同的 verified planner：bounded worker 的 `expert_type` 不再有默认值，调用方必须显式指定；formal manifest 使用 schema v2 保存 `expert_type`、完整 binding 报告及身份门结果，M1 加载器拒绝旧 schema、handcoded 或身份未经验证的产物。这一约束防止 pilot 正确但 formal 因调用遗漏静默退回 handcoded。
+
+进一步提速只允许作为显式候选进入：`process_parallel` 用多个独立 bounded worker，
+`native_batch` 则在一个 bounded worker 内用固定 TextWorld slot 并行回放多个 planner
+任务。原生批处理必须保持 task/slot 映射、完整 canonical state、专家动作、终局和隔离
+信息逐字段一致；已结束 slot 的 transport filler 不得进入训练样本。两条候选都按实际
+环境 slot 数在启动前预留临时磁盘，并在 worker 存活期间每 0.5 秒执行 4 GiB 硬下限
+监控；低于下限时终止 worker、保留失败报告，不允许等待磁盘写满。正式默认仍为
+`individual`，只有 12 条 exact parity 与 60 条生命周期/性能门同时通过，才可在
+3,553 条正式运行中显式选择更快后端。

@@ -35,6 +35,7 @@ from .grounding_shards import (
 )
 from .handcoded_expert import load_handcoded_expert
 from .planner_expert import PlannerPayloadExpert
+from .planner_batch_replay import StrictPlannerBatchReplay
 from .planner_loop_diagnostic import (
     TracingPlannerExpert,
     build_planner_loop_report,
@@ -68,6 +69,7 @@ __all__ = [
     "prepare_alfworld_expert_type_binding",
     "TracingPlannerExpert",
     "StrictExpertReplay",
+    "StrictPlannerBatchReplay",
     "build_grounding_manifest",
     "build_grounding_parity_report",
     "build_planner_pilot_report",

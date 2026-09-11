@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from threading import Lock
+from threading import Event, Lock, Thread
 from typing import Callable, Sequence
 
 from infoskill.episode import TaskSpec
@@ -23,6 +23,7 @@ from .grounding_io import read_grounding_results
 _PROGRESS_MARKER = "INFO_SKILL_GROUNDING_PROGRESS"
 _MINIMUM_FREE_DISK_BYTES = 4 * 1024**3
 _PARALLEL_WORKER_DISK_RESERVE_BYTES = 3 * 1024**3
+_DISK_MONITOR_INTERVAL_SECONDS = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,9 @@ class GroundingShardReport:
     parallel_worker_disk_reserve_bytes: int
     temporary_directories_cleaned: bool
     shards: tuple[dict[str, object], ...]
+    replay_backend: str = "individual"
+    native_batch_size: int = 1
+    peak_environment_slots: int = 1
 
 
 WorkerRunner = Callable[
@@ -55,6 +59,8 @@ WorkerRunner = Callable[
         int,
         int,
         str,
+        str,
+        int,
         Callable[[int], None] | None,
     ],
     list[tuple[str, ExpertReplayResult]],
@@ -71,6 +77,8 @@ def run_bounded_grounding(
     max_replay_steps: int,
     persist_horizon: int,
     expert_type: str,
+    replay_backend: str = "individual",
+    native_batch_size: int = 1,
     on_progress: Callable[[int], None] | None = None,
     worker_runner: WorkerRunner | None = None,
 ) -> tuple[list[tuple[str, ExpertReplayResult]], GroundingShardReport]:
@@ -86,6 +94,14 @@ def run_bounded_grounding(
         raise ValueError("grounding replay limits must be positive")
     if expert_type not in {"handcoded", "planner"}:
         raise ValueError("expert_type must be handcoded or planner")
+    if replay_backend not in {"individual", "native_batch"}:
+        raise ValueError("replay_backend must be individual or native_batch")
+    if native_batch_size <= 0:
+        raise ValueError("native_batch_size must be positive")
+    if replay_backend == "native_batch" and expert_type != "planner":
+        raise ValueError("native batch grounding currently requires planner expert")
+    if replay_backend == "native_batch" and native_batch_size < 2:
+        raise ValueError("native batch grounding requires native_batch_size at least 2")
 
     destination = Path(run_directory).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
@@ -113,10 +129,15 @@ def run_bounded_grounding(
     progress_lock = Lock()
     active_processes = 0
     peak_processes = 0
+    environment_slots_per_worker = (
+        native_batch_size if replay_backend == "native_batch" else 1
+    )
     required_free_before_parallel_launch = (
         _MINIMUM_FREE_DISK_BYTES
-        + effective_concurrency * _PARALLEL_WORKER_DISK_RESERVE_BYTES
-        if effective_concurrency > 1
+        + effective_concurrency
+        * environment_slots_per_worker
+        * _PARALLEL_WORKER_DISK_RESERVE_BYTES
+        if effective_concurrency * environment_slots_per_worker > 1
         else _MINIMUM_FREE_DISK_BYTES
     )
 
@@ -171,6 +192,8 @@ def run_bounded_grounding(
                     max_replay_steps,
                     persist_horizon,
                     expert_type,
+                    replay_backend,
+                    native_batch_size,
                     shard_progress,
                 )
                 expected_ids = [item.task.task_id for item in chunk]
@@ -253,6 +276,13 @@ def run_bounded_grounding(
         ),
         temporary_directories_cleaned=all(not path.exists() for path in temporary_paths),
         shards=tuple(shard_reports),
+        replay_backend=replay_backend,
+        native_batch_size=(
+            native_batch_size if replay_backend == "native_batch" else 1
+        ),
+        peak_environment_slots=(
+            peak_processes * environment_slots_per_worker
+        ),
     )
     return results, report
 
@@ -264,6 +294,8 @@ def _run_worker_subprocess(
     max_replay_steps: int,
     persist_horizon: int,
     expert_type: str,
+    replay_backend: str,
+    native_batch_size: int,
     on_progress: Callable[[int], None] | None,
 ) -> list[tuple[str, ExpertReplayResult]]:
     input_path = temporary_directory / "work-items.jsonl"
@@ -310,9 +342,15 @@ def _run_worker_subprocess(
         str(persist_horizon),
         "--expert-type",
         expert_type,
+        "--replay-backend",
+        replay_backend,
+        "--native-batch-size",
+        str(native_batch_size),
     ]
     tail: deque[str] = deque(maxlen=50)
     progress_count = 0
+    monitor_stop = Event()
+    monitor_errors: list[Exception] = []
     process = subprocess.Popen(
         command,
         env=environment,
@@ -322,6 +360,25 @@ def _run_worker_subprocess(
         encoding="utf-8",
         errors="replace",
     )
+
+    def monitor_disk() -> None:
+        while not monitor_stop.wait(_DISK_MONITOR_INTERVAL_SECONDS):
+            if process.poll() is not None:
+                return
+            try:
+                if on_progress is not None:
+                    on_progress(0)
+            except Exception as error:
+                monitor_errors.append(error)
+                process.terminate()
+                return
+
+    monitor = Thread(
+        target=monitor_disk,
+        name="grounding-worker-disk-monitor",
+        daemon=True,
+    )
+    monitor.start()
     try:
         assert process.stdout is not None
         for line in process.stdout:
@@ -341,6 +398,11 @@ def _run_worker_subprocess(
             process.kill()
             process.wait()
         raise
+    finally:
+        monitor_stop.set()
+        monitor.join(timeout=2)
+    if monitor_errors:
+        raise monitor_errors[0]
     if return_code != 0:
         raise RuntimeError(
             "grounding worker process failed with exit code "
