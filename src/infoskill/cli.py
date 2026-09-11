@@ -50,6 +50,8 @@ def main(argv: list[str] | None = None) -> int:
         return _grounding_expert_diagnostic(config, args)
     if args.command == "grounding-planner-pilot":
         return _grounding_planner_pilot(config, args)
+    if args.command == "grounding-planner-parity":
+        return _grounding_planner_parity(config, args)
     if args.command == "grounding-planner-loop-diagnostic":
         return _grounding_planner_loop_diagnostic(config, args)
     if args.command == "train":
@@ -153,6 +155,7 @@ def _parser() -> argparse.ArgumentParser:
             "bounds TextWorld/Fast Downward temporary resources"
         ),
     )
+    grounding.add_argument("--worker-processes", type=int, default=1)
     grounding_diagnostic = subparsers.add_parser(
         "grounding-expert-diagnostic",
         help="compare strict handcoded replay with the ALFWorld planner",
@@ -169,8 +172,19 @@ def _parser() -> argparse.ArgumentParser:
     planner_pilot.add_argument("--config", required=True)
     planner_pilot.add_argument("--tasks-per-type", type=int, default=50)
     planner_pilot.add_argument("--worker-batch-size", type=int, default=64)
+    planner_pilot.add_argument("--worker-processes", type=int, default=1)
     planner_pilot.add_argument("--max-replay-steps", type=int, default=150)
     planner_pilot.add_argument("--run-name")
+    planner_parity = subparsers.add_parser(
+        "grounding-planner-parity",
+        help="compare serial and parallel planner replay on identical tasks",
+    )
+    planner_parity.add_argument("--config", required=True)
+    planner_parity.add_argument("--tasks-per-type", type=int, default=2)
+    planner_parity.add_argument("--worker-batch-size", type=int, default=6)
+    planner_parity.add_argument("--parallel-workers", type=int, default=2)
+    planner_parity.add_argument("--max-replay-steps", type=int, default=150)
+    planner_parity.add_argument("--run-name")
     planner_loop = subparsers.add_parser(
         "grounding-planner-loop-diagnostic",
         help="trace pilot failures and long successful controls at a larger horizon",
@@ -1355,6 +1369,8 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         mode=SkillMode.INFO_SKILL,
         require_checkpoint=False,
     )
+    if args.worker_batch_size <= 0 or args.worker_processes <= 0:
+        raise ValueError("grounding worker sizes must be positive")
     from tqdm.auto import tqdm
 
     from infoskill.integrations.alfworld import (
@@ -1418,6 +1434,7 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
             config_path=args.config,
             run_directory=run_directory,
             worker_batch_size=args.worker_batch_size,
+            worker_processes=args.worker_processes,
             max_replay_steps=150,
             persist_horizon=config.max_steps,
             on_progress=progress.update,
@@ -1436,8 +1453,11 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
     write_grounding_artifacts(output_directory=run_directory, results=results, manifest=manifest)
     _write_json(run_directory / "grounding-lifecycle.json", _dataclass_dict(lifecycle))
     logger.info(
-        "Grounding workers: count=%d batch_size=%d tasks=%d temp_cleanup=%s min_free=%.2f GiB",
+        "Grounding workers: count=%d concurrency=%d peak=%d batch_size=%d "
+        "tasks=%d temp_cleanup=%s min_free=%.2f GiB",
         lifecycle.worker_processes_started,
+        lifecycle.worker_concurrency,
+        lifecycle.peak_worker_processes,
         lifecycle.worker_batch_size,
         lifecycle.processed_tasks,
         lifecycle.temporary_directories_cleaned,
@@ -1572,6 +1592,7 @@ def _grounding_planner_pilot(
     if (
         args.tasks_per_type <= 0
         or args.worker_batch_size <= 0
+        or args.worker_processes <= 0
         or args.max_replay_steps <= 0
     ):
         raise ValueError("planner pilot sizes and replay limit must be positive")
@@ -1626,6 +1647,7 @@ def _grounding_planner_pilot(
             config_path=args.config,
             run_directory=run_directory,
             worker_batch_size=args.worker_batch_size,
+            worker_processes=args.worker_processes,
             max_replay_steps=args.max_replay_steps,
             persist_horizon=config.max_steps,
             expert_type="planner",
@@ -1663,13 +1685,15 @@ def _grounding_planner_pilot(
     )
     logger.info(
         "Planner pilot complete: selected=%d success=%d coverage=%.4f "
-        "over_%d_steps=%d gate=%s",
+        "over_%d_steps=%d gate=%s concurrency=%d peak=%d",
         report["selected_games"],
         report["successful_games"],
         report["success_coverage"],
         config.max_steps,
         report["over_persist_horizon"],
         report["pilot_gate_passed"],
+        lifecycle.worker_concurrency,
+        lifecycle.peak_worker_processes,
     )
     logger.info(
         "Planner identity: requested=%s effective=%s guard=%s corrected=%s",
@@ -1683,6 +1707,147 @@ def _grounding_planner_pilot(
         run_directory / "planner-pilot.json",
     )
     return 0
+
+
+def _grounding_planner_parity(
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    """Fail closed unless serial and parallel planner replays are identical."""
+
+    _validate_paths(
+        config,
+        mode=SkillMode.NO_SKILL,
+        require_checkpoint=False,
+    )
+    if (
+        args.tasks_per_type <= 0
+        or args.worker_batch_size <= 0
+        or args.parallel_workers < 2
+        or args.max_replay_steps <= 0
+    ):
+        raise ValueError(
+            "planner parity sizes must be positive and parallel workers at least 2"
+        )
+    from tqdm.auto import tqdm
+
+    from infoskill.integrations.alfworld import (
+        GroundingWorkItem,
+        build_grounding_parity_report,
+        discover_tasks,
+        prepare_alfworld_expert_type_binding,
+        run_bounded_grounding,
+        select_stratified_tasks,
+        write_serialized_grounding_results,
+    )
+
+    all_tasks = discover_tasks(config.paths.alfworld_data, split="train")
+    expert_binding = prepare_alfworld_expert_type_binding(
+        config.paths.alfworld_source,
+        requested_expert_type="planner",
+    )
+    selected = select_stratified_tasks(
+        tasks=all_tasks,
+        tasks_per_type=args.tasks_per_type,
+        selection_seed=config.master_seed,
+    )
+    if len(selected) <= args.worker_batch_size:
+        raise ValueError(
+            "planner parity requires more selected tasks than worker batch size "
+            "so at least two worker processes can overlap"
+        )
+    work_items = tuple(
+        GroundingWorkItem(
+            task=task,
+            candidate_skill_ids=(),
+            seed=_stable_seed(config.master_seed, task.task_id),
+        )
+        for task in selected
+    )
+    run_directory = _run_directory(
+        config,
+        args.run_name or "grounding-planner-parity",
+    )
+    logger = _configure_logging(run_directory)
+    serial_directory = run_directory / "serial"
+    parallel_directory = run_directory / "parallel"
+    with tqdm(
+        total=2 * len(selected),
+        desc="train/planner-parity",
+        unit="task",
+        dynamic_ncols=True,
+    ) as progress:
+        started = time.perf_counter()
+        serial_results, serial_lifecycle = run_bounded_grounding(
+            work_items=work_items,
+            config_path=args.config,
+            run_directory=serial_directory,
+            worker_batch_size=args.worker_batch_size,
+            worker_processes=1,
+            max_replay_steps=args.max_replay_steps,
+            persist_horizon=config.max_steps,
+            expert_type="planner",
+            on_progress=progress.update,
+        )
+        serial_seconds = time.perf_counter() - started
+
+        started = time.perf_counter()
+        parallel_results, parallel_lifecycle = run_bounded_grounding(
+            work_items=work_items,
+            config_path=args.config,
+            run_directory=parallel_directory,
+            worker_batch_size=args.worker_batch_size,
+            worker_processes=args.parallel_workers,
+            max_replay_steps=args.max_replay_steps,
+            persist_horizon=config.max_steps,
+            expert_type="planner",
+            on_progress=progress.update,
+        )
+        parallel_seconds = time.perf_counter() - started
+
+    source_checksum = _source_checksum()
+    report = build_grounding_parity_report(
+        serial_results=serial_results,
+        parallel_results=parallel_results,
+        serial_lifecycle=serial_lifecycle,
+        parallel_lifecycle=parallel_lifecycle,
+        serial_seconds=serial_seconds,
+        parallel_seconds=parallel_seconds,
+        tasks_per_type=args.tasks_per_type,
+        selection_seed=config.master_seed,
+        train_task_manifest_sha256=_task_manifest_checksum(all_tasks),
+        code_revision=source_checksum,
+        expert_binding=expert_binding,
+    )
+    write_serialized_grounding_results(
+        run_directory / "serial-results.jsonl",
+        serial_results,
+    )
+    write_serialized_grounding_results(
+        run_directory / "parallel-results.jsonl",
+        parallel_results,
+    )
+    _write_json(
+        run_directory / "serial-lifecycle.json",
+        _dataclass_dict(serial_lifecycle),
+    )
+    _write_json(
+        run_directory / "parallel-lifecycle.json",
+        _dataclass_dict(parallel_lifecycle),
+    )
+    _write_json(run_directory / "planner-parity.json", report)
+    logger.info(
+        "Planner serial/parallel parity: passed=%s exact_fields=%s "
+        "serial=%.1fs parallel=%.1fs speedup=%.2fx peak_parallel_workers=%d",
+        report["passed"],
+        all(report["field_checks"].values()),
+        serial_seconds,
+        parallel_seconds,
+        report["speedup"],
+        parallel_lifecycle.peak_worker_processes,
+    )
+    logger.info("Parity report: %s", run_directory / "planner-parity.json")
+    return 0 if report["passed"] else 5
 
 
 def _grounding_planner_loop_diagnostic(

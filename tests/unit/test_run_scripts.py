@@ -53,6 +53,34 @@ class RunScriptTests(unittest.TestCase):
             '--worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}"',
             script,
         )
+        self.assertIn(
+            '--worker-processes "${GROUNDING_WORKER_PROCESSES}"',
+            script,
+        )
+
+    def test_planner_parallelism_has_an_exact_serial_parity_gate(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'GROUNDING_WORKER_PROCESSES="${GROUNDING_WORKER_PROCESSES:-1}"',
+            script,
+        )
+        self.assertIn(
+            'GROUNDING_PARITY_PARALLEL_WORKERS="${GROUNDING_PARITY_PARALLEL_WORKERS:-2}"',
+            script,
+        )
+        self.assertIn("grounding-planner-parity)", script)
+        self.assertIn(
+            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-parity',
+            script,
+        )
+        self.assertIn(
+            '--parallel-workers "${GROUNDING_PARITY_PARALLEL_WORKERS}"',
+            script,
+        )
 
     def test_grounding_uses_bounded_worker_batches_by_default(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

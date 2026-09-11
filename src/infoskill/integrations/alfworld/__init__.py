@@ -23,6 +23,11 @@ from .grounding_io import (
     sha256_file,
     write_grounding_artifacts,
 )
+from .grounding_parity import (
+    build_grounding_parity_report,
+    serialize_grounding_results,
+    write_serialized_grounding_results,
+)
 from .grounding_shards import (
     GroundingShardReport,
     GroundingWorkItem,
@@ -64,6 +69,7 @@ __all__ = [
     "TracingPlannerExpert",
     "StrictExpertReplay",
     "build_grounding_manifest",
+    "build_grounding_parity_report",
     "build_planner_pilot_report",
     "build_planner_loop_report",
     "compact_result_payload",
@@ -75,10 +81,12 @@ __all__ = [
     "run_planner_loop_diagnostic",
     "select_loop_diagnostic_rows",
     "select_stratified_tasks",
+    "serialize_grounding_results",
     "sha256_file",
     "summarize_planner_trace",
     "task_manifest_sha256",
     "write_grounding_artifacts",
+    "write_serialized_grounding_results",
     "write_planner_pilot_results",
     "write_planner_loop_rows",
     "verify_alfworld_expert_type_binding",

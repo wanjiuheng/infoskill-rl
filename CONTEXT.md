@@ -259,8 +259,12 @@ INFO-SKILL 现由自身的运行时兼容层窄修正该位置参数，并在父
 创建环境前探测 requested/effective expert type；身份不符即 fail closed。pilot schema v2
 记录 `expert_binding`、`expert_identity_gate_passed` 和手写专家 Timeout 指纹。循环统计也
 拆成历史重复与轨迹末尾连续至少三次的精确周期，旧的“任意同对出现三次”不再叫作卡死。
-当前下一门是六类各 2 条的 CPU-only 真 planner 身份 smoke；通过后再重跑六类各 50 条的
-300 条 pilot，之后才决定是否运行新 loop diagnostic 或 3,553 条正式 grounding。
+六类各 2 条的 CPU-only 真 planner 身份 smoke 已通过：requested/effective 均为 planner，
+12/12 成功、轨迹 4--9 步、无手写专家 Timeout 指纹。当前下一门是在相同固定 12 条上
+分别运行串行与双 worker planner replay，对完整逐步序列化结果做 exact parity；只有状态、
+合法命令、专家动作、终局与异常全部一致且实际观察到双进程重叠，才用双 worker 重跑六类
+各 50 条的 300 条 pilot。之后才决定是否运行新 loop diagnostic 或 3,553 条正式
+grounding。
 
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。

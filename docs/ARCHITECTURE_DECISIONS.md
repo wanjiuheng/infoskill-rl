@@ -87,3 +87,9 @@ ALFWorld Strict Expert Replay 按固定任务顺序执行，但每 64 个游戏�
 固定 ALFWorld 源码以 `AlfredExpert(expert_type)` 创建签名为 `AlfredExpert(env=None, expert_type="handcoded")` 的包装器，导致请求 planner 时字符串被绑定到 `env`、有效专家静默保持 handcoded。INFO-SKILL 不直接改写外部仓库，而在 ALFWorld 适配边界安装只识别 `handcoded|planner` 位置字符串的窄兼容保护；父进程与每个短生命周期 worker 都必须用源码中的真实类执行同形调用，验证 requested/effective type、保护器状态和位置参数修正，任一不符即在回放前失败。pilot 报告还把 handcoded 独有的 `environment_step/Exception/Timeout` 作为第二道身份门，并记录实际模块路径。旧误绑定产生的 planner pilot 与后续诊断全部作废，不得用作方法判断或训练数据。
 
 长 horizon 诊断将“历史状态—动作重复”和“末尾周期卡死”分开：前者只表示轨迹曾回访，后者要求轨迹结尾存在长度不超过 10 的完全相同状态—动作周期连续重复至少三次。保留旧 `cycles_detected` 字段供读取器兼容，但 schema v2 中它与严格的 terminal cycle 同义，不再等同于任意位置第三次出现。
+
+## D018：grounding 任务并行必须先通过逐步串并行一致性门
+
+Grounding 的并发单位是相互独立的短生命周期 CPU worker，而不是单个 TextWorld 环境内部的线程。默认 `worker_processes=1` 保留历史串行行为；只有固定 train 任务、相同任务种子、相同 planner 身份、相同 150 步验证上限和 30 步持久化窗口的串行/并行差分运行，对完整序列化结果逐字段完全一致时，才允许在后续 pilot 或 formal 显式启用并发。比较范围包括每一步 canonical state、history、`admissible_commands`、候选技能 ID、专家动作、终局、隔离原因、异常与动作不匹配信息；只比较最终成功率不足以通过。
+
+并行 worker 各自使用独占临时目录，父进程按预注册任务顺序合并乱序完成的 shard，并记录实际峰值并发。并发启动前为每个 worker 额外预留 3 GiB 临时磁盘，同时始终保留 4 GiB 硬下限；运行中跌破硬下限立即失败。该优化不得改变任务集合、专家、标签、gate 或样本顺序，性能提升也不是一致性门通过的必要条件。

@@ -20,6 +20,9 @@ RESUME="${RESUME:-}"
 GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
 # Short-lived process boundary for TextWorld/Fast Downward resource cleanup.
 GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
+# Number of independent bounded grounding subprocesses allowed concurrently.
+# Default 1 preserves historical serial behavior until parity is verified.
+GROUNDING_WORKER_PROCESSES="${GROUNDING_WORKER_PROCESSES:-1}"
 # CPU-only strict handcoded/planner comparison against an existing grounding run.
 GROUNDING_SOURCE_RUN="${GROUNDING_SOURCE_RUN:-}"
 GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"
@@ -27,6 +30,10 @@ GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS="${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS:-
 # Balanced CPU-only planner candidate pilot; never produces formal M1 labels.
 PLANNER_PILOT_TASKS_PER_TYPE="${PLANNER_PILOT_TASKS_PER_TYPE:-50}"
 PLANNER_PILOT_MAX_REPLAY_STEPS="${PLANNER_PILOT_MAX_REPLAY_STEPS:-150}"
+# Fixed serial/parallel differential gate before enabling pilot concurrency.
+GROUNDING_PARITY_TASKS_PER_TYPE="${GROUNDING_PARITY_TASKS_PER_TYPE:-2}"
+GROUNDING_PARITY_WORKER_BATCH_SIZE="${GROUNDING_PARITY_WORKER_BATCH_SIZE:-6}"
+GROUNDING_PARITY_PARALLEL_WORKERS="${GROUNDING_PARITY_PARALLEL_WORKERS:-2}"
 # CPU-only follow-up over planner-pilot failures and long successful controls.
 PLANNER_LOOP_SUCCESS_CONTROLS="${PLANNER_LOOP_SUCCESS_CONTROLS:-6}"
 PLANNER_LOOP_MAX_REPLAY_STEPS="${PLANNER_LOOP_MAX_REPLAY_STEPS:-300}"
@@ -98,6 +105,10 @@ if [[ ! "${GROUNDING_WORKER_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
   echo "GROUNDING_WORKER_BATCH_SIZE must be a positive integer" >&2
   exit 2
 fi
+if [[ ! "${GROUNDING_WORKER_PROCESSES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_WORKER_PROCESSES must be a positive integer" >&2
+  exit 2
+fi
 if [[ ! "${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
   echo "GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE must be a positive integer" >&2
   exit 2
@@ -112,6 +123,19 @@ if [[ ! "${PLANNER_PILOT_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "${PLANNER_PILOT_MAX_REPLAY_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "PLANNER_PILOT_MAX_REPLAY_STEPS must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_PARITY_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_PARITY_TASKS_PER_TYPE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_PARITY_WORKER_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_PARITY_WORKER_BATCH_SIZE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_PARITY_PARALLEL_WORKERS}" =~ ^[0-9]+$ ]] \
+  || (( GROUNDING_PARITY_PARALLEL_WORKERS < 2 )); then
+  echo "GROUNDING_PARITY_PARALLEL_WORKERS must be an integer of at least 2" >&2
   exit 2
 fi
 if [[ ! "${PLANNER_LOOP_SUCCESS_CONTROLS}" =~ ^[1-9][0-9]*$ ]]; then
@@ -296,6 +320,7 @@ case "${ACTION}" in
     python -m infoskill.cli grounding \
       --config "${CONFIG}" \
       --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
+      --worker-processes "${GROUNDING_WORKER_PROCESSES}" \
       "${EXTRA_ARGS[@]}"
     ;;
   grounding-expert-diagnostic)
@@ -315,6 +340,16 @@ case "${ACTION}" in
       --config "${CONFIG}" \
       --tasks-per-type "${PLANNER_PILOT_TASKS_PER_TYPE}" \
       --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
+      --worker-processes "${GROUNDING_WORKER_PROCESSES}" \
+      --max-replay-steps "${PLANNER_PILOT_MAX_REPLAY_STEPS}" \
+      "${EXTRA_ARGS[@]}"
+    ;;
+  grounding-planner-parity)
+    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-parity \
+      --config "${CONFIG}" \
+      --tasks-per-type "${GROUNDING_PARITY_TASKS_PER_TYPE}" \
+      --worker-batch-size "${GROUNDING_PARITY_WORKER_BATCH_SIZE}" \
+      --parallel-workers "${GROUNDING_PARITY_PARALLEL_WORKERS}" \
       --max-replay-steps "${PLANNER_PILOT_MAX_REPLAY_STEPS}" \
       "${EXTRA_ARGS[@]}"
     ;;
@@ -392,7 +427,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, grounding-planner-pilot, grounding-planner-loop-diagnostic, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, grounding-planner-pilot, grounding-planner-parity, grounding-planner-loop-diagnostic, or train" >&2
     exit 2
     ;;
 esac

@@ -187,6 +187,65 @@ echo "ARCHIVE=$ARCHIVE"
 ls -lh "$ARCHIVE"
 ```
 
+身份 smoke 通过后，不直接开启 300 条并行 pilot。先在同一固定 12 条上各运行一次串行和
+双 worker replay，并对完整逐步结果做 exact parity。该入口主动隐藏 GPU；串行与并行
+使用相同任务、种子、planner、150 步验证上限和 30 步持久化窗口。`worker-batch-size=6`
+确保 12 条被拆成两个可以重叠的 shard：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-grounding-planner-parity-${STAMP}.log"
+
+nohup env \
+GROUNDING_PARITY_TASKS_PER_TYPE=2 \
+GROUNDING_PARITY_WORKER_BATCH_SIZE=6 \
+GROUNDING_PARITY_PARALLEL_WORKERS=2 \
+PLANNER_PILOT_MAX_REPLAY_STEPS=150 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=m1-grounding-planner-parity \
+bash scripts/run_alfworld.sh grounding-planner-parity \
+> "$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" > "${LOG}.pid"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+只有 `planner-parity.json` 同时满足 `passed=true`、全部 `field_checks=true`、全部
+`identity_checks=true`、全部 `lifecycle_checks=true`、`mismatch_count=0`，并且
+`parallel.peak_worker_processes=2`，才允许在 300 条 pilot 中设置
+`GROUNDING_WORKER_PROCESSES=2`。`speedup` 只用于估算耗时，不是正确性门槛。结果打包：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-planner-parity' | sort | tail -n 1)
+
+echo "RUN=$RUN"
+cat "$RUN/planner-parity.json"
+
+STAMP=$(date +%Y%m%d_%H%M%S)
+ARCHIVE="$PWD/m1-grounding-planner-parity-${STAMP}.tar.gz"
+tar -czf "$ARCHIVE" -C "$RUN" \
+  planner-parity.json \
+  serial-results.jsonl \
+  parallel-results.jsonl \
+  serial-lifecycle.json \
+  parallel-lifecycle.json \
+  console.log
+echo "ARCHIVE=$ARCHIVE"
+ls -lh "$ARCHIVE"
+df -h /root/autodl-tmp
+```
+
+将该压缩包以及终端打印的 `planner-parity.json`、`df -h` 结果回传。串并行一致性通过后，
+六类各 50 条的 300 条 planner pilot 使用已验证的双 worker；默认并发仍为 1，避免旧命令
+静默改变执行拓扑：
+
 ```bash
 cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
 mkdir -p logs
@@ -197,6 +256,7 @@ nohup env \
 PLANNER_PILOT_TASKS_PER_TYPE=50 \
 PLANNER_PILOT_MAX_REPLAY_STEPS=150 \
 GROUNDING_WORKER_BATCH_SIZE=64 \
+GROUNDING_WORKER_PROCESSES=2 \
 INFO_SKILL_CPU_THREADS=1 \
 RUN_NAME=m1-grounding-planner-pilot \
 bash scripts/run_alfworld.sh grounding-planner-pilot \
