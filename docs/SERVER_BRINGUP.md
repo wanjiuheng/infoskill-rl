@@ -135,6 +135,59 @@ planner 重放结果。先核对 `historical_failure_reproduced_count`；只有�
 时，`planner_rescue_count` 才能作为是否重新审议正式 grounding 专家的证据。这个小样本
 只用于定位原因，不能直接替代全量 3,553 条 formal grounding。
 
+在历史失败诊断确认 planner 是候选方案后，先从完整 train 集按六类各 50 条做独立、
+确定性的 300 条 planner pilot。它不加载模型、不做技能检索并主动隐藏 GPU；默认每 64
+条重启 worker。通常约需 25–50 分钟，按 1 小时预留。后台运行：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-grounding-planner-pilot-${STAMP}.log"
+
+nohup env \
+PLANNER_PILOT_TASKS_PER_TYPE=50 \
+PLANNER_PILOT_MAX_REPLAY_STEPS=150 \
+GROUNDING_WORKER_BATCH_SIZE=64 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=m1-grounding-planner-pilot \
+bash scripts/run_alfworld.sh grounding-planner-pilot \
+> "$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" > "${LOG}.pid"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+该入口只生成 `planner-pilot.json`、`planner-pilot-results.jsonl`、
+`grounding-lifecycle.json` 和 `console.log`，故意不生成正式训练入口要求的
+`manifest.json` 与 `grounding_samples.jsonl`。即使 `pilot_gate_passed=true`，也只表示
+值得继续跑 3,553 条正式 planner grounding，不能把该目录传给 `GROUNDING_DATA`。
+重点检查整体及六类 `success_rate`、`over_persist_horizon_rate`、失败原因和 p90/p95/p99
+轨迹长度。
+
+完成后用以下命令打印摘要并打包需要回传的文件：
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-planner-pilot' | sort | tail -n 1)
+echo "RUN=$RUN"
+cat "$RUN/planner-pilot.json"
+cat "$RUN/grounding-lifecycle.json"
+
+STAMP=$(date +%Y%m%d_%H%M%S)
+ARCHIVE="$PWD/m1-grounding-planner-pilot-${STAMP}.tar.gz"
+tar -czf "$ARCHIVE" -C "$RUN" \
+  planner-pilot.json \
+  planner-pilot-results.jsonl \
+  grounding-lifecycle.json \
+  console.log
+echo "ARCHIVE=$ARCHIVE"
+ls -lh "$ARCHIVE"
+```
+
 ## 6. 评测闭环
 
 先用很少任务做开发 smoke（正式结果仍必须完整 140 条），确认模型加载、环境 reset/step、日志和动作解析。当前 CLI 的正式 `eval` 会强制 140 条：

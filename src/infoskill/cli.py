@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
         return _grounding(config, args)
     if args.command == "grounding-expert-diagnostic":
         return _grounding_expert_diagnostic(config, args)
+    if args.command == "grounding-planner-pilot":
+        return _grounding_planner_pilot(config, args)
     if args.command == "train":
         return _train(config, args)
     parser.error(f"unsupported command: {args.command}")
@@ -155,6 +157,15 @@ def _parser() -> argparse.ArgumentParser:
     grounding_diagnostic.add_argument("--tasks-per-type", type=int, default=3)
     grounding_diagnostic.add_argument("--max-replay-steps", type=int, default=150)
     grounding_diagnostic.add_argument("--run-name")
+    planner_pilot = subparsers.add_parser(
+        "grounding-planner-pilot",
+        help="run a balanced, non-formal ALFWorld planner grounding pilot",
+    )
+    planner_pilot.add_argument("--config", required=True)
+    planner_pilot.add_argument("--tasks-per-type", type=int, default=50)
+    planner_pilot.add_argument("--worker-batch-size", type=int, default=64)
+    planner_pilot.add_argument("--max-replay-steps", type=int, default=150)
+    planner_pilot.add_argument("--run-name")
     train = subparsers.add_parser("train", help="run INFO-SKILL-owned GRPO training")
     train.add_argument("--config", required=True)
     train.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
@@ -1532,6 +1543,118 @@ def _grounding_expert_diagnostic(
         summary["planner_rescue_count"],
     )
     logger.info("Diagnostic report: %s", output)
+    return 0
+
+
+def _grounding_planner_pilot(
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    _validate_paths(
+        config,
+        mode=SkillMode.NO_SKILL,
+        require_checkpoint=False,
+    )
+    if (
+        args.tasks_per_type <= 0
+        or args.worker_batch_size <= 0
+        or args.max_replay_steps <= 0
+    ):
+        raise ValueError("planner pilot sizes and replay limit must be positive")
+    from tqdm.auto import tqdm
+
+    from infoskill.integrations.alfworld import (
+        GroundingWorkItem,
+        build_planner_pilot_report,
+        compact_result_payload,
+        discover_tasks,
+        run_bounded_grounding,
+        select_stratified_tasks,
+        write_planner_pilot_results,
+    )
+
+    all_tasks = discover_tasks(config.paths.alfworld_data, split="train")
+    selected = select_stratified_tasks(
+        tasks=all_tasks,
+        tasks_per_type=args.tasks_per_type,
+        selection_seed=config.master_seed,
+    )
+    seeds = {
+        task.task_id: _stable_seed(config.master_seed, task.task_id)
+        for task in selected
+    }
+    work_items = tuple(
+        GroundingWorkItem(
+            task=task,
+            candidate_skill_ids=(),
+            seed=seeds[task.task_id],
+        )
+        for task in selected
+    )
+    run_directory = _run_directory(
+        config,
+        args.run_name or "grounding-planner-pilot",
+    )
+    logger = _configure_logging(run_directory)
+    with tqdm(
+        total=len(selected),
+        desc="train/planner-pilot",
+        unit="task",
+        dynamic_ncols=True,
+    ) as progress:
+        results, lifecycle = run_bounded_grounding(
+            work_items=work_items,
+            config_path=args.config,
+            run_directory=run_directory,
+            worker_batch_size=args.worker_batch_size,
+            max_replay_steps=args.max_replay_steps,
+            persist_horizon=config.max_steps,
+            expert_type="planner",
+            on_progress=progress.update,
+        )
+
+    result_by_id = {result.task_id: result for _, result in results}
+    rows = tuple(
+        compact_result_payload(
+            task=task,
+            seed=seeds[task.task_id],
+            result=result_by_id[task.task_id],
+        )
+        for task in selected
+    )
+    source_checksum = _source_checksum()
+    report = build_planner_pilot_report(
+        results=results,
+        tasks_per_type=args.tasks_per_type,
+        selection_seed=config.master_seed,
+        train_task_manifest_sha256=_task_manifest_checksum(all_tasks),
+        code_revision=source_checksum,
+        max_replay_steps=args.max_replay_steps,
+        persist_horizon=config.max_steps,
+    )
+    write_planner_pilot_results(
+        run_directory / "planner-pilot-results.jsonl",
+        rows,
+    )
+    _write_json(run_directory / "planner-pilot.json", report)
+    _write_json(
+        run_directory / "grounding-lifecycle.json",
+        _dataclass_dict(lifecycle),
+    )
+    logger.info(
+        "Planner pilot complete: selected=%d success=%d coverage=%.4f "
+        "over_%d_steps=%d gate=%s",
+        report["selected_games"],
+        report["successful_games"],
+        report["success_coverage"],
+        config.max_steps,
+        report["over_persist_horizon"],
+        report["pilot_gate_passed"],
+    )
+    logger.info(
+        "Pilot-only report: %s (a full 3,553-task formal run is still required)",
+        run_directory / "planner-pilot.json",
+    )
     return 0
 
 

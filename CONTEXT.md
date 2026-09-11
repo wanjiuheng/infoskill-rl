@@ -243,9 +243,16 @@ worker 全部退出并清理临时目录，历史 `OSError` 与 factory `OSError
 磁盘约 18.47 GiB。剩余 1,541 条隔离全部是
 `expert_action_not_admissible`，手写专家成功覆盖率为 56.63%，其中双物体任务为
 0/813；这属于专家方法门未通过，不再归因于磁盘或 worker 生命周期。正式 M1 仍被
-grounding gate 阻止。下一步使用 CPU-only、六类分层小样本，在相同任务和种子上分别
-完整重放直接手写专家与 ALFWorld planner；报告必须先验证历史失败可复现，再查看
-planner rescue，之后才决定是否修改专家方案并重新生成全量数据。
+grounding gate 阻止。随后在 CPU-only、六类各 3 条的历史隔离任务上完成了手写专家与
+ALFWorld planner 的同任务同种子诊断：18/18 手写失败被精确复现，planner 成功 17/18；
+唯一失败为双物体任务在 150 步达到 replay limit。17 条成功轨迹中位数 28 步，6 条超过
+30 步，说明 planner 明显优于当前手写专家，但还不能由定向失败样本直接外推全量。
+
+当前下一门是独立 `grounding-planner-pilot`：从完整 train 集确定性分层抽取六类各 50
+条（共 300 条），使用短生命周期 CPU worker 直接严格重放 planner。试点只生成
+`planner-pilot.json`、紧凑逐任务结果和 lifecycle 报告，不生成可被 M1 加载的正式
+manifest/grounding samples。只有分析其六类覆盖率、长尾轨迹及失败原因后，才决定是否
+把正式 grounding 专家从手写专家改为 planner 并重跑全部 3,553 条。
 
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。

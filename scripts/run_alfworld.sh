@@ -24,6 +24,9 @@ GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
 GROUNDING_SOURCE_RUN="${GROUNDING_SOURCE_RUN:-}"
 GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"
 GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS="${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS:-150}"
+# Balanced CPU-only planner candidate pilot; never produces formal M1 labels.
+PLANNER_PILOT_TASKS_PER_TYPE="${PLANNER_PILOT_TASKS_PER_TYPE:-50}"
+PLANNER_PILOT_MAX_REPLAY_STEPS="${PLANNER_PILOT_MAX_REPLAY_STEPS:-150}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
@@ -98,6 +101,14 @@ if [[ ! "${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${PLANNER_PILOT_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PLANNER_PILOT_TASKS_PER_TYPE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${PLANNER_PILOT_MAX_REPLAY_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "PLANNER_PILOT_MAX_REPLAY_STEPS must be a positive integer" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -288,6 +299,14 @@ case "${ACTION}" in
       --max-replay-steps "${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS}" \
       "${EXTRA_ARGS[@]}"
     ;;
+  grounding-planner-pilot)
+    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-pilot \
+      --config "${CONFIG}" \
+      --tasks-per-type "${PLANNER_PILOT_TASKS_PER_TYPE}" \
+      --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
+      --max-replay-steps "${PLANNER_PILOT_MAX_REPLAY_STEPS}" \
+      "${EXTRA_ARGS[@]}"
+    ;;
   train)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
@@ -350,7 +369,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, grounding-planner-pilot, or train" >&2
     exit 2
     ;;
 esac

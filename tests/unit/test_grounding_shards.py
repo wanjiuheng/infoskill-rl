@@ -28,12 +28,22 @@ class GroundingShardTests(unittest.TestCase):
             for index in range(5)
         )
         observed_chunks: list[tuple[str, ...]] = []
+        observed_expert_types: list[str] = []
         temporary_paths: list[Path] = []
         progress = 0
 
-        def fake_worker(items, config_path, temporary, max_steps, horizon, callback):
+        def fake_worker(
+            items,
+            config_path,
+            temporary,
+            max_steps,
+            horizon,
+            expert_type,
+            callback,
+        ):
             del config_path, max_steps, horizon
             observed_chunks.append(tuple(item.task.task_id for item in items))
+            observed_expert_types.append(expert_type)
             temporary_paths.append(temporary)
             self.assertTrue(temporary.is_dir())
             if callback is not None:
@@ -58,6 +68,7 @@ class GroundingShardTests(unittest.TestCase):
                 worker_batch_size=2,
                 max_replay_steps=150,
                 persist_horizon=30,
+                expert_type="planner",
                 on_progress=update,
                 worker_runner=fake_worker,
             )
@@ -72,6 +83,8 @@ class GroundingShardTests(unittest.TestCase):
         self.assertEqual(progress, 5)
         self.assertEqual(report.worker_processes_started, 3)
         self.assertEqual(report.processed_tasks, 5)
+        self.assertEqual(report.expert_type, "planner")
+        self.assertEqual(observed_expert_types, ["planner", "planner", "planner"])
         self.assertTrue(report.temporary_directories_cleaned)
         self.assertTrue(all(not path.exists() for path in temporary_paths))
 

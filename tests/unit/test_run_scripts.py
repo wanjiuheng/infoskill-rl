@@ -5,6 +5,34 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_planner_pilot_is_cpu_only_balanced_and_bounded(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'PLANNER_PILOT_TASKS_PER_TYPE="${PLANNER_PILOT_TASKS_PER_TYPE:-50}"',
+            script,
+        )
+        self.assertIn(
+            'PLANNER_PILOT_MAX_REPLAY_STEPS="${PLANNER_PILOT_MAX_REPLAY_STEPS:-150}"',
+            script,
+        )
+        self.assertIn("grounding-planner-pilot)", script)
+        self.assertIn(
+            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-pilot',
+            script,
+        )
+        self.assertIn(
+            '--tasks-per-type "${PLANNER_PILOT_TASKS_PER_TYPE}"',
+            script,
+        )
+        self.assertIn(
+            '--worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}"',
+            script,
+        )
+
     def test_grounding_uses_bounded_worker_batches_by_default(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

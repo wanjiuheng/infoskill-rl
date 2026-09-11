@@ -32,6 +32,7 @@ class GroundingWorkItem:
 @dataclass(frozen=True, slots=True)
 class GroundingShardReport:
     schema_version: int
+    expert_type: str
     worker_batch_size: int
     worker_processes_started: int
     processed_tasks: int
@@ -47,6 +48,7 @@ WorkerRunner = Callable[
         Path,
         int,
         int,
+        str,
         Callable[[int], None] | None,
     ],
     list[tuple[str, ExpertReplayResult]],
@@ -61,6 +63,7 @@ def run_bounded_grounding(
     worker_batch_size: int,
     max_replay_steps: int,
     persist_horizon: int,
+    expert_type: str = "handcoded",
     on_progress: Callable[[int], None] | None = None,
     worker_runner: WorkerRunner | None = None,
 ) -> tuple[list[tuple[str, ExpertReplayResult]], GroundingShardReport]:
@@ -72,6 +75,8 @@ def run_bounded_grounding(
         raise ValueError("grounding worker batch size must be positive")
     if max_replay_steps <= 0 or persist_horizon <= 0:
         raise ValueError("grounding replay limits must be positive")
+    if expert_type not in {"handcoded", "planner"}:
+        raise ValueError("expert_type must be handcoded or planner")
 
     destination = Path(run_directory).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
@@ -119,6 +124,7 @@ def run_bounded_grounding(
                     temporary_path,
                     max_replay_steps,
                     persist_horizon,
+                    expert_type,
                     shard_progress,
                 )
                 expected_ids = [item.task.task_id for item in chunk]
@@ -160,6 +166,7 @@ def run_bounded_grounding(
 
     report = GroundingShardReport(
         schema_version=1,
+        expert_type=expert_type,
         worker_batch_size=worker_batch_size,
         worker_processes_started=len(shard_reports),
         processed_tasks=len(results),
@@ -176,6 +183,7 @@ def _run_worker_subprocess(
     temporary_directory: Path,
     max_replay_steps: int,
     persist_horizon: int,
+    expert_type: str,
     on_progress: Callable[[int], None] | None,
 ) -> list[tuple[str, ExpertReplayResult]]:
     input_path = temporary_directory / "work-items.jsonl"
@@ -220,6 +228,8 @@ def _run_worker_subprocess(
         str(max_replay_steps),
         "--persist-horizon",
         str(persist_horizon),
+        "--expert-type",
+        expert_type,
     ]
     tail: deque[str] = deque(maxlen=50)
     progress_count = 0

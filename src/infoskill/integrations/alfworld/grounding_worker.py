@@ -14,6 +14,7 @@ from .expert_replay import ExpertReplayResult, StrictExpertReplay
 from .factory import AlfworldEnvironmentFactory
 from .grounding_io import grounding_result_payload
 from .handcoded_expert import load_handcoded_expert
+from .planner_expert import PlannerPayloadExpert
 
 
 _PROGRESS_MARKER = "INFO_SKILL_GROUNDING_PROGRESS"
@@ -26,6 +27,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-replay-steps", type=int, required=True)
     parser.add_argument("--persist-horizon", type=int, required=True)
+    parser.add_argument(
+        "--expert-type",
+        choices=("handcoded", "planner"),
+        default="handcoded",
+    )
     return parser
 
 
@@ -37,15 +43,19 @@ def main() -> int:
         config_path=config.paths.alfworld_config,
         data_root=config.paths.alfworld_data,
         max_steps=args.max_replay_steps,
+        expert_type=args.expert_type,
     )
     replay = StrictExpertReplay(
         max_replay_steps=args.max_replay_steps,
         persist_horizon=args.persist_horizon,
     )
-    expert = load_handcoded_expert(
-        alfworld_source=config.paths.alfworld_source,
-        max_steps=max(200, args.max_replay_steps),
-    )
+    if args.expert_type == "planner":
+        expert = PlannerPayloadExpert()
+    else:
+        expert = load_handcoded_expert(
+            alfworld_source=config.paths.alfworld_source,
+            max_steps=max(200, args.max_replay_steps),
+        )
     input_path = Path(args.input)
     output_path = Path(args.output)
     with input_path.open("r", encoding="utf-8") as source, output_path.open(
