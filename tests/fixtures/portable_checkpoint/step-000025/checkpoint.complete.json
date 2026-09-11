@@ -1,7 +1,6 @@
 {
   "files": [
-    "runtime/actor/actor_manifest.json",
-    "runtime/actor/adapter_model.safetensors"
+    "runtime/actor/actor_manifest.json"
   ],
   "global_update": 25,
   "portable": true,
