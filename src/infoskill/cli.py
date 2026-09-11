@@ -1377,6 +1377,7 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         GroundingWorkItem,
         build_grounding_manifest,
         discover_tasks,
+        prepare_alfworld_expert_type_binding,
         run_bounded_grounding,
         write_grounding_artifacts,
     )
@@ -1390,6 +1391,10 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
     run_directory = _run_directory(config, args.run_name or "grounding")
     logger = _configure_logging(run_directory)
     tasks = discover_tasks(config.paths.alfworld_data, split="train")
+    expert_binding = prepare_alfworld_expert_type_binding(
+        config.paths.alfworld_source,
+        requested_expert_type="planner",
+    )
     library = FixedSkillLibrary.load(config.paths.skill_bank)
     if config.retrieval_mode == "embedding":
         encoder = SentenceTransformerEncoder(
@@ -1437,6 +1442,7 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
             worker_processes=args.worker_processes,
             max_replay_steps=150,
             persist_horizon=config.max_steps,
+            expert_type="planner",
             on_progress=progress.update,
         )
     manifest = build_grounding_manifest(
@@ -1449,6 +1455,8 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         code_revision=_source_checksum()[:16],
         max_replay_steps=150,
         persist_horizon=config.max_steps,
+        expert_type="planner",
+        expert_binding=expert_binding,
     )
     write_grounding_artifacts(output_directory=run_directory, results=results, manifest=manifest)
     _write_json(run_directory / "grounding-lifecycle.json", _dataclass_dict(lifecycle))
@@ -1462,6 +1470,13 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         lifecycle.processed_tasks,
         lifecycle.temporary_directories_cleaned,
         lifecycle.minimum_free_disk_bytes / 1024**3,
+    )
+    logger.info(
+        "Grounding expert identity: requested=%s effective=%s guard=%s corrected=%s",
+        expert_binding["requested_expert_type"],
+        expert_binding["effective_expert_type"],
+        expert_binding["compatibility_guard_active"],
+        expert_binding["positional_binding_corrected"],
     )
     logger.info("Grounding manifest:\n%s", json.dumps(manifest.__dict__ if hasattr(manifest, "__dict__") else _dataclass_dict(manifest), ensure_ascii=False, indent=2))
     return 0 if manifest.formal_gate_passed else 4

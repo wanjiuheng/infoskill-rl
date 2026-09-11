@@ -266,6 +266,15 @@ INFO-SKILL 现由自身的运行时兼容层窄修正该位置参数，并在父
 各 50 条的 300 条 pilot。之后才决定是否运行新 loop diagnostic 或 3,553 条正式
 grounding。
 
+串并行逐步一致性门随后通过，双 worker 的正确 planner pilot 也在固定六类各 50 条上
+达到 300/300：六类均为 50/50，轨迹 4--11 步、没有超过 30 步、身份门与 pilot 门均
+通过；5 个短生命周期 shard 全部清理，实际峰值并发为 2，最低空闲磁盘约 20.98 GiB。
+该结果批准进入 3,553 条正式方法门，但不等于正式数据已经生成。审计同时发现历史正式
+`grounding` CLI 未显式把 `planner` 传给 bounded worker，仍会使用默认 handcoded；现已
+移除 worker 的专家默认值，正式入口显式验证并传入 planner，formal manifest 升为 schema
+v2 并记录/强制校验专家身份。旧 schema v1 或未验证的 handcoded grounding 不能被 M1
+加载。
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation

@@ -29,7 +29,7 @@ Executable Grounding Head 的默认监督目标是 ALFWorld `train` 文本环境
 _Avoid_: validation-derived targets、LLM-generated summaries、concatenated-candidate target
 
 **Strict Expert Replay and Quarantine**:
-离线生成器使用 ALFWorld 内置 handcoded expert，而不直接信任包装器的 `extra.expert_plan`：初始状态允许用一次位于当前 `admissible_commands` 的 `look` 启动专家状态机；后续读取专家实际返回动作并要求规范化后与当前可执行命令精确匹配，禁止把包装器静默保留的兜底 `look` 当作标签。生成器最长重放 150 步直到 `won=True` 以验证整条游戏可解，但只持久化策略可达的前 30 步 grounding 状态。任一步出现异常、超时、动作不合法或最终未赢，整个游戏从 grounding 数据中隔离，不保留部分轨迹，也不自动从共同 RL corpus 删除；不混用 planner 专家兜底。manifest 按六类记录总数、成功数、隔离数与原因、轨迹长度分布、超过 30 步的比例和数据/代码校验值；专家成功覆盖率低于 99% 或超过 30 步比例高于 1% 时阻止正式训练并要求检查环境、数据版本或重新审议 `max_steps=30`。
+离线生成器使用 ALFWorld 内置 planner，而不直接信任包装器的 `extra.expert_plan`。适配边界必须验证实际实例的 requested/effective expert type 均为 `planner`，并修正固定 ALFWorld 包装器错误的位置参数绑定；身份不符时在重放前失败。专家实际返回动作经规范化后必须与当前 `admissible_commands` 精确匹配，禁止任何兜底动作成为标签。生成器最长重放 150 步直到 `won=True` 以验证整条游戏可解，但只持久化策略可达的前 30 步 grounding 状态。任一步出现异常、动作不合法或最终未赢，整个游戏从 grounding 数据中隔离，不保留部分轨迹，也不自动从共同 RL corpus 删除。manifest 按六类记录总数、成功数、隔离数与原因、轨迹长度分布、超过 30 步的比例、专家身份及数据/代码校验值；专家成功覆盖率低于 99%、超过 30 步比例高于 1%，或专家身份门失败时阻止正式训练。
 _Avoid_: silent look fallback、partial expert trajectory、mixed expert definitions、unchecked horizon mismatch
 
 **Executable Grounding Head**:

@@ -70,7 +70,7 @@ def run_bounded_grounding(
     worker_processes: int = 1,
     max_replay_steps: int,
     persist_horizon: int,
-    expert_type: str = "handcoded",
+    expert_type: str,
     on_progress: Callable[[int], None] | None = None,
     worker_runner: WorkerRunner | None = None,
 ) -> tuple[list[tuple[str, ExpertReplayResult]], GroundingShardReport]:

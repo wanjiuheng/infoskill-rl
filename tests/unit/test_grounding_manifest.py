@@ -70,6 +70,8 @@ class GroundingManifestTests(unittest.TestCase):
             code_revision="test",
             max_replay_steps=150,
             persist_horizon=30,
+            expert_type="planner",
+            expert_binding=_planner_binding(),
         )
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -108,6 +110,8 @@ class GroundingManifestTests(unittest.TestCase):
             code_revision="test",
             max_replay_steps=150,
             persist_horizon=30,
+            expert_type="planner",
+            expert_binding=_planner_binding(),
         )
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -142,6 +146,8 @@ class GroundingManifestTests(unittest.TestCase):
             code_revision="test",
             max_replay_steps=150,
             persist_horizon=30,
+            expert_type="planner",
+            expert_binding=_planner_binding(),
         )
 
         self.assertFalse(manifest.formal_gate_passed)
@@ -149,13 +155,35 @@ class GroundingManifestTests(unittest.TestCase):
         self.assertEqual(manifest.over_persist_horizon_rate, 0.5)
         self.assertEqual(manifest.quarantine_reasons["expert_action_not_admissible"], 1)
 
+    def test_formal_manifest_requires_verified_planner_identity(self) -> None:
+        result = ExpertReplayResult("ok", True, (), 5, None)
+        binding = _planner_binding()
+        binding["effective_expert_type"] = "handcoded"
+
+        manifest = build_grounding_manifest(
+            results=[("pick_and_place_simple", result)],
+            source_checksums={"data": "abc"},
+            code_revision="test",
+            max_replay_steps=150,
+            persist_horizon=30,
+            expert_type="planner",
+            expert_binding=binding,
+        )
+
+        self.assertFalse(manifest.formal_gate_passed)
+        self.assertFalse(manifest.expert_identity_gate_passed)
+        self.assertIn(
+            "effective_expert_type_is_not_planner",
+            manifest.expert_identity_gate_failures,
+        )
+
     def test_dataset_loads_only_a_formal_train_manifest_and_samples_games(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "manifest.json").write_text(
                 json.dumps(
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "source_split": "train",
                         "total_games": 2,
                         "successful_games": 2,
@@ -169,6 +197,10 @@ class GroundingManifestTests(unittest.TestCase):
                         "source_checksums": {"train_task_manifest": "abc"},
                         "code_revision": "test",
                         "expert_name": "test",
+                        "expert_type": "planner",
+                        "expert_binding": _planner_binding(),
+                        "expert_identity_gate_passed": True,
+                        "expert_identity_gate_failures": [],
                         "max_replay_steps": 150,
                         "persist_horizon": 30,
                         "formal_gate_passed": True,
@@ -200,9 +232,13 @@ class GroundingManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "source_split": "train",
                 "successful_games": 1,
+                "expert_type": "planner",
+                "expert_binding": _planner_binding(),
+                "expert_identity_gate_passed": True,
+                "expert_identity_gate_failures": [],
                 "formal_gate_passed": True,
                 "formal_gate_failures": [],
             }
@@ -214,6 +250,34 @@ class GroundingManifestTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "train-only"):
+                GroundingDataset.load(root)
+
+    def test_dataset_rejects_unverified_or_nonplanner_expert(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = {
+                "schema_version": 2,
+                "source_split": "train",
+                "successful_games": 1,
+                "expert_type": "handcoded",
+                "expert_binding": {},
+                "expert_identity_gate_passed": False,
+                "expert_identity_gate_failures": [
+                    "effective_expert_type_is_not_planner"
+                ],
+                "formal_gate_passed": True,
+                "formal_gate_failures": [],
+            }
+            (root / "manifest.json").write_text(
+                json.dumps(manifest),
+                encoding="utf-8",
+            )
+            (root / "grounding_samples.jsonl").write_text(
+                json.dumps(_grounding_row("task-a", step=0, action="look")) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "verified planner"):
                 GroundingDataset.load(root)
 
 
@@ -236,6 +300,17 @@ def _grounding_row(task_id: str, *, step: int, action: str) -> dict[str, object]
             "candidate_skill_ids": ["general-1"],
         },
         "expert_action": action,
+    }
+
+
+def _planner_binding() -> dict[str, object]:
+    return {
+        "requested_expert_type": "planner",
+        "effective_expert_type": "planner",
+        "compatibility_guard_active": True,
+        "positional_binding_corrected": True,
+        "module_within_configured_source": True,
+        "alfworld_module_path": "/alfworld/alfred_tw_env.py",
     }
 
 

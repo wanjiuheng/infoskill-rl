@@ -95,27 +95,35 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 
 ## 5. 严格专家数据
 
-这一步会遍历全部 train 游戏，运行 ALFWorld 手写专家并占用输出磁盘，但不会修改原数据。
+这一步会遍历全部 train 游戏，运行经过实例身份校验的 ALFWorld planner，并占用输出磁盘，
+但不会修改原数据。正式入口使用与已通过的 planner pilot 相同的专家类型；manifest
+schema v2 会记录并强制校验 requested/effective expert identity，旧 handcoded 或未验证
+产物不能被 M1 加载。
 
 ```bash
-GPUS=0 GROUNDING_WORKER_BATCH_SIZE=64 bash scripts/run_alfworld.sh grounding
+GPUS=0 \
+GROUNDING_WORKER_BATCH_SIZE=64 \
+GROUNDING_WORKER_PROCESSES=2 \
+RUN_NAME=m1-grounding-planner-formal \
+bash scripts/run_alfworld.sh grounding
 ```
 
 只有 `manifest.json` 同时满足专家成功覆盖率不少于 99%、超过 30 步比例不高于 1%，才允许作为正式 grounding 版本。隔离原因必须检查，不能只删除失败样本后继续。
 
-grounding 默认每 64 个任务重启一次短生命周期 CPU worker，并把该 worker 的
+grounding 每 64 个任务重启一次短生命周期 CPU worker，并把该 worker 的
 `TMPDIR` 限定在 run 目录内；worker 退出后立即清理 TextWorld/Fast Downward
 临时副本。`grounding-lifecycle.json` 必须显示
-`temporary_directories_cleaned=true`、`processed_tasks=3553`。这个分批只改变资源
+`temporary_directories_cleaned=true`、`processed_tasks=3553`；启用双 worker 时还必须
+显示 `worker_concurrency=2`、`peak_worker_processes=2`。这个分批与并发只改变资源
 生命周期，不减少任务、专家步数或 formal gate。`GPUS=0` 只用于一次性 embedding
 检索，专家回放子进程会主动隐藏 GPU。报告中的每个
 `free_disk_bytes_during` 是该 shard 逐任务采样到的最低剩余空间，用于确认临时占用
 峰值确实受到约束。
 
 若 bounded grounding 的生命周期门通过、但 formal gate 因
-`expert_action_not_admissible` 失败，不要直接降低 99% 覆盖率门限。先在同一批历史失败
-任务上对比当前手写专家和 ALFWorld 内置 planner。该诊断只用 CPU，不修改 grounding
-数据，也不允许在一条轨迹中把 planner 当作手写专家的后备动作：
+`expert_action_not_admissible` 失败，不要直接降低 99% 覆盖率门限。下面的历史专家对比
+入口只保留用于复核旧 handcoded 失败归因；它只用 CPU、不修改 grounding 数据，也不允许
+在一条轨迹中混用专家：
 
 ```bash
 SOURCE=$(find "$PWD/runs" -maxdepth 1 -type d \

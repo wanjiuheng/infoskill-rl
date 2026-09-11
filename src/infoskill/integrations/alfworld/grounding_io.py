@@ -38,6 +38,10 @@ class GroundingManifest:
     source_checksums: Mapping[str, str]
     code_revision: str
     expert_name: str
+    expert_type: str
+    expert_binding: Mapping[str, object]
+    expert_identity_gate_passed: bool
+    expert_identity_gate_failures: tuple[str, ...]
     max_replay_steps: int
     persist_horizon: int
     formal_gate_passed: bool
@@ -73,10 +77,17 @@ class GroundingDataset:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("grounding manifest must be a JSON object")
-        if manifest.get("schema_version") != 1:
+        if manifest.get("schema_version") != 2:
             raise ValueError("unsupported grounding manifest schema")
         if manifest.get("source_split") != "train":
             raise ValueError("grounding dataset must be train-only")
+        if (
+            manifest.get("expert_type") != "planner"
+            or manifest.get("expert_identity_gate_passed") is not True
+        ):
+            raise ValueError(
+                "grounding dataset requires a verified planner expert"
+            )
         if manifest.get("formal_gate_passed") is not True:
             failures = manifest.get("formal_gate_failures", [])
             raise ValueError(f"grounding formal gate did not pass: {failures}")
@@ -145,6 +156,8 @@ def build_grounding_manifest(
     code_revision: str,
     max_replay_steps: int,
     persist_horizon: int,
+    expert_type: str,
+    expert_binding: Mapping[str, object],
     minimum_success_coverage: float = 0.99,
     maximum_over_horizon_rate: float = 0.01,
 ) -> GroundingManifest:
@@ -170,6 +183,20 @@ def build_grounding_manifest(
         failures.append("success_coverage_below_threshold")
     if over_rate > maximum_over_horizon_rate:
         failures.append("over_horizon_rate_above_threshold")
+    identity_failures: list[str] = []
+    if expert_type != "planner":
+        identity_failures.append("formal_expert_type_is_not_planner")
+    if expert_binding.get("requested_expert_type") != "planner":
+        identity_failures.append("requested_expert_type_is_not_planner")
+    if expert_binding.get("effective_expert_type") != "planner":
+        identity_failures.append("effective_expert_type_is_not_planner")
+    if expert_binding.get("compatibility_guard_active") is not True:
+        identity_failures.append("compatibility_guard_is_not_active")
+    if expert_binding.get("positional_binding_corrected") is not True:
+        identity_failures.append("positional_binding_was_not_corrected")
+    if expert_binding.get("module_within_configured_source") is not True:
+        identity_failures.append("alfworld_module_outside_configured_source")
+    failures.extend(identity_failures)
     ordered = sorted(lengths)
     midpoint = len(ordered) // 2
     median = (
@@ -178,7 +205,7 @@ def build_grounding_manifest(
         else (ordered[midpoint - 1] + ordered[midpoint]) / 2
     )
     return GroundingManifest(
-        schema_version=1,
+        schema_version=2,
         source_split="train",
         total_games=len(results),
         successful_games=len(success),
@@ -196,7 +223,14 @@ def build_grounding_manifest(
         },
         source_checksums=dict(sorted(source_checksums.items())),
         code_revision=code_revision,
-        expert_name="ALFWorld HandCodedTWAgent (direct, strict admissibility)",
+        expert_name=(
+            "ALFWorld planner (verified positional binding, "
+            "strict admissibility, no fallback)"
+        ),
+        expert_type=expert_type,
+        expert_binding=dict(expert_binding),
+        expert_identity_gate_passed=not identity_failures,
+        expert_identity_gate_failures=tuple(identity_failures),
         max_replay_steps=max_replay_steps,
         persist_horizon=persist_horizon,
         formal_gate_passed=not failures,
