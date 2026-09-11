@@ -60,6 +60,7 @@ def build_planner_pilot_report(
     code_revision: str,
     max_replay_steps: int,
     persist_horizon: int,
+    expert_binding: Mapping[str, object],
     minimum_success_coverage: float = 0.99,
     maximum_over_horizon_rate: float = 0.01,
 ) -> dict[str, object]:
@@ -93,7 +94,26 @@ def build_planner_pilot_report(
     total = len(results)
     coverage = success_count / total
     over_rate = over_horizon / total
-    gate_failures: list[str] = []
+    handcoded_timeout_signature_count = sum(
+        not result.succeeded
+        and result.exception_stage == "environment_step"
+        and result.exception_type == "Exception"
+        and result.exception_message == "Timeout"
+        for _, result in results
+    )
+    identity_failures: list[str] = []
+    if expert_binding.get("requested_expert_type") != "planner":
+        identity_failures.append("requested_expert_type_is_not_planner")
+    if expert_binding.get("effective_expert_type") != "planner":
+        identity_failures.append("effective_expert_type_is_not_planner")
+    if expert_binding.get("compatibility_guard_active") is not True:
+        identity_failures.append("compatibility_guard_is_not_active")
+    if expert_binding.get("positional_binding_corrected") is not True:
+        identity_failures.append("legacy_positional_binding_was_not_corrected")
+    if handcoded_timeout_signature_count:
+        identity_failures.append("handcoded_timeout_signature_detected")
+
+    gate_failures = list(identity_failures)
     if coverage < minimum_success_coverage:
         gate_failures.append("success_coverage_below_threshold")
     if over_rate > maximum_over_horizon_rate:
@@ -115,7 +135,7 @@ def build_planner_pilot_report(
         }
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "pilot_only": True,
         "formal_run_required": True,
         "source_split": "train",
@@ -132,6 +152,10 @@ def build_planner_pilot_report(
         "over_persist_horizon_rate": over_rate,
         "task_type_counts": per_type,
         "quarantine_reasons": dict(sorted(reasons.items())),
+        "expert_binding": dict(expert_binding),
+        "expert_identity_gate_passed": not identity_failures,
+        "expert_identity_gate_failures": identity_failures,
+        "handcoded_timeout_signature_count": handcoded_timeout_signature_count,
         "trajectory_lengths": {
             "min": min(lengths),
             "max": max(lengths),
@@ -146,7 +170,10 @@ def build_planner_pilot_report(
             "infoskill_source": code_revision,
         },
         "code_revision": code_revision[:16],
-        "expert_name": "ALFWorld planner (direct, strict admissibility, no fallback)",
+        "expert_name": (
+            "ALFWorld planner (verified positional binding, strict "
+            "admissibility, no fallback)"
+        ),
         "max_replay_steps": max_replay_steps,
         "persist_horizon": persist_horizon,
         "pilot_gate_thresholds": {

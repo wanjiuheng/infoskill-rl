@@ -135,9 +135,57 @@ planner 重放结果。先核对 `historical_failure_reproduced_count`；只有�
 时，`planner_rescue_count` 才能作为是否重新审议正式 grounding 专家的证据。这个小样本
 只用于定位原因，不能直接替代全量 3,553 条 formal grounding。
 
-在历史失败诊断确认 planner 是候选方案后，先从完整 train 集按六类各 50 条做独立、
-确定性的 300 条 planner pilot。它不加载模型、不做技能检索并主动隐藏 GPU；默认每 64
-条重启 worker。通常约需 25–50 分钟，按 1 小时预留。后台运行：
+历史失败诊断确认 planner 是候选方案后，先跑六类各 2 条（共 12 条）的 planner 身份
+smoke。它不加载模型、不做技能检索并主动隐藏 GPU；目的不是估计成功率，而是验证
+`AlfredExpert("planner")` 在真实 worker 中确实绑定为 planner。旧版 ALFWorld 的调用把
+这个位置参数误传给了 `env`，因此 INFO-SKILL 会安装窄兼容保护，并在父进程和每个 worker
+中 fail-closed 探测。后台运行：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-grounding-planner-identity-smoke-${STAMP}.log"
+
+nohup env \
+PLANNER_PILOT_TASKS_PER_TYPE=2 \
+PLANNER_PILOT_MAX_REPLAY_STEPS=150 \
+GROUNDING_WORKER_BATCH_SIZE=12 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=m1-grounding-planner-identity-smoke \
+bash scripts/run_alfworld.sh grounding-planner-pilot \
+> "$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" > "${LOG}.pid"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+这 12 条只检查 `expert_identity_gate_passed=true`、requested/effective 均为 `planner`、
+guard/corrected 均为 `true`，以及 `handcoded_timeout_signature_count=0`。小样本的覆盖率和
+长尾 `pilot_gate_passed` 不用于决策。身份门通过并完成结果复核后，再从完整 train 集按
+六类各 50 条做确定性的 300 条 planner pilot。默认每 64 条重启 worker，通常约需
+25–50 分钟，按 1 小时预留：
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-planner-identity-smoke' | sort | tail -n 1)
+echo "RUN=$RUN"
+cat "$RUN/planner-pilot.json"
+cat "$RUN/grounding-lifecycle.json"
+
+STAMP=$(date +%Y%m%d_%H%M%S)
+ARCHIVE="$PWD/m1-grounding-planner-identity-smoke-${STAMP}.tar.gz"
+tar -czf "$ARCHIVE" -C "$RUN" \
+  planner-pilot.json \
+  planner-pilot-results.jsonl \
+  grounding-lifecycle.json \
+  console.log
+echo "ARCHIVE=$ARCHIVE"
+ls -lh "$ARCHIVE"
+```
 
 ```bash
 cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
@@ -165,8 +213,8 @@ tail -f "$LOG"
 `grounding-lifecycle.json` 和 `console.log`，故意不生成正式训练入口要求的
 `manifest.json` 与 `grounding_samples.jsonl`。即使 `pilot_gate_passed=true`，也只表示
 值得继续跑 3,553 条正式 planner grounding，不能把该目录传给 `GROUNDING_DATA`。
-重点检查整体及六类 `success_rate`、`over_persist_horizon_rate`、失败原因和 p90/p95/p99
-轨迹长度。
+重点先检查 `expert_identity_gate_passed` 和 `expert_binding`，再检查整体及六类
+`success_rate`、`over_persist_horizon_rate`、失败原因和 p90/p95/p99 轨迹长度。
 
 完成后用以下命令打印摘要并打包需要回传的文件：
 
@@ -188,11 +236,15 @@ echo "ARCHIVE=$ARCHIVE"
 ls -lh "$ARCHIVE"
 ```
 
-2026-09-12 的 300 条实跑结果为 278/300 成功；22 条失败中 21 条来自双物体任务，另有
-1 条来自冷却任务，且全部在 150 步终止。成功轨迹也有 60/278 超过正式持久化上限 30
-步，因此不能直接启动 3,553 条正式 grounding，也不能把 150 步门限简单放宽后视为通过。
-先对全部 22 条失败，加上 6 条最长的双物体成功轨迹作为对照，在 300 步上做逐步循环诊断。
-该诊断仍为 CPU-only，不写正式 grounding 样本，通常约需 10–25 分钟：
+2026-09-12 旧代码得到的 278/300 及其 28 条长 horizon 诊断已经作废。源码核验和逐步
+trace 证明，ALFWorld 调用 `AlfredExpert(expert_type)` 时把 `"planner"` 绑定到了 `env`，
+实际 `expert_type` 仍为默认 `handcoded`；5,047 个诊断步骤均表现为 handcoded 分支，19 条
+失败还命中了其固定 200 步 `Timeout`。这些数字只能描述误绑定的手写专家，不能判断
+planner 的覆盖率、长尾或循环。禁止把旧 pilot 目录传给正式 grounding，也禁止继续用它
+作为 loop diagnostic 的输入；新入口会要求来源报告通过专家身份门。
+
+只有新的 12 条身份 smoke 与 300 条 pilot 均通过相应复核后，才可以对新 pilot 的失败项
+运行长 horizon loop diagnostic。该诊断仍为 CPU-only，不写正式 grounding 样本：
 
 ```bash
 cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
@@ -221,9 +273,10 @@ tail -f "$LOG"
 `planner-loop-diagnostic.json` 汇总被更长 horizon 救回、仍失败、状态—动作循环和对照退化
 的任务；`planner-loop-traces.jsonl` 则保留每步 observation、完整 admissible commands、
 planner plan 前五项、实际动作与状态指纹。状态指纹优先使用 ALFWorld 完整 world facts，
-缺失时才退回 observation、admissible commands 与 won；第三次出现完全相同的“状态指纹
-和动作”才标为循环。该信号用于区分“只是需要更多步骤”和“planner 卡死”，不作为正式
-质量门本身。
+缺失时才退回 observation、admissible commands 与 won。报告把“任意历史位置重复三次”
+记为 `historical_repeated_state_action_tasks`，但只有轨迹末尾存在同一状态—动作周期连续
+重复至少三次，才记为 `terminal_cycles_detected`；检测周期上限为 10。该信号用于区分
+“曾经回访”与“最终卡死”，不作为正式质量门本身。
 
 完成后打印报告并打包这三个文件：
 

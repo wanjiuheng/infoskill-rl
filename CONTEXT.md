@@ -248,20 +248,19 @@ ALFWorld planner 的同任务同种子诊断：18/18 手写失败被精确复现
 唯一失败为双物体任务在 150 步达到 replay limit。17 条成功轨迹中位数 28 步，6 条超过
 30 步，说明 planner 明显优于当前手写专家，但还不能由定向失败样本直接外推全量。
 
-当前下一门是独立 `grounding-planner-pilot`：从完整 train 集确定性分层抽取六类各 50
-条（共 300 条），使用短生命周期 CPU worker 直接严格重放 planner。试点只生成
-`planner-pilot.json`、紧凑逐任务结果和 lifecycle 报告，不生成可被 M1 加载的正式
-manifest/grounding samples。只有分析其六类覆盖率、长尾轨迹及失败原因后，才决定是否
-把正式 grounding 专家从手写专家改为 planner 并重跑全部 3,553 条。
+2026-09-12 的 300 条所谓 planner pilot（278/300）及其 28 条长 horizon 诊断均已判定
+无效：固定 ALFWorld 源码用 `AlfredExpert(expert_type)` 调用签名为
+`AlfredExpert(env=None, expert_type="handcoded")` 的包装器，导致 `"planner"` 被绑定到
+`env`、实际专家仍为 handcoded。全部 5,047 个诊断步骤都请求了只有 handcoded 分支使用
+的 facts，19 条失败还命中该专家固定 200 步的 `Exception("Timeout")`。因此不得用旧
+278/300、3/22 rescued 或 28/28 cycle 数字评价 planner。
 
-2026-09-12 planner pilot 已完成：278/300 成功（92.67%），22 条失败全部达到 150 步，
-其中 21 条是双物体、1 条是冷却任务；没有异常和动作可执行性不匹配。成功轨迹中仍有
-60/278 超过 30 步，双物体成功轨迹有 23/29 超过 30 步。生命周期门通过，但覆盖率与
-长尾门均未通过，因此尚未授权全量正式 grounding。当前下一门改为
-`grounding-planner-loop-diagnostic`：对全部 22 条失败和 6 条最长双物体成功对照提高到
-300 步，逐步保存 observation、admissible commands、planner plan、动作与状态指纹，
-区分需要更长 horizon、可复现循环和其他终止原因。该产物仅用于诊断，不能传给
-`GROUNDING_DATA`。
+INFO-SKILL 现由自身的运行时兼容层窄修正该位置参数，并在父进程与每个短生命周期 worker
+创建环境前探测 requested/effective expert type；身份不符即 fail closed。pilot schema v2
+记录 `expert_binding`、`expert_identity_gate_passed` 和手写专家 Timeout 指纹。循环统计也
+拆成历史重复与轨迹末尾连续至少三次的精确周期，旧的“任意同对出现三次”不再叫作卡死。
+当前下一门是六类各 2 条的 CPU-only 真 planner 身份 smoke；通过后再重跑六类各 50 条的
+300 条 pilot，之后才决定是否运行新 loop diagnostic 或 3,553 条正式 grounding。
 
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。

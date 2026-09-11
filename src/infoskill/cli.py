@@ -1582,12 +1582,17 @@ def _grounding_planner_pilot(
         build_planner_pilot_report,
         compact_result_payload,
         discover_tasks,
+        prepare_alfworld_expert_type_binding,
         run_bounded_grounding,
         select_stratified_tasks,
         write_planner_pilot_results,
     )
 
     all_tasks = discover_tasks(config.paths.alfworld_data, split="train")
+    expert_binding = prepare_alfworld_expert_type_binding(
+        config.paths.alfworld_source,
+        requested_expert_type="planner",
+    )
     selected = select_stratified_tasks(
         tasks=all_tasks,
         tasks_per_type=args.tasks_per_type,
@@ -1645,6 +1650,7 @@ def _grounding_planner_pilot(
         code_revision=source_checksum,
         max_replay_steps=args.max_replay_steps,
         persist_horizon=config.max_steps,
+        expert_binding=expert_binding,
     )
     write_planner_pilot_results(
         run_directory / "planner-pilot-results.jsonl",
@@ -1664,6 +1670,13 @@ def _grounding_planner_pilot(
         config.max_steps,
         report["over_persist_horizon"],
         report["pilot_gate_passed"],
+    )
+    logger.info(
+        "Planner identity: requested=%s effective=%s guard=%s corrected=%s",
+        expert_binding["requested_expert_type"],
+        expert_binding["effective_expert_type"],
+        expert_binding["compatibility_guard_active"],
+        expert_binding["positional_binding_corrected"],
     )
     logger.info(
         "Pilot-only report: %s (a full 3,553-task formal run is still required)",
@@ -1705,6 +1718,10 @@ def _grounding_planner_loop_diagnostic(
     source_report = json.loads(source_report_path.read_text(encoding="utf-8"))
     if not isinstance(source_report, dict) or source_report.get("pilot_only") is not True:
         raise ValueError("source run is not an explicit planner-only pilot")
+    if source_report.get("expert_identity_gate_passed") is not True:
+        raise ValueError(
+            "source planner pilot did not pass the effective planner identity gate"
+        )
     source_rows = tuple(
         json.loads(line)
         for line in source_results_path.read_text(encoding="utf-8").splitlines()
@@ -1808,11 +1825,11 @@ def _grounding_planner_loop_diagnostic(
     _write_json(run_directory / "planner-loop-diagnostic.json", report)
     logger.info(
         "Planner loop diagnostic complete: selected=%d rescued=%d "
-        "still_failed=%d cycles=%d control_regressions=%d",
+        "still_failed=%d terminal_cycles=%d control_regressions=%d",
         report["selected_tasks"],
         report["rescued_after_source_horizon"],
         report["still_failed_at_diagnostic_horizon"],
-        report["cycles_detected"],
+        report["terminal_cycles_detected"],
         report["control_regressions"],
     )
     logger.info("Diagnostic report: %s", run_directory / "planner-loop-diagnostic.json")

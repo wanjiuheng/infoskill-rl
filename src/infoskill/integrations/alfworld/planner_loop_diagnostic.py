@@ -126,6 +126,8 @@ def summarize_planner_trace(
         pair_counts.items(),
         key=lambda item: (-item[1], item[0][0], item[0][1]),
     )
+    terminal_period, terminal_repetitions = _terminal_cycle(pairs)
+    terminal_cycle_detected = terminal_period is not None
     return {
         "recorded_planner_steps": len(trace),
         "trace_starts_after_forced_look": True,
@@ -136,7 +138,19 @@ def summarize_planner_trace(
         ),
         "max_state_action_occurrences": maximum,
         "max_consecutive_same_action": _max_consecutive_actions(pairs),
-        "cycle_detected": maximum >= 3,
+        "repeated_state_action_detected": maximum >= 3,
+        "first_repeated_state_action_step": first_cycle_step,
+        "terminal_cycle_detected": terminal_cycle_detected,
+        "terminal_cycle_period": terminal_period,
+        "terminal_cycle_repetitions": terminal_repetitions,
+        "terminal_cycle_start_step": (
+            len(trace) - terminal_period * terminal_repetitions + 1
+            if terminal_period is not None
+            else None
+        ),
+        # Compatibility field retained for existing report readers.  Unlike
+        # schema v1, it now means an exact periodic suffix at the trajectory end.
+        "cycle_detected": terminal_cycle_detected,
         "first_cycle_step": first_cycle_step,
         "most_repeated_state_actions": [
             {
@@ -260,19 +274,51 @@ def build_planner_loop_report(
     rescued = [row for row in source_failures if _result(row)["succeeded"]]
     still_failed = [row for row in source_failures if not _result(row)["succeeded"]]
     control_regressions = [row for row in controls if not _result(row)["succeeded"]]
-    cycles = [row for row in rows if bool(_trace_summary(row)["cycle_detected"])]
+    historical_repeats = [
+        row
+        for row in rows
+        if bool(
+            _trace_summary(row).get(
+                "repeated_state_action_detected",
+                _trace_summary(row).get("cycle_detected", False),
+            )
+        )
+    ]
+    terminal_cycles = [
+        row
+        for row in rows
+        if bool(
+            _trace_summary(row).get(
+                "terminal_cycle_detected",
+                _trace_summary(row).get("cycle_detected", False),
+            )
+        )
+    ]
     by_type: dict[str, Counter[str]] = defaultdict(Counter)
     for row in rows:
         counts = by_type[str(row["task_type"])]
+        trace_summary = _trace_summary(row)
+        historical_repeat = bool(
+            trace_summary.get(
+                "repeated_state_action_detected",
+                trace_summary.get("cycle_detected", False),
+            )
+        )
+        terminal_cycle = bool(
+            trace_summary.get(
+                "terminal_cycle_detected",
+                trace_summary.get("cycle_detected", False),
+            )
+        )
         counts["total"] += 1
         counts["succeeded_at_diagnostic_horizon"] += int(
             bool(_result(row)["succeeded"])
         )
-        counts["cycles_detected"] += int(
-            bool(_trace_summary(row)["cycle_detected"])
-        )
+        counts["historical_repeats_detected"] += int(historical_repeat)
+        counts["terminal_cycles_detected"] += int(terminal_cycle)
+        counts["cycles_detected"] += int(terminal_cycle)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "diagnostic_only": True,
         "formal_run_required": True,
         "source_pilot_run": source_pilot_run,
@@ -297,8 +343,24 @@ def build_planner_loop_report(
         "control_regression_task_ids": [
             str(row["task_id"]) for row in control_regressions
         ],
-        "cycles_detected": len(cycles),
-        "cycle_task_ids": [str(row["task_id"]) for row in cycles],
+        "historical_repeated_state_action_tasks": len(historical_repeats),
+        "historical_repeated_state_action_task_ids": [
+            str(row["task_id"]) for row in historical_repeats
+        ],
+        "terminal_cycles_detected": len(terminal_cycles),
+        "terminal_cycle_task_ids": [
+            str(row["task_id"]) for row in terminal_cycles
+        ],
+        # Compatibility fields for readers of the schema-v1 report.  They now
+        # deliberately point to the stricter terminal-cycle classification.
+        "cycles_detected": len(terminal_cycles),
+        "cycle_task_ids": [str(row["task_id"]) for row in terminal_cycles],
+        "cycle_definition": {
+            "unit": "state_fingerprint_and_action",
+            "location": "exact_trajectory_suffix",
+            "minimum_repetitions": 3,
+            "maximum_period": 10,
+        },
         "task_type_counts": {
             task_type: dict(counts)
             for task_type, counts in sorted(by_type.items())
@@ -372,6 +434,27 @@ def _max_consecutive_actions(pairs: Sequence[tuple[str, str]]) -> int:
         maximum = max(maximum, current)
         previous = action
     return maximum
+
+
+def _terminal_cycle(
+    pairs: Sequence[tuple[str, str]],
+    *,
+    maximum_period: int = 10,
+    minimum_repetitions: int = 3,
+) -> tuple[int | None, int]:
+    """Return the shortest exact state-action period repeated at the trace end."""
+
+    maximum_candidate = min(maximum_period, len(pairs) // minimum_repetitions)
+    for period in range(1, maximum_candidate + 1):
+        pattern = tuple(pairs[-period:])
+        repetitions = 1
+        end = len(pairs) - period
+        while end - period >= 0 and tuple(pairs[end - period : end]) == pattern:
+            repetitions += 1
+            end -= period
+        if repetitions >= minimum_repetitions:
+            return period, repetitions
+    return None, 0
 
 
 def _result(row: Mapping[str, object]) -> Mapping[str, object]:

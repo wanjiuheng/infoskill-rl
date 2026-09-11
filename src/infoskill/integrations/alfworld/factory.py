@@ -9,6 +9,7 @@ from infoskill.episode import TaskSpec
 
 from .batch_environment import AlfworldEnvironmentBatch
 from .environment import AlfworldEnvironment
+from .expert_type_guard import prepare_alfworld_expert_type_binding
 from .parser_guard import install_textworld_parser_guards
 
 
@@ -83,6 +84,14 @@ class AlfworldEnvironmentFactory:
             sys.path.insert(0, source)
         try:
             import yaml
+            if expert_type is not None:
+                # This probe runs in every short-lived grounding worker.  It
+                # therefore guards the process that actually constructs the
+                # TextWorld wrapper, not merely its parent coordinator.
+                prepare_alfworld_expert_type_binding(
+                    source,
+                    requested_expert_type=expert_type,
+                )
             from alfworld.agents.environment import get_environment
             install_textworld_parser_guards()
         except ImportError as error:

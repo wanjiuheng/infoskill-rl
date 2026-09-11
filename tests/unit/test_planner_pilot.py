@@ -85,6 +85,12 @@ class PlannerPilotTests(unittest.TestCase):
             code_revision="def",
             max_replay_steps=150,
             persist_horizon=30,
+            expert_binding={
+                "requested_expert_type": "planner",
+                "effective_expert_type": "planner",
+                "compatibility_guard_active": True,
+                "positional_binding_corrected": True,
+            },
         )
 
         self.assertTrue(report["pilot_only"])
@@ -92,9 +98,57 @@ class PlannerPilotTests(unittest.TestCase):
         self.assertEqual(report["selected_games"], 6)
         self.assertEqual(report["successful_games"], 5)
         self.assertEqual(report["over_persist_horizon"], 3)
+        self.assertTrue(report["expert_identity_gate_passed"])
+        self.assertEqual(report["expert_binding"]["effective_expert_type"], "planner")
         self.assertIn("p90", report["trajectory_lengths"])
         per_type = report["task_type_counts"]
         self.assertEqual(per_type[ALFWORLD_TASK_TYPES[-1]]["success_rate"], 0.0)
+
+    def test_report_fails_identity_gate_for_the_legacy_handcoded_timeout(self) -> None:
+        results = [
+            (
+                task_type,
+                ExpertReplayResult(
+                    task_id=f"task-{index}",
+                    succeeded=index != 0,
+                    samples=(),
+                    total_steps=200 if index == 0 else 10,
+                    quarantine_reason=(
+                        "expert_exception:Exception" if index == 0 else None
+                    ),
+                    exception_stage="environment_step" if index == 0 else None,
+                    exception_type="Exception" if index == 0 else None,
+                    exception_message="Timeout" if index == 0 else None,
+                ),
+            )
+            for index, task_type in enumerate(ALFWORLD_TASK_TYPES)
+        ]
+
+        report = build_planner_pilot_report(
+            results=results,
+            tasks_per_type=1,
+            selection_seed=0,
+            train_task_manifest_sha256="abc",
+            code_revision="def",
+            max_replay_steps=300,
+            persist_horizon=30,
+            expert_binding={
+                "requested_expert_type": "planner",
+                "effective_expert_type": "planner",
+                "compatibility_guard_active": True,
+                "positional_binding_corrected": True,
+            },
+            minimum_success_coverage=0.0,
+            maximum_over_horizon_rate=1.0,
+        )
+
+        self.assertFalse(report["expert_identity_gate_passed"])
+        self.assertFalse(report["pilot_gate_passed"])
+        self.assertEqual(report["handcoded_timeout_signature_count"], 1)
+        self.assertIn(
+            "handcoded_timeout_signature_detected",
+            report["expert_identity_gate_failures"],
+        )
 
 
 if __name__ == "__main__":

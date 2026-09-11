@@ -51,21 +51,41 @@ class PlannerLoopDiagnosticTests(unittest.TestCase):
         )
         self.assertEqual(selected[-1]["diagnostic_role"], "long_success_control")
 
-    def test_trace_summary_detects_repeated_state_action_cycle(self) -> None:
+    def test_trace_summary_separates_historical_revisit_from_terminal_cycle(self) -> None:
         trace = (
             _step(1, "state-a", "go to desk 1"),
             _step(2, "state-b", "go to shelf 1"),
             _step(3, "state-a", "go to desk 1"),
-            _step(4, "state-b", "go to shelf 1"),
             _step(5, "state-a", "go to desk 1"),
+            _step(6, "state-c", "take apple 1"),
+            _step(7, "state-d", "go to fridge 1"),
+            _step(8, "state-e", "open fridge 1"),
         )
 
         summary = summarize_planner_trace(trace)
 
-        self.assertTrue(summary["cycle_detected"])
+        self.assertTrue(summary["repeated_state_action_detected"])
+        self.assertFalse(summary["terminal_cycle_detected"])
         self.assertEqual(summary["max_state_action_occurrences"], 3)
         self.assertEqual(summary["first_cycle_step"], 5)
-        self.assertEqual(summary["unique_state_fingerprints"], 2)
+        self.assertEqual(summary["unique_state_fingerprints"], 5)
+
+    def test_trace_summary_detects_exact_periodic_terminal_suffix(self) -> None:
+        trace = (
+            _step(1, "progress", "take apple 1"),
+            _step(2, "state-a", "go to desk 1"),
+            _step(3, "state-b", "go to shelf 1"),
+            _step(4, "state-a", "go to desk 1"),
+            _step(5, "state-b", "go to shelf 1"),
+            _step(6, "state-a", "go to desk 1"),
+            _step(7, "state-b", "go to shelf 1"),
+        )
+
+        summary = summarize_planner_trace(trace)
+
+        self.assertTrue(summary["terminal_cycle_detected"])
+        self.assertEqual(summary["terminal_cycle_period"], 2)
+        self.assertEqual(summary["terminal_cycle_repetitions"], 3)
 
     def test_trace_summary_does_not_call_one_revisit_a_cycle(self) -> None:
         trace = (
@@ -76,7 +96,8 @@ class PlannerLoopDiagnosticTests(unittest.TestCase):
 
         summary = summarize_planner_trace(trace)
 
-        self.assertFalse(summary["cycle_detected"])
+        self.assertFalse(summary["repeated_state_action_detected"])
+        self.assertFalse(summary["terminal_cycle_detected"])
         self.assertEqual(summary["max_state_action_occurrences"], 1)
 
     def test_report_names_rescues_failures_cycles_and_control_regressions(self) -> None:
@@ -102,7 +123,7 @@ class PlannerLoopDiagnosticTests(unittest.TestCase):
 
         self.assertEqual(report["rescued_task_ids"], ["rescued"])
         self.assertEqual(report["still_failed_task_ids"], ["looping"])
-        self.assertEqual(report["cycle_task_ids"], ["looping"])
+        self.assertEqual(report["terminal_cycle_task_ids"], ["looping"])
         self.assertEqual(report["control_regression_task_ids"], ["control"])
 
 
@@ -146,7 +167,10 @@ def _diagnostic_row(
             "total_steps": 50 if succeeded else 300,
             "reason": None if succeeded else "expert_replay_limit",
         },
-        "trace_summary": {"cycle_detected": cycle},
+        "trace_summary": {
+            "repeated_state_action_detected": cycle,
+            "terminal_cycle_detected": cycle,
+        },
     }
 
 

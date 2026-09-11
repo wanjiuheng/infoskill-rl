@@ -81,3 +81,9 @@ M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` �
 ALFWorld Strict Expert Replay 按固定任务顺序执行，但每 64 个游戏更换一个短生命周期 CPU 子进程；每个子进程使用 run 目录内独占的临时目录，并在退出后由父进程验证清理。候选技能在父进程一次性确定，任务随机种子由 master seed 与 task ID 稳定派生，因此输出不依赖 shard 边界。父进程按原始任务顺序合并全部结果，再统一生成 `grounding_samples.jsonl`、`quarantine.jsonl` 与 formal manifest。
 
 采用该边界是因为单进程回放实测到 Fast Downward 为每次 TextWorld 环境初始化复制 `libdownward.so`，临时占用在进程退出前持续累积：第 722 个任务时数据盘被写满，同时 RSS 从约 411 MiB 增至约 3.4 GiB。单纯改用更大磁盘或 `/dev/shm` 只会推迟故障，并可能把磁盘泄漏改成主存耗尽。worker 分批不得改变 3,553 条 train 全集、150 步专家验证、30 步持久化窗口或 99% formal gate；生命周期报告缺失、任务顺序变化、worker 失败或临时目录未清理均视为基础设施失败。
+
+## D017：ALFWorld 专家类型必须按实际包装器实例 fail closed
+
+固定 ALFWorld 源码以 `AlfredExpert(expert_type)` 创建签名为 `AlfredExpert(env=None, expert_type="handcoded")` 的包装器，导致请求 planner 时字符串被绑定到 `env`、有效专家静默保持 handcoded。INFO-SKILL 不直接改写外部仓库，而在 ALFWorld 适配边界安装只识别 `handcoded|planner` 位置字符串的窄兼容保护；父进程与每个短生命周期 worker 都必须用源码中的真实类执行同形调用，验证 requested/effective type、保护器状态和位置参数修正，任一不符即在回放前失败。pilot 报告还把 handcoded 独有的 `environment_step/Exception/Timeout` 作为第二道身份门，并记录实际模块路径。旧误绑定产生的 planner pilot 与后续诊断全部作废，不得用作方法判断或训练数据。
+
+长 horizon 诊断将“历史状态—动作重复”和“末尾周期卡死”分开：前者只表示轨迹曾回访，后者要求轨迹结尾存在长度不超过 10 的完全相同状态—动作周期连续重复至少三次。保留旧 `cycles_detected` 字段供读取器兼容，但 schema v2 中它与严格的 terminal cycle 同义，不再等同于任意位置第三次出现。

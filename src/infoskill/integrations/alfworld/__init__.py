@@ -8,6 +8,11 @@ from .expert_replay import (
     GroundingSample,
     StrictExpertReplay,
 )
+from .expert_type_guard import (
+    install_alfworld_expert_type_guard,
+    prepare_alfworld_expert_type_binding,
+    verify_alfworld_expert_type_binding,
+)
 from .factory import AlfworldEnvironmentFactory
 from .grounding_io import (
     GroundingDataset,
@@ -48,12 +53,14 @@ __all__ = [
     "AlfworldEnvironmentFactory",
     "ExpertActionMismatch",
     "ExpertReplayResult",
+    "install_alfworld_expert_type_guard",
     "GroundingSample",
     "GroundingManifest",
     "GroundingDataset",
     "GroundingShardReport",
     "GroundingWorkItem",
     "PlannerPayloadExpert",
+    "prepare_alfworld_expert_type_binding",
     "TracingPlannerExpert",
     "StrictExpertReplay",
     "build_grounding_manifest",
@@ -74,4 +81,5 @@ __all__ = [
     "write_grounding_artifacts",
     "write_planner_pilot_results",
     "write_planner_loop_rows",
+    "verify_alfworld_expert_type_binding",
 ]
