@@ -75,3 +75,9 @@ M0/M1 的 Policy Optimizer 继续使用由 `won - 0.01 * invalid_action_count` �
 ## D015：统一采用 12,288 policy token budget
 
 `no_skill`、`raw_skill_prompt` 与 `infoskill` 的 old/ref/actor 动态微批预算统一为每 GPU `12,288` tokens；vLLM rollout 调度预算继续保持 `16,384`，两者不得混为一个参数。正式形状的 raw/full 运行在 `16,384` 下曾观测到约 `2.51 GiB` 的 policy 阶段物理空闲显存；`12,288` 的 200ms 监控重跑把 policy/rollout 最差余量提高到 `18.64/12.46 GiB`，同时保持 64 条 rollout 与对齐统计完全一致，并完成 optimizer 与 portable checkpoint。观测到的 core/policy 耗时约增加 `13.4%/10.1%`，其中含 200ms 监控开销；在可接受的吞吐代价下优先保留跨模式、长 prompt 与后续 M1 的显存安全余量。随后 1,000ms 监控的两个连续 raw/full 正式形状 update 均完成：跨 update 最差 policy/rollout 余量为 `18.64/13.02 GiB`，core 为 `668.52/679.99s`，CPU 内存仅从 `45.86` 增至 `46.18 GiB`，无环境强制终止，两个可移植 checkpoint 的游标依次为 8 和 16。长时 pilot/formal 因此建议显式设置 `CUDA_MEMORY_POLL_INTERVAL_MS=1000`，但代码默认仍为 `0`，显式参数优先。历史 checkpoint 缺少该字段时仍按旧默认 `16,384` 解释，禁止在原地 resume 中静默改成 `12,288`。
+
+## D016：grounding 使用有界短生命周期 worker
+
+ALFWorld Strict Expert Replay 按固定任务顺序执行，但每 64 个游戏更换一个短生命周期 CPU 子进程；每个子进程使用 run 目录内独占的临时目录，并在退出后由父进程验证清理。候选技能在父进程一次性确定，任务随机种子由 master seed 与 task ID 稳定派生，因此输出不依赖 shard 边界。父进程按原始任务顺序合并全部结果，再统一生成 `grounding_samples.jsonl`、`quarantine.jsonl` 与 formal manifest。
+
+采用该边界是因为单进程回放实测到 Fast Downward 为每次 TextWorld 环境初始化复制 `libdownward.so`，临时占用在进程退出前持续累积：第 722 个任务时数据盘被写满，同时 RSS 从约 411 MiB 增至约 3.4 GiB。单纯改用更大磁盘或 `/dev/shm` 只会推迟故障，并可能把磁盘泄漏改成主存耗尽。worker 分批不得改变 3,553 条 train 全集、150 步专家验证、30 步持久化窗口或 99% formal gate；生命周期报告缺失、任务顺序变化、worker 失败或临时目录未清理均视为基础设施失败。

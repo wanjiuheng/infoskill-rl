@@ -5,6 +5,21 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_grounding_uses_bounded_worker_batches_by_default(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"',
+            script,
+        )
+        self.assertIn(
+            '--worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}"',
+            script,
+        )
+
     def test_safe_policy_token_budget_is_the_shell_default(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

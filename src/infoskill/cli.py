@@ -135,6 +135,15 @@ def _parser() -> argparse.ArgumentParser:
     grounding = subparsers.add_parser("grounding", help="generate strict train-only expert labels")
     grounding.add_argument("--config", required=True)
     grounding.add_argument("--run-name")
+    grounding.add_argument(
+        "--worker-batch-size",
+        type=int,
+        default=64,
+        help=(
+            "number of expert replays per short-lived worker process; "
+            "bounds TextWorld/Fast Downward temporary resources"
+        ),
+    )
     train = subparsers.add_parser("train", help="run INFO-SKILL-owned GRPO training")
     train.add_argument("--config", required=True)
     train.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
@@ -1313,16 +1322,15 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
     from tqdm.auto import tqdm
 
     from infoskill.integrations.alfworld import (
-        AlfworldEnvironmentFactory,
-        StrictExpertReplay,
+        GroundingWorkItem,
         build_grounding_manifest,
         discover_tasks,
-        load_handcoded_expert,
+        run_bounded_grounding,
         write_grounding_artifacts,
     )
     from infoskill.skills import (
-        EmbeddingRetriever,
         FixedSkillLibrary,
+        PrecomputedEmbeddingRetriever,
         SentenceTransformerEncoder,
         TemplateRetriever,
     )
@@ -1332,13 +1340,22 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
     tasks = discover_tasks(config.paths.alfworld_data, split="train")
     library = FixedSkillLibrary.load(config.paths.skill_bank)
     if config.retrieval_mode == "embedding":
-        retriever = EmbeddingRetriever(
-            library,
-            SentenceTransformerEncoder(config.paths.semantic_model, device="cuda:0"),
-            general_top_k=config.general_top_k,
-            task_top_k=config.task_top_k,
-            mistake_count=config.mistake_count,
+        encoder = SentenceTransformerEncoder(
+            config.paths.semantic_model,
+            device="cuda:0",
+            show_progress_bar=True,
         )
+        try:
+            retriever = PrecomputedEmbeddingRetriever(
+                library,
+                encoder,
+                queries=[task.goal for task in tasks],
+                general_top_k=config.general_top_k,
+                task_top_k=config.task_top_k,
+                mistake_count=config.mistake_count,
+            )
+        finally:
+            encoder.close()
     else:
         retriever = TemplateRetriever(
             library,
@@ -1346,25 +1363,29 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
             task_count=config.task_top_k,
             mistake_count=config.mistake_count,
         )
-    factory = AlfworldEnvironmentFactory.from_paths(
-        alfworld_source=config.paths.alfworld_source,
-        config_path=config.paths.alfworld_config,
-        data_root=config.paths.alfworld_data,
-        max_steps=150,
-    )
-    replay = StrictExpertReplay(max_replay_steps=150, persist_horizon=config.max_steps)
-    expert = load_handcoded_expert(alfworld_source=config.paths.alfworld_source, max_steps=200)
-    results = []
-    for index, task in enumerate(tqdm(tasks, desc="train/expert-replay", unit="task", dynamic_ncols=True)):
-        candidates = retriever.retrieve(task.goal).skill_ids
-        environment = factory.create(task, rollout_id=0, seed=_stable_seed(config.master_seed, task.task_id))
-        result = replay.run(
+    work_items = tuple(
+        GroundingWorkItem(
             task=task,
-            environment=environment,
-            expert=expert,  # type: ignore[arg-type]
-            candidate_skill_ids=candidates,
+            candidate_skill_ids=retriever.retrieve(task.goal).skill_ids,
+            seed=_stable_seed(config.master_seed, task.task_id),
         )
-        results.append((task.task_type, result))
+        for task in tasks
+    )
+    with tqdm(
+        total=len(tasks),
+        desc="train/expert-replay",
+        unit="task",
+        dynamic_ncols=True,
+    ) as progress:
+        results, lifecycle = run_bounded_grounding(
+            work_items=work_items,
+            config_path=args.config,
+            run_directory=run_directory,
+            worker_batch_size=args.worker_batch_size,
+            max_replay_steps=150,
+            persist_horizon=config.max_steps,
+            on_progress=progress.update,
+        )
     manifest = build_grounding_manifest(
         results=results,
         source_checksums={
@@ -1377,6 +1398,15 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         persist_horizon=config.max_steps,
     )
     write_grounding_artifacts(output_directory=run_directory, results=results, manifest=manifest)
+    _write_json(run_directory / "grounding-lifecycle.json", _dataclass_dict(lifecycle))
+    logger.info(
+        "Grounding workers: count=%d batch_size=%d tasks=%d temp_cleanup=%s min_free=%.2f GiB",
+        lifecycle.worker_processes_started,
+        lifecycle.worker_batch_size,
+        lifecycle.processed_tasks,
+        lifecycle.temporary_directories_cleaned,
+        lifecycle.minimum_free_disk_bytes / 1024**3,
+    )
     logger.info("Grounding manifest:\n%s", json.dumps(manifest.__dict__ if hasattr(manifest, "__dict__") else _dataclass_dict(manifest), ensure_ascii=False, indent=2))
     return 0 if manifest.formal_gate_passed else 4
 

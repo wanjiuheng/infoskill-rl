@@ -9,11 +9,37 @@ from infoskill.integrations.alfworld import (
     ExpertReplayResult,
     GroundingDataset,
     build_grounding_manifest,
+    grounding_result_payload,
+    read_grounding_results,
     write_grounding_artifacts,
 )
 
 
 class GroundingManifestTests(unittest.TestCase):
+    def test_worker_result_json_round_trip_preserves_failure_diagnostics(self) -> None:
+        original = ExpertReplayResult(
+            task_id="bad",
+            succeeded=False,
+            samples=(),
+            total_steps=7,
+            quarantine_reason="expert_action_not_admissible",
+            exception_stage="action_resolution",
+            exception_type="ValueError",
+            exception_message="bad action",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "results.jsonl"
+            path.write_text(
+                json.dumps(
+                    grounding_result_payload("pick_and_place_simple", original)
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            loaded = read_grounding_results(path)
+
+        self.assertEqual(loaded, [("pick_and_place_simple", original)])
+
     def test_quarantine_artifact_preserves_expert_exception_diagnostics(self) -> None:
         result = ExpertReplayResult(
             task_id="bad",

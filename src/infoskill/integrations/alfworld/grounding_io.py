@@ -224,12 +224,7 @@ def write_grounding_artifacts(
             for sample in result.samples:
                 sample_lines.append(
                     json.dumps(
-                        {
-                            "task_id": result.task_id,
-                            "task_type": task_type,
-                            "state": asdict(sample.state),
-                            "expert_action": sample.expert_action,
-                        },
+                        _grounding_sample_payload(task_type, result.task_id, sample),
                         ensure_ascii=False,
                         sort_keys=True,
                     )
@@ -258,6 +253,81 @@ def write_grounding_artifacts(
         manifest_path,
         json.dumps(asdict(manifest), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
+
+
+def grounding_result_payload(
+    task_type: str,
+    result: ExpertReplayResult,
+) -> dict[str, object]:
+    """Serialize one complete replay result for an internal worker boundary."""
+
+    return {
+        "task_type": task_type,
+        "task_id": result.task_id,
+        "succeeded": result.succeeded,
+        "samples": [
+            _grounding_sample_payload(task_type, result.task_id, sample)
+            for sample in result.samples
+        ],
+        "total_steps": result.total_steps,
+        "quarantine_reason": result.quarantine_reason,
+        "exception_stage": result.exception_stage,
+        "exception_type": result.exception_type,
+        "exception_message": result.exception_message,
+    }
+
+
+def read_grounding_results(
+    path: str | Path,
+) -> list[tuple[str, ExpertReplayResult]]:
+    results: list[tuple[str, ExpertReplayResult]] = []
+    with Path(path).open("r", encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            if not line.strip():
+                continue
+            try:
+                payload = json.loads(line)
+                if not isinstance(payload, dict):
+                    raise TypeError("result row must be an object")
+                task_type = str(payload["task_type"])
+                task_id = str(payload["task_id"])
+                sample_payloads = payload["samples"]
+                if not isinstance(sample_payloads, list):
+                    raise TypeError("result samples must be a list")
+                samples = tuple(
+                    _decode_grounding_sample(sample) for sample in sample_payloads
+                )
+                if any(sample.state.task_id != task_id for sample in samples):
+                    raise ValueError("result sample task_id mismatch")
+                result = ExpertReplayResult(
+                    task_id=task_id,
+                    succeeded=bool(payload["succeeded"]),
+                    samples=samples,
+                    total_steps=int(payload["total_steps"]),
+                    quarantine_reason=payload.get("quarantine_reason"),
+                    exception_stage=payload.get("exception_stage"),
+                    exception_type=payload.get("exception_type"),
+                    exception_message=payload.get("exception_message"),
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(
+                    f"invalid grounding result at line {line_number}: {error}"
+                ) from error
+            results.append((task_type, result))
+    return results
+
+
+def _grounding_sample_payload(
+    task_type: str,
+    task_id: str,
+    sample: GroundingSample,
+) -> dict[str, object]:
+    return {
+        "task_id": task_id,
+        "task_type": task_type,
+        "state": asdict(sample.state),
+        "expert_action": sample.expert_action,
+    }
 
 
 def _atomic_write(path: Path, content: str) -> None:

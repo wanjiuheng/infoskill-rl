@@ -8,8 +8,15 @@ from .grounding_io import (
     GroundingDataset,
     GroundingManifest,
     build_grounding_manifest,
+    grounding_result_payload,
+    read_grounding_results,
     sha256_file,
     write_grounding_artifacts,
+)
+from .grounding_shards import (
+    GroundingShardReport,
+    GroundingWorkItem,
+    run_bounded_grounding,
 )
 from .handcoded_expert import load_handcoded_expert
 from .tasks import ALFWORLD_TASK_TYPES, discover_tasks, task_manifest_sha256
@@ -23,10 +30,15 @@ __all__ = [
     "GroundingSample",
     "GroundingManifest",
     "GroundingDataset",
+    "GroundingShardReport",
+    "GroundingWorkItem",
     "StrictExpertReplay",
     "build_grounding_manifest",
     "discover_tasks",
     "load_handcoded_expert",
+    "grounding_result_payload",
+    "read_grounding_results",
+    "run_bounded_grounding",
     "sha256_file",
     "task_manifest_sha256",
     "write_grounding_artifacts",

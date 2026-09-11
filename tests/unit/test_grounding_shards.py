@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from infoskill.episode import TaskSpec
+from infoskill.integrations.alfworld import (
+    ExpertReplayResult,
+    GroundingWorkItem,
+    run_bounded_grounding,
+)
+
+
+class GroundingShardTests(unittest.TestCase):
+    def test_restarts_workers_without_changing_task_order(self) -> None:
+        work_items = tuple(
+            GroundingWorkItem(
+                task=TaskSpec(
+                    task_id=f"task-{index}",
+                    split="train",
+                    task_type="pick_and_place_simple",
+                    goal="put an object somewhere",
+                ),
+                candidate_skill_ids=("general-1",),
+                seed=index,
+            )
+            for index in range(5)
+        )
+        observed_chunks: list[tuple[str, ...]] = []
+        temporary_paths: list[Path] = []
+        progress = 0
+
+        def fake_worker(items, config_path, temporary, max_steps, horizon, callback):
+            del config_path, max_steps, horizon
+            observed_chunks.append(tuple(item.task.task_id for item in items))
+            temporary_paths.append(temporary)
+            self.assertTrue(temporary.is_dir())
+            if callback is not None:
+                callback(len(items))
+            return [
+                (
+                    item.task.task_type,
+                    ExpertReplayResult(item.task.task_id, True, (), 1, None),
+                )
+                for item in items
+            ]
+
+        def update(count: int) -> None:
+            nonlocal progress
+            progress += count
+
+        with tempfile.TemporaryDirectory() as temporary:
+            results, report = run_bounded_grounding(
+                work_items=work_items,
+                config_path=Path(temporary) / "config.yaml",
+                run_directory=temporary,
+                worker_batch_size=2,
+                max_replay_steps=150,
+                persist_horizon=30,
+                on_progress=update,
+                worker_runner=fake_worker,
+            )
+
+        self.assertEqual(
+            observed_chunks,
+            [("task-0", "task-1"), ("task-2", "task-3"), ("task-4",)],
+        )
+        self.assertEqual([result.task_id for _, result in results], [
+            "task-0", "task-1", "task-2", "task-3", "task-4"
+        ])
+        self.assertEqual(progress, 5)
+        self.assertEqual(report.worker_processes_started, 3)
+        self.assertEqual(report.processed_tasks, 5)
+        self.assertTrue(report.temporary_directories_cleaned)
+        self.assertTrue(all(not path.exists() for path in temporary_paths))
+
+
+if __name__ == "__main__":
+    unittest.main()
