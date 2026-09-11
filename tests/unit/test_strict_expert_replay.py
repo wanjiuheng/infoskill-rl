@@ -61,6 +61,11 @@ class _Expert:
         return self.next_action
 
 
+class _ResetFailingExpert(_Expert):
+    def reset(self, gamefile: str) -> None:
+        raise OSError("synthetic expert reset failure")
+
+
 class StrictExpertReplayTests(unittest.TestCase):
     def test_non_admissible_expert_action_quarantines_the_whole_game(self) -> None:
         task = TaskSpec(
@@ -81,6 +86,27 @@ class StrictExpertReplayTests(unittest.TestCase):
         self.assertEqual(result.quarantine_reason, "expert_action_not_admissible")
         self.assertEqual(result.samples, ())
         self.assertEqual(result.total_steps, 1)
+
+    def test_expert_exception_preserves_stage_type_and_message(self) -> None:
+        task = TaskSpec(
+            task_id="game-1",
+            split="train",
+            task_type="pick_and_place_simple",
+            goal="put an apple in the fridge",
+            environment_path="/data/game.tw-pddl",
+        )
+
+        result = StrictExpertReplay(max_replay_steps=150, persist_horizon=30).run(
+            task=task,
+            environment=_ExpertReplayEnvironment(),
+            expert=_ResetFailingExpert("unused"),
+        )
+
+        self.assertFalse(result.succeeded)
+        self.assertEqual(result.quarantine_reason, "expert_exception:OSError")
+        self.assertEqual(result.exception_stage, "expert_reset")
+        self.assertEqual(result.exception_type, "OSError")
+        self.assertEqual(result.exception_message, "synthetic expert reset failure")
 
 
 if __name__ == "__main__":

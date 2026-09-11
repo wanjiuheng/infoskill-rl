@@ -235,14 +235,19 @@ def write_grounding_artifacts(
                     )
                 )
         else:
+            quarantine_payload = {
+                "task_id": result.task_id,
+                "task_type": task_type,
+                "total_steps": result.total_steps,
+                "reason": result.quarantine_reason,
+            }
+            if result.exception_type is not None:
+                quarantine_payload["exception_stage"] = result.exception_stage
+                quarantine_payload["exception_type"] = result.exception_type
+                quarantine_payload["exception_message"] = result.exception_message
             quarantine_lines.append(
                 json.dumps(
-                    {
-                        "task_id": result.task_id,
-                        "task_type": task_type,
-                        "total_steps": result.total_steps,
-                        "reason": result.quarantine_reason,
-                    },
+                    quarantine_payload,
                     ensure_ascii=False,
                     sort_keys=True,
                 )

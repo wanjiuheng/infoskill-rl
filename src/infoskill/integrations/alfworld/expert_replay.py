@@ -39,6 +39,9 @@ class ExpertReplayResult:
     samples: tuple[GroundingSample, ...]
     total_steps: int
     quarantine_reason: str | None
+    exception_stage: str | None = None
+    exception_type: str | None = None
+    exception_message: str | None = None
 
 
 class StrictExpertReplay:
@@ -60,13 +63,18 @@ class StrictExpertReplay:
     ) -> ExpertReplayResult:
         samples: list[GroundingSample] = []
         total_steps = 0
+        exception_stage = "task_validation"
         try:
             if task.environment_path is None:
                 return self._quarantine(task, total_steps, "missing_gamefile")
+            exception_stage = "environment_reset"
             state = environment.reset()
             state = replace(state, candidate_skill_ids=candidate_skill_ids)
+            exception_stage = "environment_expert_payload"
             payload = environment.expert_payload()
+            exception_stage = "expert_reset"
             expert.reset(task.environment_path)
+            exception_stage = "expert_observe"
             expert.observe(str(payload.get("feedback", state.observation)))
             last_action = ""
             last_reward = 0.0
@@ -75,7 +83,9 @@ class StrictExpertReplay:
                 if decision_index == 0:
                     proposed_action = "look"
                 else:
+                    exception_stage = "expert_act"
                     proposed_action = expert.act(payload, last_reward, state.done, last_action)
+                exception_stage = "action_resolution"
                 resolution = resolve_action(
                     f"<action>{proposed_action}</action>",
                     state.admissible_commands,
@@ -84,10 +94,12 @@ class StrictExpertReplay:
                     return self._quarantine(task, total_steps, "expert_action_not_admissible")
 
                 samples.append(GroundingSample(state=state, expert_action=resolution.resolved_action))
+                exception_stage = "environment_step"
                 transition = environment.step(resolution.resolved_action)
                 total_steps += 1
                 state = transition.next_state
                 state = replace(state, candidate_skill_ids=candidate_skill_ids)
+                exception_stage = "environment_expert_payload"
                 payload = environment.expert_payload()
                 last_action = resolution.resolved_action
                 last_reward = transition.raw_reward
@@ -104,16 +116,39 @@ class StrictExpertReplay:
                     return self._quarantine(task, total_steps, "terminated_without_win")
             return self._quarantine(task, total_steps, "expert_replay_limit")
         except Exception as error:
-            return self._quarantine(task, total_steps, f"expert_exception:{type(error).__name__}")
+            return self._quarantine(
+                task,
+                total_steps,
+                f"expert_exception:{type(error).__name__}",
+                exception_stage=exception_stage,
+                exception_type=type(error).__name__,
+                exception_message=_exception_message(error),
+            )
         finally:
             environment.close()
 
     @staticmethod
-    def _quarantine(task: TaskSpec, total_steps: int, reason: str) -> ExpertReplayResult:
+    def _quarantine(
+        task: TaskSpec,
+        total_steps: int,
+        reason: str,
+        *,
+        exception_stage: str | None = None,
+        exception_type: str | None = None,
+        exception_message: str | None = None,
+    ) -> ExpertReplayResult:
         return ExpertReplayResult(
             task_id=task.task_id,
             succeeded=False,
             samples=(),
             total_steps=total_steps,
             quarantine_reason=reason,
+            exception_stage=exception_stage,
+            exception_type=exception_type,
+            exception_message=exception_message,
         )
+
+
+def _exception_message(error: Exception, *, maximum_length: int = 1000) -> str:
+    message = " ".join(str(error).split())
+    return message[:maximum_length]

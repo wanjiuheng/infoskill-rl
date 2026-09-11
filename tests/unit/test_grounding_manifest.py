@@ -9,10 +9,45 @@ from infoskill.integrations.alfworld import (
     ExpertReplayResult,
     GroundingDataset,
     build_grounding_manifest,
+    write_grounding_artifacts,
 )
 
 
 class GroundingManifestTests(unittest.TestCase):
+    def test_quarantine_artifact_preserves_expert_exception_diagnostics(self) -> None:
+        result = ExpertReplayResult(
+            task_id="bad",
+            succeeded=False,
+            samples=(),
+            total_steps=0,
+            quarantine_reason="expert_exception:OSError",
+            exception_stage="expert_reset",
+            exception_type="OSError",
+            exception_message="cannot open game file",
+        )
+        results = [("pick_and_place_simple", result)]
+        manifest = build_grounding_manifest(
+            results=results,
+            source_checksums={"data": "abc"},
+            code_revision="test",
+            max_replay_steps=150,
+            persist_horizon=30,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            write_grounding_artifacts(
+                output_directory=temporary,
+                results=results,
+                manifest=manifest,
+            )
+            payload = json.loads(
+                (Path(temporary) / "quarantine.jsonl").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(payload["exception_stage"], "expert_reset")
+        self.assertEqual(payload["exception_type"], "OSError")
+        self.assertEqual(payload["exception_message"], "cannot open game file")
+
     def test_formal_gate_reports_low_coverage_and_long_replays(self) -> None:
         results = [
             (
