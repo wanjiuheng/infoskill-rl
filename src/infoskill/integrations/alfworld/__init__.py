@@ -2,7 +2,12 @@
 
 from .environment import AlfworldEnvironment
 from .batch_environment import AlfworldEnvironmentBatch
-from .expert_replay import ExpertReplayResult, GroundingSample, StrictExpertReplay
+from .expert_replay import (
+    ExpertActionMismatch,
+    ExpertReplayResult,
+    GroundingSample,
+    StrictExpertReplay,
+)
 from .factory import AlfworldEnvironmentFactory
 from .grounding_io import (
     GroundingDataset,
@@ -26,6 +31,7 @@ __all__ = [
     "AlfworldEnvironment",
     "AlfworldEnvironmentBatch",
     "AlfworldEnvironmentFactory",
+    "ExpertActionMismatch",
     "ExpertReplayResult",
     "GroundingSample",
     "GroundingManifest",

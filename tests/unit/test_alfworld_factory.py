@@ -192,6 +192,35 @@ class AlfworldEnvironmentFactoryTests(unittest.TestCase):
         self.assertEqual(definition.raw.loaded_gamefiles, definition.game_files)
         self.assertEqual([state.task_id for state in states], ["game-0", "game-1"])
 
+    def test_factory_can_request_planner_expert_without_mutating_base_config(self) -> None:
+        base_config = {
+            "dataset": {},
+            "logic": {},
+            "env": {"type": "AlfredTWEnv", "expert_type": "handcoded"},
+            "general": {},
+            "dagger": {"training": {}},
+        }
+        factory = AlfworldEnvironmentFactory(
+            data_root="/data",
+            max_steps=30,
+            base_config=base_config,
+            environment_class=_PinnedAlfredTWEnv,
+            expert_type="planner",
+        )
+        task = TaskSpec(
+            task_id="game-1",
+            split="train",
+            task_type="pick_and_place_simple",
+            goal="put an apple in the fridge",
+            environment_path="/data/game.tw-pddl",
+        )
+
+        factory.create(task, rollout_id=0, seed=7)
+        definition = _PinnedAlfredTWEnv.last_definition
+
+        self.assertEqual(definition.config["env"]["expert_type"], "planner")
+        self.assertEqual(base_config["env"]["expert_type"], "handcoded")
+
 
 if __name__ == "__main__":
     unittest.main()

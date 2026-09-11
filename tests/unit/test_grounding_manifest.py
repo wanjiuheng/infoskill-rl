@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from infoskill.integrations.alfworld import (
+    ExpertActionMismatch,
     ExpertReplayResult,
     GroundingDataset,
     build_grounding_manifest,
@@ -26,6 +27,13 @@ class GroundingManifestTests(unittest.TestCase):
             exception_stage="action_resolution",
             exception_type="ValueError",
             exception_message="bad action",
+            action_mismatch=ExpertActionMismatch(
+                step_index=7,
+                proposed_action="take apple 2 from table 1",
+                last_action="go to table 1",
+                observation="On the table 1 you see an apple 1.",
+                admissible_commands=("take apple 1 from table 1", "look"),
+            ),
         )
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "results.jsonl"
@@ -39,6 +47,48 @@ class GroundingManifestTests(unittest.TestCase):
             loaded = read_grounding_results(path)
 
         self.assertEqual(loaded, [("pick_and_place_simple", original)])
+
+    def test_quarantine_artifact_preserves_action_mismatch(self) -> None:
+        mismatch = ExpertActionMismatch(
+            step_index=3,
+            proposed_action="move apple 2 to bowl 1",
+            last_action="take apple 1 from table 1",
+            observation="You are at bowl 1.",
+            admissible_commands=("move apple 1 to bowl 1", "look"),
+        )
+        result = ExpertReplayResult(
+            task_id="bad",
+            succeeded=False,
+            samples=(),
+            total_steps=3,
+            quarantine_reason="expert_action_not_admissible",
+            action_mismatch=mismatch,
+        )
+        manifest = build_grounding_manifest(
+            results=[("pick_and_place_simple", result)],
+            source_checksums={"data": "abc"},
+            code_revision="test",
+            max_replay_steps=150,
+            persist_horizon=30,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            write_grounding_artifacts(
+                output_directory=temporary,
+                results=[("pick_and_place_simple", result)],
+                manifest=manifest,
+            )
+            payload = json.loads(
+                (Path(temporary) / "quarantine.jsonl").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(payload["action_mismatch"]["step_index"], 3)
+        self.assertEqual(
+            payload["action_mismatch"]["proposed_action"],
+            "move apple 2 to bowl 1",
+        )
 
     def test_quarantine_artifact_preserves_expert_exception_diagnostics(self) -> None:
         result = ExpertReplayResult(

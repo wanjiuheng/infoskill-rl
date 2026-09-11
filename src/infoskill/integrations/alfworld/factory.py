@@ -12,7 +12,13 @@ from .environment import AlfworldEnvironment
 from .parser_guard import install_textworld_parser_guards
 
 
-def _configured_copy(base_config: Mapping[str, object], *, data_root: Path, max_steps: int) -> dict:
+def _configured_copy(
+    base_config: Mapping[str, object],
+    *,
+    data_root: Path,
+    max_steps: int,
+    expert_type: str | None = None,
+) -> dict:
     config = copy.deepcopy(dict(base_config))
     dataset = config.setdefault("dataset", {})
     logic = config.setdefault("logic", {})
@@ -32,6 +38,8 @@ def _configured_copy(base_config: Mapping[str, object], *, data_root: Path, max_
     logic["grammar"] = str(data_root / "logic" / "alfred.twl2")
     env["type"] = "AlfredTWEnv"
     env["domain_randomization"] = False
+    if expert_type is not None:
+        env["expert_type"] = expert_type
     general["use_cuda"] = False
     dagger["max_nb_steps_per_episode"] = max_steps
     rl["max_nb_steps_per_episode"] = max_steps
@@ -48,13 +56,17 @@ class AlfworldEnvironmentFactory:
         max_steps: int,
         base_config: Mapping[str, object],
         environment_class: type,
+        expert_type: str | None = None,
     ) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
+        if expert_type not in {None, "handcoded", "planner"}:
+            raise ValueError("expert_type must be handcoded, planner, or None")
         self._data_root = Path(data_root).expanduser().resolve()
         self._max_steps = max_steps
         self._base_config = dict(base_config)
         self._environment_class = environment_class
+        self._expert_type = expert_type
 
     @classmethod
     def from_paths(
@@ -64,6 +76,7 @@ class AlfworldEnvironmentFactory:
         config_path: str | Path,
         data_root: str | Path,
         max_steps: int,
+        expert_type: str | None = None,
     ) -> "AlfworldEnvironmentFactory":
         source = str(Path(alfworld_source).expanduser().resolve())
         if source not in sys.path:
@@ -86,6 +99,7 @@ class AlfworldEnvironmentFactory:
             max_steps=max_steps,
             base_config=payload,
             environment_class=environment_class,
+            expert_type=expert_type,
         )
 
     def create(self, task: TaskSpec, *, rollout_id: int, seed: int) -> AlfworldEnvironment:
@@ -107,6 +121,7 @@ class AlfworldEnvironmentFactory:
             self._base_config,
             data_root=self._data_root,
             max_steps=self._max_steps,
+            expert_type=self._expert_type,
         )
         definition.config["general"]["random_seed"] = seed
         definition.train_eval = train_eval
@@ -149,6 +164,7 @@ class AlfworldEnvironmentFactory:
             self._base_config,
             data_root=self._data_root,
             max_steps=self._max_steps,
+            expert_type=self._expert_type,
         )
         # Kept for provenance parity with the single-instance factory. With domain
         # randomization disabled, task identity and transition semantics are fixed by

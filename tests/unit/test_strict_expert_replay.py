@@ -86,6 +86,18 @@ class StrictExpertReplayTests(unittest.TestCase):
         self.assertEqual(result.quarantine_reason, "expert_action_not_admissible")
         self.assertEqual(result.samples, ())
         self.assertEqual(result.total_steps, 1)
+        self.assertIsNotNone(result.action_mismatch)
+        self.assertEqual(result.action_mismatch.step_index, 1)
+        self.assertEqual(result.action_mismatch.proposed_action, "dance")
+        self.assertEqual(result.action_mismatch.last_action, "look")
+        self.assertEqual(
+            result.action_mismatch.admissible_commands,
+            ("look", "open fridge 1"),
+        )
+        self.assertEqual(
+            result.action_mismatch.observation,
+            "Kitchen after looking.",
+        )
 
     def test_expert_exception_preserves_stage_type_and_message(self) -> None:
         task = TaskSpec(

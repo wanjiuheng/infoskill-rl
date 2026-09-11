@@ -112,6 +112,29 @@ grounding 默认每 64 个任务重启一次短生命周期 CPU worker，并把�
 `free_disk_bytes_during` 是该 shard 逐任务采样到的最低剩余空间，用于确认临时占用
 峰值确实受到约束。
 
+若 bounded grounding 的生命周期门通过、但 formal gate 因
+`expert_action_not_admissible` 失败，不要直接降低 99% 覆盖率门限。先在同一批历史失败
+任务上对比当前手写专家和 ALFWorld 内置 planner。该诊断只用 CPU，不修改 grounding
+数据，也不允许在一条轨迹中把 planner 当作手写专家的后备动作：
+
+```bash
+SOURCE=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-formal-bounded' | sort | tail -n 1)
+
+GROUNDING_SOURCE_RUN="$SOURCE" \
+GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE=3 \
+GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS=150 \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=m1-grounding-expert-diagnostic \
+bash scripts/run_alfworld.sh grounding-expert-diagnostic
+```
+
+输出 `expert-diagnostic.json` 会按六类各抽最多 3 条历史隔离任务，并记录历史隔离行、
+手写专家首次不匹配动作及内部状态、当前可执行命令、包装器 expert plan，以及独立
+planner 重放结果。先核对 `historical_failure_reproduced_count`；只有手写失败能够稳定复现
+时，`planner_rescue_count` 才能作为是否重新审议正式 grounding 专家的证据。这个小样本
+只用于定位原因，不能直接替代全量 3,553 条 formal grounding。
+
 ## 6. 评测闭环
 
 先用很少任务做开发 smoke（正式结果仍必须完整 140 条），确认模型加载、环境 reset/step、日志和动作解析。当前 CLI 的正式 `eval` 会强制 140 条：

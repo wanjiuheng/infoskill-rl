@@ -238,6 +238,15 @@ _Avoid_: wrapper-fallback labels、partial failed demonstration
 只处理固定数量 Strict Expert Replay 任务的短生命周期 CPU 子进程；退出时释放 TextWorld/Fast Downward 的进程级临时资源，父进程按原任务顺序合并结果。
 _Avoid_: one-process full replay、larger TMPDIR as a leak workaround
 
+2026-09-12 的 3,553 条 bounded grounding 实跑已确认生命周期修复有效：56 个短生命周期
+worker 全部退出并清理临时目录，历史 `OSError` 与 factory `OSError` 均降为 0，最低剩余
+磁盘约 18.47 GiB。剩余 1,541 条隔离全部是
+`expert_action_not_admissible`，手写专家成功覆盖率为 56.63%，其中双物体任务为
+0/813；这属于专家方法门未通过，不再归因于磁盘或 worker 生命周期。正式 M1 仍被
+grounding gate 阻止。下一步使用 CPU-only、六类分层小样本，在相同任务和种子上分别
+完整重放直接手写专家与 ALFWorld planner；报告必须先验证历史失败可复现，再查看
+planner rescue，之后才决定是否修改专家方案并重新生成全量数据。
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation

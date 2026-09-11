@@ -20,6 +20,31 @@ class RunScriptTests(unittest.TestCase):
             script,
         )
 
+    def test_grounding_expert_diagnostic_is_cpu_only_and_stratified(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"',
+            script,
+        )
+        self.assertIn(
+            'GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS="${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS:-150}"',
+            script,
+        )
+        self.assertIn("grounding-expert-diagnostic)", script)
+        self.assertIn(
+            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-expert-diagnostic',
+            script,
+        )
+        self.assertIn('--source-grounding-run "${GROUNDING_SOURCE_RUN}"', script)
+        self.assertIn(
+            '--max-replay-steps "${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS}"',
+            script,
+        )
+
     def test_safe_policy_token_budget_is_the_shell_default(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

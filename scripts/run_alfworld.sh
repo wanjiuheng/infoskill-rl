@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Central parameter panel. Every value can also be overridden as an environment variable.
-ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | raw-skill-ab | unified-skill-causal | skillrl-rl-exact | skillrl-sft-exact | skillrl-sft-causal | checkpoint-effect | grounding | train
+ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | diagnostics | grounding | train
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
 RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
@@ -20,6 +20,10 @@ RESUME="${RESUME:-}"
 GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
 # Short-lived process boundary for TextWorld/Fast Downward resource cleanup.
 GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
+# CPU-only strict handcoded/planner comparison against an existing grounding run.
+GROUNDING_SOURCE_RUN="${GROUNDING_SOURCE_RUN:-}"
+GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"
+GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS="${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS:-150}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
@@ -86,6 +90,14 @@ if [[ ! "${RAW_SKILL_AB_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "${GROUNDING_WORKER_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
   echo "GROUNDING_WORKER_BATCH_SIZE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS must be a positive integer" >&2
   exit 2
 fi
 export OMP_NUM_THREADS="${INFO_SKILL_CPU_THREADS}"
@@ -264,6 +276,18 @@ case "${ACTION}" in
       --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
       "${EXTRA_ARGS[@]}"
     ;;
+  grounding-expert-diagnostic)
+    if [[ -z "${GROUNDING_SOURCE_RUN}" ]]; then
+      echo "GROUNDING_SOURCE_RUN is required for grounding-expert-diagnostic" >&2
+      exit 2
+    fi
+    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-expert-diagnostic \
+      --config "${CONFIG}" \
+      --source-grounding-run "${GROUNDING_SOURCE_RUN}" \
+      --tasks-per-type "${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE}" \
+      --max-replay-steps "${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS}" \
+      "${EXTRA_ARGS[@]}"
+    ;;
   train)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
@@ -326,7 +350,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, raw-skill-ab, unified-skill-causal, skillrl-rl-exact, skillrl-sft-exact, skillrl-sft-causal, checkpoint-effect, grounding, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, or train" >&2
     exit 2
     ;;
 esac

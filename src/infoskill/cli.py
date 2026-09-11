@@ -43,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
         return _checkpoint_effect(config, args)
     if args.command == "grounding":
         return _grounding(config, args)
+    if args.command == "grounding-expert-diagnostic":
+        return _grounding_expert_diagnostic(config, args)
     if args.command == "train":
         return _train(config, args)
     parser.error(f"unsupported command: {args.command}")
@@ -144,6 +146,15 @@ def _parser() -> argparse.ArgumentParser:
             "bounds TextWorld/Fast Downward temporary resources"
         ),
     )
+    grounding_diagnostic = subparsers.add_parser(
+        "grounding-expert-diagnostic",
+        help="compare strict handcoded replay with the ALFWorld planner",
+    )
+    grounding_diagnostic.add_argument("--config", required=True)
+    grounding_diagnostic.add_argument("--source-grounding-run", required=True)
+    grounding_diagnostic.add_argument("--tasks-per-type", type=int, default=3)
+    grounding_diagnostic.add_argument("--max-replay-steps", type=int, default=150)
+    grounding_diagnostic.add_argument("--run-name")
     train = subparsers.add_parser("train", help="run INFO-SKILL-owned GRPO training")
     train.add_argument("--config", required=True)
     train.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
@@ -1409,6 +1420,119 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
     )
     logger.info("Grounding manifest:\n%s", json.dumps(manifest.__dict__ if hasattr(manifest, "__dict__") else _dataclass_dict(manifest), ensure_ascii=False, indent=2))
     return 0 if manifest.formal_gate_passed else 4
+
+
+def _grounding_expert_diagnostic(
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    _validate_paths(
+        config,
+        mode=SkillMode.NO_SKILL,
+        require_checkpoint=False,
+    )
+    if args.tasks_per_type <= 0 or args.max_replay_steps <= 0:
+        raise ValueError("diagnostic task count and replay limit must be positive")
+    from tqdm.auto import tqdm
+
+    from infoskill.integrations.alfworld import discover_tasks, sha256_file
+    from infoskill.integrations.alfworld.grounding_diagnostic import (
+        run_expert_diagnostic,
+        select_quarantined_tasks,
+    )
+
+    source = Path(args.source_grounding_run).expanduser().resolve()
+    manifest_path = source / "manifest.json"
+    quarantine_path = source / "quarantine.jsonl"
+    if not manifest_path.is_file() or not quarantine_path.is_file():
+        raise FileNotFoundError(
+            "source grounding run requires manifest.json and quarantine.jsonl"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict) or manifest.get("source_split") != "train":
+        raise ValueError("source grounding manifest must describe the train split")
+    quarantine_rows = tuple(
+        json.loads(line)
+        for line in quarantine_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    )
+    if any(not isinstance(row, dict) for row in quarantine_rows):
+        raise ValueError("source quarantine rows must be JSON objects")
+    tasks = discover_tasks(config.paths.alfworld_data, split="train")
+    source_checksums = manifest.get("source_checksums", {})
+    expected_task_checksum = (
+        source_checksums.get("train_task_manifest")
+        if isinstance(source_checksums, dict)
+        else None
+    )
+    current_task_checksum = _task_manifest_checksum(tasks)
+    if expected_task_checksum != current_task_checksum:
+        raise ValueError(
+            "source grounding run does not match the current train task manifest"
+        )
+    selected = select_quarantined_tasks(
+        tasks=tasks,
+        quarantine_rows=quarantine_rows,
+        tasks_per_type=args.tasks_per_type,
+        selection_seed=config.master_seed,
+    )
+    run_directory = _run_directory(
+        config,
+        args.run_name or "grounding-expert-diagnostic",
+    )
+    logger = _configure_logging(run_directory)
+    with tqdm(
+        total=len(selected) * 2,
+        desc="grounding/expert-diagnostic",
+        unit="replay",
+        dynamic_ncols=True,
+    ) as progress:
+        report = run_expert_diagnostic(
+            config=config,
+            tasks=tasks,
+            quarantine_rows=quarantine_rows,
+            tasks_per_type=args.tasks_per_type,
+            selection_seed=config.master_seed,
+            max_replay_steps=args.max_replay_steps,
+            persist_horizon=config.max_steps,
+            seed_for_task=lambda task_id: _stable_seed(
+                config.master_seed,
+                task_id,
+            ),
+            on_progress=progress.update,
+        )
+    report.update(
+        {
+            "source_grounding_run": str(source),
+            "source_manifest_sha256": sha256_file(manifest_path),
+            "train_task_manifest_sha256": current_task_checksum,
+            "code_revision": _source_checksum()[:16],
+            "max_replay_steps": args.max_replay_steps,
+            "persist_horizon": config.max_steps,
+        }
+    )
+    output = run_directory / "expert-diagnostic.json"
+    _write_json(output, report)
+    summary = report["summary"]
+    if not isinstance(summary, dict):
+        raise TypeError("expert diagnostic summary must be a mapping")
+    handcoded_summary = summary["handcoded"]
+    planner_summary = summary["planner"]
+    if not isinstance(handcoded_summary, dict) or not isinstance(
+        planner_summary,
+        dict,
+    ):
+        raise TypeError("expert diagnostic variants must be mappings")
+    logger.info(
+        "Expert diagnostic complete: selected=%d handcoded_success=%d "
+        "planner_success=%d planner_rescues=%d",
+        report["selected_task_count"],
+        handcoded_summary["success_count"],
+        planner_summary["success_count"],
+        summary["planner_rescue_count"],
+    )
+    logger.info("Diagnostic report: %s", output)
+    return 0
 
 
 def _validate_paths(

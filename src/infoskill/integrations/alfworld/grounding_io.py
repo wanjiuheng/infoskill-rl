@@ -11,7 +11,7 @@ from typing import Iterable, Mapping, Sequence
 
 from infoskill.domain.state import AgentHistoryEntry, CanonicalAgentState
 
-from .expert_replay import ExpertReplayResult, GroundingSample
+from .expert_replay import ExpertActionMismatch, ExpertReplayResult, GroundingSample
 
 
 def sha256_file(path: str | Path) -> str:
@@ -240,6 +240,10 @@ def write_grounding_artifacts(
                 quarantine_payload["exception_stage"] = result.exception_stage
                 quarantine_payload["exception_type"] = result.exception_type
                 quarantine_payload["exception_message"] = result.exception_message
+            if result.action_mismatch is not None:
+                quarantine_payload["action_mismatch"] = asdict(
+                    result.action_mismatch
+                )
             quarantine_lines.append(
                 json.dumps(
                     quarantine_payload,
@@ -274,6 +278,11 @@ def grounding_result_payload(
         "exception_stage": result.exception_stage,
         "exception_type": result.exception_type,
         "exception_message": result.exception_message,
+        "action_mismatch": (
+            asdict(result.action_mismatch)
+            if result.action_mismatch is not None
+            else None
+        ),
     }
 
 
@@ -308,6 +317,9 @@ def read_grounding_results(
                     exception_stage=payload.get("exception_stage"),
                     exception_type=payload.get("exception_type"),
                     exception_message=payload.get("exception_message"),
+                    action_mismatch=_decode_action_mismatch(
+                        payload.get("action_mismatch")
+                    ),
                 )
             except (KeyError, TypeError, ValueError) as error:
                 raise ValueError(
@@ -315,6 +327,25 @@ def read_grounding_results(
                 ) from error
             results.append((task_type, result))
     return results
+
+
+def _decode_action_mismatch(payload: object) -> ExpertActionMismatch | None:
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise TypeError("action mismatch must be an object")
+    commands = payload.get("admissible_commands")
+    plan = payload.get("environment_expert_plan", [])
+    if not isinstance(commands, list) or not isinstance(plan, list):
+        raise TypeError("action mismatch commands and plan must be lists")
+    return ExpertActionMismatch(
+        step_index=int(payload["step_index"]),
+        proposed_action=str(payload["proposed_action"]),
+        last_action=str(payload["last_action"]),
+        observation=str(payload["observation"]),
+        admissible_commands=tuple(str(item) for item in commands),
+        environment_expert_plan=tuple(str(item) for item in plan),
+    )
 
 
 def _grounding_sample_payload(

@@ -33,6 +33,18 @@ class GroundingSample:
 
 
 @dataclass(frozen=True, slots=True)
+class ExpertActionMismatch:
+    """First strict-admissibility failure from one expert replay."""
+
+    step_index: int
+    proposed_action: str
+    last_action: str
+    observation: str
+    admissible_commands: tuple[str, ...]
+    environment_expert_plan: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ExpertReplayResult:
     task_id: str
     succeeded: bool
@@ -42,6 +54,7 @@ class ExpertReplayResult:
     exception_stage: str | None = None
     exception_type: str | None = None
     exception_message: str | None = None
+    action_mismatch: ExpertActionMismatch | None = None
 
 
 class StrictExpertReplay:
@@ -91,7 +104,21 @@ class StrictExpertReplay:
                     state.admissible_commands,
                 )
                 if not resolution.is_executable or resolution.resolved_action is None:
-                    return self._quarantine(task, total_steps, "expert_action_not_admissible")
+                    return self._quarantine(
+                        task,
+                        total_steps,
+                        "expert_action_not_admissible",
+                        action_mismatch=ExpertActionMismatch(
+                            step_index=state.step_index,
+                            proposed_action=str(proposed_action),
+                            last_action=last_action,
+                            observation=state.observation,
+                            admissible_commands=state.admissible_commands,
+                            environment_expert_plan=_string_sequence(
+                                payload.get("extra.expert_plan")
+                            ),
+                        ),
+                    )
 
                 samples.append(GroundingSample(state=state, expert_action=resolution.resolved_action))
                 exception_stage = "environment_step"
@@ -136,6 +163,7 @@ class StrictExpertReplay:
         exception_stage: str | None = None,
         exception_type: str | None = None,
         exception_message: str | None = None,
+        action_mismatch: ExpertActionMismatch | None = None,
     ) -> ExpertReplayResult:
         return ExpertReplayResult(
             task_id=task.task_id,
@@ -146,9 +174,21 @@ class StrictExpertReplay:
             exception_stage=exception_stage,
             exception_type=exception_type,
             exception_message=exception_message,
+            action_mismatch=action_mismatch,
         )
 
 
 def _exception_message(error: Exception, *, maximum_length: int = 1000) -> str:
     message = " ".join(str(error).split())
     return message[:maximum_length]
+
+
+def _string_sequence(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    try:
+        return tuple(str(item) for item in value)  # type: ignore[union-attr]
+    except TypeError:
+        return (str(value),)
