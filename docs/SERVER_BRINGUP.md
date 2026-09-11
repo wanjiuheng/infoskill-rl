@@ -789,7 +789,7 @@ echo "pid=${PID} log=${LOG}"
 
 `tail -f "${LOG}"` 可持续查看 update 和 `valid_seen` 进度条。只有真实 smoke、
 checkpoint 加载评测和 pilot 都通过后，才能称 raw 对照已完成服务器验证；这不会
-改变 M1 `infoskill` 仍需完成分布式 compressor/projector/auxiliary 接线的事实。
+改变 M1 `infoskill` 已完成代码接线、但仍需通过独立 GPU smoke 与恢复门禁的事实。
 
 ## ALFWorld 环境多进程基准
 
@@ -1057,3 +1057,53 @@ bash scripts/run_alfworld.sh checkpoint-effect no_skill
 token 的基座同步，再恢复 FSDP LoRA；后续首次正式 rollout 才能直接注册恢复后的
 adapter。这个顺序同时适用于独立 checkpoint 评测和断点续训，禁止删除该 warm-up 或
 把 checkpoint 恢复提前到它之前。
+
+## M1 `infoskill` 首次服务器门禁
+
+M1 代码接线完成后，先使用已通过 formal gate 的 train-only grounding 目录做静态
+预检。`GROUNDING_DATA` 只覆盖本次进程内的配置，不修改受 Git 跟踪的 YAML：
+
+```bash
+GROUNDING_DATA=/absolute/path/to/completed-grounding-run \
+GPUS=0,1,2 PROFILE=smoke MAX_UPDATES=1 DRY_RUN=1 \
+PERSISTENT_ROLLOUT_SESSION=1 \
+ENVIRONMENT_BACKEND=native_batch ENVIRONMENT_WORKERS=1 \
+POLICY_MAX_TOKENS_PER_GPU=12288 \
+BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+INFO_SKILL_CPU_THREADS=1 \
+bash scripts/run_alfworld.sh train infoskill
+```
+
+当前故障恢复期间默认三卡。固定 VERL floor normalization 会把 smoke 配置的 16
+动作样本 minibatch 规范化为 15（正式配置 256 规范化为 255）；这不会丢弃轨迹，
+只改变同步 minibatch 边界，实际值必须出现在
+`runtime/effective_action_minibatch_size`。两卡和四卡精确保持配置值。
+
+静态预检通过后才运行一个真实 update。该门必须同时验证 soft-prefix rollout、
+LoRA/projector 联合策略更新、auxiliary 更新、五个 M1 模块和两个 optimizer/scheduler
+的 portable checkpoint；任何 auxiliary 有限值错误、grounding manifest 错误或
+checkpoint 文件缺失都应 fail-fast：
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-infoskill-smoke-${STAMP}.log"
+nohup env \
+  GROUNDING_DATA=/absolute/path/to/completed-grounding-run \
+  GPUS=0,1,2 PROFILE=smoke MAX_UPDATES=1 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch ENVIRONMENT_WORKERS=1 \
+  POLICY_MAX_TOKENS_PER_GPU=12288 \
+  BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  CUDA_MEMORY_POLL_INTERVAL_MS=1000 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-infoskill-smoke-u1 \
+  bash scripts/run_alfworld.sh train infoskill \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+首个 smoke 通过后，下一道门是从 `step-000001` 以相同三卡恢复到 update 2；之后才
+对该 checkpoint 做固定 140 条 `valid_seen`。不要直接启动 M1 pilot 或 formal。

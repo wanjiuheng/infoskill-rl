@@ -62,6 +62,8 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             torch.cuda.manual_seed_all(seed)
         result = super().init_model()
         self._infoskill_worker_conditioner = None
+        self._infoskill_auxiliary_batch_builder = None
+        self._infoskill_auxiliary_updater = None
         if bool(self.config.model.get("infoskill_modules_enabled", False)):
             self._initialize_infoskill_conditioning_modules()
         return result
@@ -76,9 +78,20 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         from infoskill.integrations.verl.policy_actor import (
             build_infoskill_policy_actor_class,
         )
-        from infoskill.models import InfoSkillCompressor, LatentProjector
+        from infoskill.integrations.verl.auxiliary_updater import (
+            DistributedAuxiliaryUpdater,
+        )
+        from infoskill.learning import AuxiliaryUpdateConfig
+        from infoskill.models import (
+            ExecutableGroundingHead,
+            FidelityPredictor,
+            InfoSkillCompressor,
+            LatentProjector,
+            StateConditionedPrior,
+        )
         from infoskill.semantic import FrozenSemanticEncoder, SemanticFeatureCache
         from infoskill.skills import FixedSkillLibrary
+        from infoskill.training import AuxiliaryBatchBuilder
 
         semantic_path = self.config.model.get("infoskill_semantic_model_path")
         skill_bank_path = self.config.model.get("infoskill_skill_bank_path")
@@ -116,9 +129,18 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                 policy_hidden_size=int(self.actor_model_config.hidden_size),
                 prefix_length=prefix_length,
             ).to(device)
+            prior = StateConditionedPrior(latent_dim=latent_dim).to(device)
+            fidelity = FidelityPredictor(latent_dim=latent_dim).to(device)
+            grounding = ExecutableGroundingHead(
+                semantic_width=semantic.hidden_size,
+                latent_dim=latent_dim,
+            ).to(device)
         distributed = build_distributed_infoskill_modules(
             compressor=compressor,
             projector=projector,
+            prior=prior,
+            fidelity=fidelity,
+            grounding=grounding,
             device_index=device_index,
             total_policy_steps=int(
                 self.config.model.get("infoskill_total_policy_steps", 445)
@@ -133,14 +155,32 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                     "infoskill_projector_weight_decay", 0.01
                 )
             ),
+            auxiliary_learning_rate=float(
+                self.config.model.get(
+                    "infoskill_auxiliary_learning_rate", 1e-4
+                )
+            ),
+            auxiliary_weight_decay=float(
+                self.config.model.get(
+                    "infoskill_auxiliary_weight_decay", 0.01
+                )
+            ),
             warmup_ratio=float(
                 self.config.model.get("infoskill_policy_warmup_ratio", 0.03)
+            ),
+            auxiliary_warmup_ratio=float(
+                self.config.model.get("infoskill_auxiliary_warmup_ratio", 0.03)
             ),
         )
         self._infoskill_compressor = distributed.compressor
         self._infoskill_projector = distributed.projector
         self._infoskill_projector_optimizer = distributed.projector_optimizer
         self._infoskill_projector_scheduler = distributed.projector_scheduler
+        self._infoskill_prior = distributed.prior
+        self._infoskill_fidelity = distributed.fidelity
+        self._infoskill_grounding = distributed.grounding
+        self._infoskill_auxiliary_optimizer = distributed.auxiliary_optimizer
+        self._infoskill_auxiliary_scheduler = distributed.auxiliary_scheduler
         self._infoskill_semantic_encoder = semantic
         self._infoskill_feature_cache = feature_cache
         self._infoskill_worker_conditioner = InfoSkillWorkerConditioner(
@@ -149,6 +189,38 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             feature_cache=feature_cache,
             compressor=distributed.compressor,
             projector=distributed.projector,
+        )
+        self._infoskill_auxiliary_batch_builder = AuxiliaryBatchBuilder(
+            library=library,
+            semantic_encoder=semantic,
+            feature_cache=feature_cache,
+            history_length=int(
+                self.config.model.get("infoskill_history_length", 2)
+            ),
+            latent_dim=latent_dim,
+        )
+        self._infoskill_auxiliary_updater = DistributedAuxiliaryUpdater(
+            compressor=distributed.compressor,
+            prior=distributed.prior,
+            fidelity=distributed.fidelity,
+            grounding=distributed.grounding,
+            optimizer=distributed.auxiliary_optimizer,
+            scheduler=distributed.auxiliary_scheduler,
+            world_size=dist.get_world_size(),
+            config=AuxiliaryUpdateConfig(
+                fidelity_weight=float(
+                    self.config.model.get("infoskill_fidelity_weight", 1.0)
+                ),
+                rate_weight=float(
+                    self.config.model.get("infoskill_rate_weight", 0.001)
+                ),
+                grounding_weight=float(
+                    self.config.model.get("infoskill_grounding_weight", 0.1)
+                ),
+                max_grad_norm=float(
+                    self.config.model.get("infoskill_auxiliary_max_grad_norm", 1.0)
+                ),
+            ),
         )
         actor_class = build_infoskill_policy_actor_class()
         self.actor = actor_class(
@@ -190,6 +262,42 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                     results,
                     dtype=object,
                 )
+            },
+        )
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def update_infoskill_auxiliary(self, data):
+        builder = self._infoskill_auxiliary_batch_builder
+        updater = self._infoskill_auxiliary_updater
+        if builder is None or updater is None:
+            raise RuntimeError("INFO-SKILL auxiliary update is not initialized")
+        from verl import DataProto
+
+        work_items = tuple(
+            data.non_tensor_batch["infoskill_auxiliary_work"].tolist()
+        )
+        if len(work_items) != 1:
+            raise RuntimeError("each rank requires exactly one auxiliary work item")
+        work = work_items[0]
+        size = work.micro_batch_size
+        online_batches = (
+            builder.build_online_examples(work.online[start : start + size])
+            for start in range(0, len(work.online), size)
+        )
+        offline_batches = (
+            builder.build_offline_examples(work.offline[start : start + size])
+            for start in range(0, len(work.offline), size)
+        )
+        metrics = updater.update(
+            online_batches=online_batches,
+            offline_batches=offline_batches,
+            global_trajectory_count=work.global_trajectory_count,
+            global_offline_count=work.global_offline_count,
+        )
+        return DataProto.from_dict(
+            tensors={"infoskill_auxiliary_rank": data.batch["infoskill_auxiliary_rank"]},
+            non_tensors={
+                "infoskill_auxiliary_metrics": np.asarray([metrics], dtype=object)
             },
         )
 
@@ -436,16 +544,32 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                     "base_weights_included": False,
                 },
             )
+            if self._infoskill_worker_conditioner is not None:
+                from infoskill.persistence.infoskill_state import (
+                    save_infoskill_state,
+                )
+
+                save_infoskill_state(
+                    destination / "infoskill",
+                    modules=self._infoskill_modules(),
+                    optimizers=self._infoskill_optimizers(),
+                    schedulers=self._infoskill_schedulers(),
+                    global_step=global_step,
+                )
         dist.barrier()
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def load_portable_checkpoint(self, directory: str) -> None:
+    def load_portable_checkpoint(self, directory: str) -> dict[str, object]:
         if not self._is_actor or not self._is_lora or not isinstance(self.actor_module, PeftModel):
             raise RuntimeError("portable checkpoint requires a LoRA actor")
         source = Path(directory)
         if not (source / "actor_manifest.json").is_file():
             raise RuntimeError(f"portable actor checkpoint is incomplete: {source}")
 
+        actor_manifest = json.loads(
+            (source / "actor_manifest.json").read_text(encoding="utf-8")
+        )
+        global_step = int(actor_manifest["global_step"])
         adapter_state = load_file(str(source / "adapter_model.safetensors"), device="cpu")
         result = load_peft_adapter_under_full_fsdp_state(
             fsdp_model=self.actor_module_fsdp,
@@ -469,7 +593,48 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             source / "lora_scheduler.pt", map_location="cpu", weights_only=False
         )
         self.actor_lr_scheduler.load_state_dict(scheduler_state)
+        infoskill_state_loaded = False
+        if self._infoskill_worker_conditioner is not None:
+            from infoskill.persistence.infoskill_state import load_infoskill_state
+
+            load_infoskill_state(
+                source / "infoskill",
+                modules=self._infoskill_modules(),
+                optimizers=self._infoskill_optimizers(),
+                schedulers=self._infoskill_schedulers(),
+                expected_global_step=global_step,
+            )
+            infoskill_state_loaded = True
         dist.barrier()
+        return {
+            "rank": dist.get_rank(),
+            "global_step": global_step,
+            "lora_state_loaded": True,
+            "infoskill_state_loaded": infoskill_state_loaded,
+        }
+
+    def _infoskill_modules(self) -> dict[str, torch.nn.Module]:
+        return {
+            "compressor": self._infoskill_compressor,
+            "projector": self._infoskill_projector,
+            "prior": self._infoskill_prior,
+            "fidelity": self._infoskill_fidelity,
+            "grounding": self._infoskill_grounding,
+        }
+
+    def _infoskill_optimizers(self) -> dict[str, torch.optim.Optimizer]:
+        return {
+            "projector": self._infoskill_projector_optimizer,
+            "auxiliary": self._infoskill_auxiliary_optimizer,
+        }
+
+    def _infoskill_schedulers(
+        self,
+    ) -> dict[str, torch.optim.lr_scheduler.LRScheduler]:
+        return {
+            "projector": self._infoskill_projector_scheduler,
+            "auxiliary": self._infoskill_auxiliary_scheduler,
+        }
 
 
 def _write_json(path: Path, payload: object) -> None:

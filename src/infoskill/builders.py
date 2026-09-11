@@ -8,6 +8,7 @@ from typing import Literal, Mapping, Sequence
 
 from infoskill.app_config import AppConfig
 from infoskill.conditioning import (
+    EpisodeRetriever,
     NoSkillConditioner,
     RawSkillPromptConditioner,
     SkillRlGrpoPromptConditioner,
@@ -31,6 +32,7 @@ from infoskill.skills import (
 @dataclass(frozen=True, slots=True)
 class RawSkillSetup:
     conditioner: SkillConditioner
+    retriever: EpisodeRetriever | None
     library: FixedSkillLibrary
     provenance: Mapping[str, object]
     skill_blocks: tuple[str, ...]
@@ -38,6 +40,8 @@ class RawSkillSetup:
     def require_checkpoint_compatibility(
         self,
         checkpoint_provenance: Mapping[str, object],
+        *,
+        expected_prompt_format: str | None = None,
     ) -> None:
         recorded = checkpoint_provenance.get("skill_conditioning")
         compatibility_keys = (
@@ -53,9 +57,11 @@ class RawSkillSetup:
             "history_length",
             "policy_prompt_schema_version",
         )
+        expected = dict(self.provenance)
+        if expected_prompt_format is not None:
+            expected["prompt_format"] = expected_prompt_format
         if not isinstance(recorded, Mapping) or any(
-            recorded.get(key) != self.provenance[key]
-            for key in compatibility_keys
+            recorded.get(key) != expected[key] for key in compatibility_keys
         ):
             raise RuntimeError(
                 "portable checkpoint skill conditioning differs from evaluation"
@@ -238,6 +244,7 @@ def build_raw_skill_setup(
             query_by_task_id=query_by_task_id,
             prompt_format=prompt_format,
         ),
+        retriever=retriever,
         library=library,
         provenance={
             "retrieval_schema_version": 1,
@@ -321,6 +328,7 @@ def build_skillrl_grpo_prompt_setup(config: AppConfig) -> RawSkillSetup:
             retriever,
             history_length=config.history_length,
         ),
+        retriever=retriever,
         library=library,
         provenance={
             "retrieval_schema_version": 1,
@@ -414,6 +422,7 @@ def build_skillrl_sft_prompt_setup(config: AppConfig) -> RawSkillSetup:
             retriever,
             history_length=5,
         ),
+        retriever=retriever,
         library=library,
         provenance={
             "retrieval_schema_version": 1,
@@ -487,6 +496,7 @@ def build_skillrl_sft_no_skills_prompt_setup(config: AppConfig) -> RawSkillSetup
     )
     return RawSkillSetup(
         conditioner=SkillRlSftNoSkillsPromptConditioner(history_length=5),
+        retriever=None,
         library=library,
         provenance={
             "retrieval_schema_version": 1,
@@ -681,7 +691,7 @@ def build_verl_policy_evaluation(
     history_limit: int | None = None,
     generation_parameters: GenerationParameters | None = None,
 ):
-    """Build no-skill/raw-skill evaluation on the VERL backend.
+    """Build policy evaluation on the VERL backend.
 
     Evaluation remains deterministic unless a diagnostic explicitly provides
     generation parameters.
@@ -691,11 +701,11 @@ def build_verl_policy_evaluation(
         if conditioner is not None:
             raise ValueError("no_skill evaluation does not accept a conditioner")
         conditioner = NoSkillConditioner()
-    elif mode is SkillMode.RAW_SKILL_PROMPT:
+    elif mode in {SkillMode.RAW_SKILL_PROMPT, SkillMode.INFO_SKILL}:
         if conditioner is None:
-            raise ValueError("raw_skill_prompt evaluation requires its conditioner")
+            raise ValueError(f"{mode.value} evaluation requires its conditioner")
     else:
-        raise ValueError("VERL policy evaluation supports no_skill or raw_skill_prompt")
+        raise ValueError(f"unsupported VERL policy evaluation mode: {mode.value}")
 
     factory = AlfworldEnvironmentFactory.from_paths(
         alfworld_source=config.paths.alfworld_source,

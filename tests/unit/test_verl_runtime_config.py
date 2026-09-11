@@ -22,6 +22,13 @@ class VerlRuntimeConfigTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "hybrid-prefix"):
             VerlRuntimeConfig(**common)
+        with self.assertRaisesRegex(ValueError, "requires INFO-SKILL modules"):
+            VerlRuntimeConfig(
+                skillrl_source="/skillrl",
+                model_path="/policy",
+                num_gpus=4,
+                enable_infoskill_auxiliary=True,
+            )
         with self.assertRaisesRegex(ValueError, "semantic model"):
             VerlRuntimeConfig(**common, require_hybrid_prefix=True)
         with self.assertRaisesRegex(ValueError, "skill bank"):
@@ -42,6 +49,34 @@ class VerlRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(settings.infoskill_projector_learning_rate, 1e-4)
         self.assertEqual(settings.infoskill_projector_weight_decay, 0.01)
         self.assertEqual(settings.infoskill_policy_warmup_ratio, 0.03)
+
+        with self.assertRaisesRegex(ValueError, "grounding data"):
+            VerlRuntimeConfig(
+                **common,
+                require_hybrid_prefix=True,
+                semantic_model_path="/semantic",
+                skill_bank_path="/skills.json",
+                enable_infoskill_auxiliary=True,
+            )
+
+    def test_named_auxiliary_seeds_are_stable_and_namespaced(self) -> None:
+        from infoskill.integrations.verl.runtime import (
+            _effective_global_minibatch_size,
+            _named_seed,
+            _policy_micro_batch_size_per_gpu,
+        )
+
+        first = _named_seed(7, "sample", 3, "task")
+        self.assertEqual(first, _named_seed(7, "sample", 3, "task"))
+        self.assertNotEqual(first, _named_seed(7, "epsilon", 3, "task"))
+        self.assertGreaterEqual(first, 0)
+        self.assertLess(first, 2**63 - 1)
+        self.assertEqual(_policy_micro_batch_size_per_gpu(256, 2), 4)
+        self.assertEqual(_policy_micro_batch_size_per_gpu(256, 4), 4)
+        self.assertEqual(_policy_micro_batch_size_per_gpu(256, 3), 1)
+        self.assertEqual(_policy_micro_batch_size_per_gpu(16, 3), 1)
+        self.assertEqual(_effective_global_minibatch_size(256, 4), 256)
+        self.assertEqual(_effective_global_minibatch_size(256, 3), 255)
 
     def test_conditioning_rpc_preserves_rows_across_world_size_padding(self) -> None:
         import numpy as np

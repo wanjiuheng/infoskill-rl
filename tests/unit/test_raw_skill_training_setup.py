@@ -75,6 +75,23 @@ class RawSkillTrainingSetupTests(unittest.TestCase):
 
         self.assertEqual(collector._generation_parameters, parameters)
 
+    def test_verl_infoskill_evaluation_accepts_runtime_conditioner(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+        conditioner = object()
+
+        with patch(
+            "infoskill.builders.AlfworldEnvironmentFactory.from_paths",
+            return_value=object(),
+        ):
+            collector = build_verl_policy_evaluation(
+                config,
+                mode=SkillMode.INFO_SKILL,
+                backend=object(),
+                conditioner=conditioner,
+            )
+
+        self.assertIs(collector._conditioner, conditioner)
+
     def test_skillrl_sft_setup_uses_dataset_observed_prompt_shape(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
         skill_bank = Path(__file__).parents[1] / "fixtures" / "skills.json"

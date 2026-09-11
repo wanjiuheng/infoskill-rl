@@ -64,6 +64,17 @@ def resolve_portable_checkpoint(path: str | Path) -> PortableCheckpoint:
             "checkpoint and portable actor global updates differ: "
             f"{global_update} != {actor_global_update}"
         )
+    runtime_manifest = payload.get("runtime_manifest")
+    if runtime_manifest is not None and not isinstance(runtime_manifest, dict):
+        raise RuntimeError(f"checkpoint has invalid runtime manifest: {directory}")
+    if isinstance(runtime_manifest, dict) and runtime_manifest.get(
+        "infoskill_modules_included"
+    ) is True:
+        infoskill_manifest = actor_directory / "infoskill" / "infoskill_manifest.json"
+        if not infoskill_manifest.is_file():
+            raise RuntimeError(
+                f"checkpoint has no portable INFO-SKILL state: {directory}"
+            )
     return PortableCheckpoint(
         directory=directory,
         runtime_directory=runtime_directory,

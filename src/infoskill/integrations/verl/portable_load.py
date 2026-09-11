@@ -18,7 +18,32 @@ def load_portable_state_after_base_sync(
         raise RuntimeError("portable checkpoint base preparation returned no workers")
     if any(report.get("base_sync_done_after") is not True for report in reports):
         raise RuntimeError("vLLM base synchronization did not complete on every rank")
-    worker_group.load_portable_checkpoint(  # type: ignore[attr-defined]
-        str(actor_directory)
+    load_reports = tuple(
+        worker_group.load_portable_checkpoint(  # type: ignore[attr-defined]
+            str(actor_directory)
+        )
     )
-    return reports
+    if not load_reports:
+        raise RuntimeError("portable checkpoint load returned no workers")
+    prepared_by_rank = _reports_by_rank(reports, stage="base preparation")
+    loaded_by_rank = _reports_by_rank(load_reports, stage="checkpoint load")
+    if set(prepared_by_rank) != set(loaded_by_rank):
+        raise RuntimeError("portable checkpoint preparation/load rank set differs")
+    return tuple(
+        {**prepared_by_rank[rank], **loaded_by_rank[rank]}
+        for rank in sorted(prepared_by_rank)
+    )
+
+
+def _reports_by_rank(
+    reports: tuple[Mapping[str, object], ...],
+    *,
+    stage: str,
+) -> dict[int, Mapping[str, object]]:
+    by_rank: dict[int, Mapping[str, object]] = {}
+    for report in reports:
+        rank = report.get("rank")
+        if not isinstance(rank, int) or rank < 0 or rank in by_rank:
+            raise RuntimeError(f"portable checkpoint {stage} returned invalid ranks")
+        by_rank[rank] = report
+    return by_rank

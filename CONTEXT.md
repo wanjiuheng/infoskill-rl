@@ -44,7 +44,7 @@ _Avoid_: extra system message、step-zero special template、model-specific spec
 在固定技能库上联合使用状态条件随机压缩、soft prefix 和策略强化学习的 INFO-SKILL 第一阶段完整方法。
 _Avoid_: ordinary GRPO、skill-library evolution
 
-M1 实现已进入分阶段接线。第一批基础契约已经落地：训练 replay 会把 5 个显式
+M1 实现已完成首轮端到端代码接线，等待目标 Linux/A800 GPU 门禁。训练 replay 会把 5 个显式
 prefix 占位位置、exact detached latent、rollout 时旧 prefix、动作 token 与行为策略
 logprob 放入同一个 tensor batch；旧 prefix 仅用于审计，训练前向重算器会用保存的
 detached latent 和当前 projector 生成 inputs embeddings，并只向 projector 回传梯度；
@@ -52,9 +52,8 @@ detached latent 和当前 projector 生成 inputs embeddings，并只向 project
 FSDP forward 外直接访问已分片 token-embedding 权重。grounding 产物已有 train-only 正式门禁
 加载器，并按“不同专家游戏各抽一个状态”确定性采样。LoRA 与 projector 的两个
 optimizer 已有共同 finite gate、合并梯度范数、统一裁剪和一起 step/skip 的
-`PolicyUpdateCoordinator`。当前 `infoskill` 训练入口仍保持 fail-fast，直到这些契约
-完成 auxiliary update 和完整可移植 checkpoint；不得把策略侧接线
-已完成表述为 M1 已可训练。
+`PolicyUpdateCoordinator`。`infoskill` 训练与 VERL 评测入口已经开放；grounding 数据
+可由共享 YAML 或 `GROUNDING_DATA` 启动参数提供，并在 Ray/GPU 初始化前校验。
 
 worker 条件化边界现已落地：driver 只负责 episode-level 候选检索，并把压缩视图、
 候选 ID、latent seed 与模式作为小型 work item 发送到 Ray；每个 VERL worker 自己加载
@@ -70,8 +69,12 @@ step/skip。M1 专用 actor 在 dynamic micro-batch 中显式保留 replay laten
 GRPO/entropy 分支使用保存的 detached latent 与当前 projector，actor/reference KL 分支
 使用同一当前 prefix 但在 projector 输出处 detach，因此 KL 只约束 LoRA。没有 M1 张量的
 batch 会 fail-fast，避免 partial policy update；`no_skill` 与 `raw_skill_prompt` 未启用
-M1 worker modules，仍委托固定 VERL 原路径。尚未完成的是 auxiliary DDP optimizer、
-M1 全状态 checkpoint/恢复与 GPU 集成门，因此正式 `infoskill` 入口仍关闭。
+M1 worker modules，仍委托固定 VERL 原路径。auxiliary 的五个复制式 DDP 模块、独立
+optimizer/scheduler、全局归一化梯度累积和有限值门已经接通；可移植 checkpoint 会保存
+五个 M1 模块、LoRA、两个 optimizer、两个 scheduler 与 RNG，并在恢复时逐 rank 审计。
+剩余工作是目标服务器上的 M1 smoke、checkpoint 恢复和 `valid_seen` 验证，不是继续补写
+训练算法。三卡因 VERL floor normalization 将配置 minibatch 256 规范化为 255，实际值
+写入 `runtime/effective_action_minibatch_size`；所有样本仍参与后续 minibatch。
 
 **Skill-Injection Control Mode**:
 共享同一训练评测框架、但改变技能信息如何进入策略的实验模式；首阶段包括 `no_skill`、`raw_skill_prompt` 和 `infoskill`。

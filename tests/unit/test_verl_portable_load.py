@@ -9,16 +9,18 @@ from infoskill.integrations.verl.portable_load import (
 
 
 class _WorkerGroup:
-    def __init__(self, reports):
+    def __init__(self, reports, load_reports=None):
         self.reports = reports
+        self.load_reports = load_reports
         self.events: list[str] = []
 
     def prepare_infoskill_portable_checkpoint_load(self):
         self.events.append("prepare-base")
         return self.reports
 
-    def load_portable_checkpoint(self, path: str) -> None:
+    def load_portable_checkpoint(self, path: str):
         self.events.append(f"load:{Path(path).name}")
+        return self.load_reports
 
 
 class VerlPortableLoadTests(unittest.TestCase):
@@ -37,7 +39,19 @@ class VerlPortableLoadTests(unittest.TestCase):
                     "base_sync_done_after": True,
                     "warmup_performed": True,
                 },
-            ]
+            ],
+            [
+                {
+                    "rank": 0,
+                    "global_step": 7,
+                    "infoskill_state_loaded": True,
+                },
+                {
+                    "rank": 1,
+                    "global_step": 7,
+                    "infoskill_state_loaded": True,
+                },
+            ],
         )
 
         reports = load_portable_state_after_base_sync(
@@ -47,6 +61,20 @@ class VerlPortableLoadTests(unittest.TestCase):
 
         self.assertEqual(workers.events, ["prepare-base", "load:actor"])
         self.assertEqual(len(reports), 2)
+        self.assertTrue(reports[0]["infoskill_state_loaded"])
+        self.assertEqual(reports[1]["global_step"], 7)
+
+    def test_checkpoint_load_requires_one_matching_report_per_rank(self) -> None:
+        workers = _WorkerGroup(
+            [{"rank": 0, "base_sync_done_after": True}],
+            [{"rank": 1, "global_step": 7}],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "rank set differs"):
+            load_portable_state_after_base_sync(
+                worker_group=workers,
+                actor_directory=Path("runtime/actor"),
+            )
 
     def test_incomplete_base_sync_blocks_checkpoint_load(self) -> None:
         workers = _WorkerGroup(

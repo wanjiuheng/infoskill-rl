@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         _validate_paths(
             config,
             mode=mode,
-            require_checkpoint=mode is SkillMode.INFO_SKILL,
+            require_checkpoint=False,
         )
         print(json.dumps(config.as_dict(), ensure_ascii=False, indent=2))
         return 0
@@ -165,6 +165,13 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--run-name")
     train.add_argument("--resume")
     train.add_argument(
+        "--grounding-data",
+        help=(
+            "override paths.grounding_data for infoskill training without "
+            "editing the shared YAML"
+        ),
+    )
+    train.add_argument(
         "--persistent-rollout-session",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -219,10 +226,15 @@ def _add_raw_skill_prompt_format_argument(parser: argparse.ArgumentParser) -> No
 
 def _train(config: AppConfig, args: argparse.Namespace) -> int:
     mode = SkillMode(args.mode)
-    if mode is SkillMode.INFO_SKILL:
-        raise NotImplementedError(
-            "infoskill training remains fail-fast until the distributed M1 "
-            "policy and auxiliary update paths are complete"
+    if args.grounding_data is not None:
+        config = replace(
+            config,
+            paths=replace(config.paths, grounding_data=args.grounding_data),
+        )
+    if mode is SkillMode.INFO_SKILL and not config.paths.grounding_data:
+        raise ValueError(
+            "infoskill training requires paths.grounding_data to point at a "
+            "completed train-only grounding run"
         )
     if args.num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
@@ -245,6 +257,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         mode=mode,
         require_checkpoint=False,
         require_training_runtime=True,
+        require_grounding=mode is SkillMode.INFO_SKILL,
     )
     plan = resolve_training_plan(args.profile, max_updates=args.max_updates)
     if args.dry_run:
@@ -257,6 +270,18 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "raw_skill_prompt_format": (
                         args.raw_skill_prompt_format
                         if mode is SkillMode.RAW_SKILL_PROMPT
+                        else None
+                    ),
+                    "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
+                    "infoskill_latent_mode": (
+                        "sample" if mode is SkillMode.INFO_SKILL else None
+                    ),
+                    "infoskill_soft_prefix_length": (
+                        5 if mode is SkillMode.INFO_SKILL else None
+                    ),
+                    "grounding_data": (
+                        config.paths.grounding_data
+                        if mode is SkillMode.INFO_SKILL
                         else None
                     ),
                     "profile": plan.profile.value,
@@ -320,9 +345,10 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("checkpoint_step must be non-negative")
     if args.backend == "transformers" and args.num_gpus != 1:
         raise ValueError("the Transformers evaluation backend requires num_gpus=1")
-    if args.backend == "verl" and mode is SkillMode.INFO_SKILL:
-        raise NotImplementedError(
-            "VERL infoskill evaluation requires the unfinished distributed M1 path"
+    if mode is SkillMode.INFO_SKILL and args.backend != "verl":
+        raise ValueError(
+            "infoskill evaluation requires backend=verl so the portable M1 "
+            "modules and Hybrid Prefix Input are loaded"
         )
     if args.backend == "verl" and config.paths.policy_adapter is not None:
         raise ValueError(
@@ -334,7 +360,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     _validate_paths(
         config,
         mode=mode,
-        require_checkpoint=mode is SkillMode.INFO_SKILL,
+        require_checkpoint=False,
         require_training_runtime=args.backend == "verl",
     )
     from tqdm.auto import tqdm
@@ -395,27 +421,36 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         )
 
     skill_setup_started = time.perf_counter()
-    raw_skill_setup = (
+    skill_setup = (
         build_raw_skill_setup(
             config,
             retrieval_queries={task.task_id: task.goal for task in tasks},
             prompt_format=args.raw_skill_prompt_format,
         )
-        if mode is SkillMode.RAW_SKILL_PROMPT
+        if mode in {SkillMode.RAW_SKILL_PROMPT, SkillMode.INFO_SKILL}
         else None
     )
-    raw_skill_provenance = (
-        {
-            **raw_skill_setup.provenance,
+    if skill_setup is None:
+        skill_provenance = None
+    elif mode is SkillMode.RAW_SKILL_PROMPT:
+        skill_provenance = {
+            **skill_setup.provenance,
             **audit_raw_skill_prompt_budget_for_model(
-                raw_skill_setup,
+                skill_setup,
                 model_path=config.paths.policy_model,
                 max_prompt_tokens=config.max_prompt_tokens,
             ),
         }
-        if raw_skill_setup is not None
-        else None
-    )
+    else:
+        skill_provenance = {
+            **skill_setup.provenance,
+            "prompt_format": "continuous_soft_prefix_v1",
+            "soft_prefix_length": 5,
+            "latent_dim": 32,
+            "latent_train_mode": "sample",
+            "latent_eval_mode": "mean",
+            "dynamic_skill_updates": False,
+        }
     skill_setup_seconds = time.perf_counter() - skill_setup_started
 
     policy_identity = None
@@ -445,9 +480,14 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                 raise RuntimeError(
                     "portable checkpoint mode differs from evaluation mode"
                 )
-            if raw_skill_setup is not None:
-                raw_skill_setup.require_checkpoint_compatibility(
-                    checkpoint_provenance
+            if skill_setup is not None:
+                skill_setup.require_checkpoint_compatibility(
+                    checkpoint_provenance,
+                    expected_prompt_format=(
+                        "continuous_soft_prefix_v1"
+                        if mode is SkillMode.INFO_SKILL
+                        else None
+                    ),
                 )
             if not provenance_matches_pinned_model(
                 checkpoint_provenance,
@@ -482,8 +522,8 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     }
     resolved["evaluation_runtime"] = evaluation_runtime
     resolved["evaluation_manifest"] = evaluation_manifest
-    if raw_skill_provenance is not None:
-        resolved["skill_conditioning"] = raw_skill_provenance
+    if skill_provenance is not None:
+        resolved["skill_conditioning"] = skill_provenance
     if policy_identity is not None:
         resolved["policy_model_identity"] = policy_identity.as_dict()
     _write_json(run_directory / "resolved_config.json", resolved)
@@ -495,7 +535,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         policy_model=(
             policy_identity.as_dict() if policy_identity is not None else None
         ),
-        skill_conditioning=raw_skill_provenance,
+        skill_conditioning=skill_provenance,
         checkpoint_provenance_sha256=checkpoint_provenance_sha256,
     )
     checkpoint_path = (
@@ -545,12 +585,26 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     action_minibatch_size=256,
                     policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
                     gpu_memory_utilization=0.45,
-                    require_hybrid_prefix=False,
+                    require_hybrid_prefix=mode is SkillMode.INFO_SKILL,
+                    soft_prefix_length=5,
                     master_seed=config.master_seed,
                     persistent_rollout_session=args.persistent_rollout_session,
                     verbose_runtime_logs=args.verbose_runtime_logs,
                     cuda_memory_poll_interval_ms=0,
                     balance_policy_tokens_across_ranks=True,
+                    enable_infoskill_modules=mode is SkillMode.INFO_SKILL,
+                    semantic_model_path=(
+                        config.paths.semantic_model
+                        if mode is SkillMode.INFO_SKILL
+                        else None
+                    ),
+                    skill_bank_path=(
+                        config.paths.skill_bank
+                        if mode is SkillMode.INFO_SKILL
+                        else None
+                    ),
+                    enable_infoskill_auxiliary=False,
+                    infoskill_history_length=config.history_length,
                 )
             )
             timing_seconds["backend_initialize_seconds"] = (
@@ -594,16 +648,28 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     "Loaded portable policy checkpoint: %s",
                     checkpoint.directory,
                 )
+            conditioner = (
+                skill_setup.conditioner if skill_setup is not None else None
+            )
+            if mode is SkillMode.INFO_SKILL:
+                from infoskill.conditioning import RuntimeInfoSkillConditioner
+
+                if skill_setup is None or skill_setup.retriever is None:
+                    raise RuntimeError("infoskill retrieval setup is incomplete")
+                conditioner = RuntimeInfoSkillConditioner(
+                    retriever=skill_setup.retriever,
+                    runtime=runtime,
+                    latent_mode="mean",
+                    query_by_task_id={
+                        task.task_id: task.goal for task in tasks
+                    },
+                )
             stage_started = time.perf_counter()
             collector = build_verl_policy_evaluation(
                 config,
                 mode=mode,
                 backend=runtime,
-                conditioner=(
-                    raw_skill_setup.conditioner
-                    if raw_skill_setup is not None
-                    else None
-                ),
+                conditioner=conditioner,
                 environment_backend=args.environment_backend,
             )
             timing_seconds["collector_build_seconds"] = (
@@ -620,8 +686,8 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                 mode=mode,
                 environment_backend=args.environment_backend,
                 conditioner=(
-                    raw_skill_setup.conditioner
-                    if raw_skill_setup is not None
+                    skill_setup.conditioner
+                    if skill_setup is not None
                     else None
                 ),
             )
@@ -1321,6 +1387,7 @@ def _validate_paths(
     mode: SkillMode,
     require_checkpoint: bool,
     require_training_runtime: bool = False,
+    require_grounding: bool = False,
 ) -> None:
     required = {
         "policy_model": config.paths.policy_model,
@@ -1342,6 +1409,12 @@ def _validate_paths(
         required["semantic_model"] = config.paths.semantic_model
     if require_training_runtime:
         required["skillrl_source"] = config.paths.skillrl_source
+    if require_grounding:
+        if mode is not SkillMode.INFO_SKILL:
+            raise ValueError("grounding data is only valid for infoskill training")
+        if not config.paths.grounding_data:
+            raise ValueError("infoskill training requires paths.grounding_data")
+        required["grounding_data"] = config.paths.grounding_data
     if config.paths.policy_adapter:
         required["policy_adapter"] = config.paths.policy_adapter
     if require_checkpoint:

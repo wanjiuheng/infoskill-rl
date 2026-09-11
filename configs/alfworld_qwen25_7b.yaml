@@ -10,9 +10,9 @@ paths:
   skill_bank: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/memory_data/alfworld/claude_style_skills.json
   skill_bank_manifest: configs/alfworld_skill_bank_manifest.json
   output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
-  # Required only for mode=infoskill. Point at the exported inference .pt file.
+  # Legacy Transformers-only field; VERL M1 eval loads POLICY_CHECKPOINT instead.
   infoskill_checkpoint: null
-  # Required for M1 training. Point at a completed `grounding` run directory.
+  # Required for M1 training; GROUNDING_DATA may override it at launch time.
   grounding_data: null
 
 # Selects the immutable shared 7B initialization registered in code.

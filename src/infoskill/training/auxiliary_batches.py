@@ -19,6 +19,8 @@ from infoskill.learning import (
 from infoskill.semantic import FrozenSemanticEncoder, SemanticFeatureCache
 from infoskill.skills import FixedSkillLibrary, SkillRecord
 
+from .auxiliary_work import OfflineAuxiliaryExample, OnlineAuxiliaryExample
+
 
 class AuxiliaryBatchBuilder:
     """Turn online trajectories and expert samples into one replayable aux batch."""
@@ -61,10 +63,7 @@ class AuxiliaryBatchBuilder:
     ) -> OnlineAuxiliaryBatch:
         if len(groups) != len(fidelity_targets):
             raise ValueError("groups and fidelity targets must have equal length")
-        traces: list[InfoSkillReplayTrace] = []
-        skill_groups: list[tuple[SkillRecord, ...]] = []
-        targets: list[float] = []
-        trajectory_indices: list[int] = []
+        examples: list[OnlineAuxiliaryExample] = []
         trajectory_index = 0
         for group, group_targets in zip(groups, fidelity_targets):
             if len(group.trajectories) != len(group_targets):
@@ -81,15 +80,34 @@ class AuxiliaryBatchBuilder:
                     skill_ids = step.conditioned_input.candidate_skill_ids
                     if not skill_ids:
                         raise ValueError("online INFO-SKILL step has no candidate skills")
-                    traces.append(trace)
-                    skill_groups.append(
-                        tuple(self.library.get(skill_id) for skill_id in skill_ids)
+                    examples.append(
+                        OnlineAuxiliaryExample(
+                            replay_trace=trace,
+                            candidate_skill_ids=skill_ids,
+                            fidelity_target=float(target),
+                            trajectory_index=trajectory_index,
+                            trajectory_weight=1.0 / len(trajectory.steps),
+                        )
                     )
-                    targets.append(float(target))
-                    trajectory_indices.append(trajectory_index)
                 trajectory_index += 1
-        if not traces:
+        if not examples:
             raise ValueError("online auxiliary batch requires at least one trajectory step")
+        return self.build_online_examples(examples)
+
+    def build_online_examples(
+        self,
+        examples: Sequence[OnlineAuxiliaryExample],
+    ) -> OnlineAuxiliaryBatch:
+        if not examples:
+            raise ValueError("online auxiliary examples must not be empty")
+        traces = [item.replay_trace for item in examples]
+        skill_groups = [
+            tuple(
+                self.library.get(skill_id)
+                for skill_id in item.candidate_skill_ids
+            )
+            for item in examples
+        ]
         state_tokens, state_valid = _pad_state_features(
             traces,
             device=self.semantic_encoder.device,
@@ -109,12 +127,20 @@ class AuxiliaryBatchBuilder:
                 ).to(device=state_tokens.device),
             ),
             trajectory_index=torch.tensor(
-                trajectory_indices,
+                [item.trajectory_index for item in examples],
                 device=state_tokens.device,
                 dtype=torch.long,
             ),
             fidelity_target=torch.tensor(
-                targets,
+                [item.fidelity_target for item in examples],
+                device=state_tokens.device,
+                dtype=torch.float32,
+            ),
+            step_weight=torch.tensor(
+                [
+                    item.trajectory_weight if item.eligible else 0.0
+                    for item in examples
+                ],
                 device=state_tokens.device,
                 dtype=torch.float32,
             ),
@@ -125,12 +151,25 @@ class AuxiliaryBatchBuilder:
         samples: Sequence[GroundingSample],
         epsilon_seeds: Sequence[int],
     ) -> OfflineGroundingBatch:
-        if not samples:
-            raise ValueError("offline auxiliary batch requires grounding samples")
-        if len(samples) != len(epsilon_seeds):
-            raise ValueError("grounding samples and epsilon seeds must have equal length")
-        if any(seed < 0 for seed in epsilon_seeds):
+        if not samples or len(samples) != len(epsilon_seeds):
+            raise ValueError(
+                "grounding samples and epsilon seeds must be non-empty and equal length"
+            )
+        examples = tuple(
+            OfflineAuxiliaryExample(sample=sample, epsilon_seed=seed)
+            for sample, seed in zip(samples, epsilon_seeds)
+        )
+        return self.build_offline_examples(examples)
+
+    def build_offline_examples(
+        self,
+        examples: Sequence[OfflineAuxiliaryExample],
+    ) -> OfflineGroundingBatch:
+        if not examples:
+            raise ValueError("offline auxiliary examples must not be empty")
+        if any(item.epsilon_seed < 0 for item in examples):
             raise ValueError("grounding epsilon seeds must be non-negative")
+        samples = [item.sample for item in examples]
         features = self.semantic_encoder.encode_tokens(
             [
                 render_state_views(
@@ -163,7 +202,7 @@ class AuxiliaryBatchBuilder:
                     self.latent_dim,
                     generator=torch.Generator(device="cpu").manual_seed(seed),
                 )
-                for seed in epsilon_seeds
+                for seed in (item.epsilon_seed for item in examples)
             ]
         ).to(device=features.tokens.device)
         return OfflineGroundingBatch(
@@ -181,6 +220,11 @@ class AuxiliaryBatchBuilder:
                 grounding_targets,
                 device=features.tokens.device,
                 dtype=torch.long,
+            ),
+            sample_weight=torch.tensor(
+                [1.0 if item.eligible else 0.0 for item in examples],
+                device=features.tokens.device,
+                dtype=torch.float32,
             ),
         )
 

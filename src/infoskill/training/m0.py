@@ -98,10 +98,16 @@ def run_policy_training(
     balance_policy_tokens_across_ranks: bool = True,
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
 ) -> int:
-    """Run a token-only policy control through the pinned VERL runtime."""
+    """Run one registered policy mode through the pinned VERL runtime."""
 
-    if mode not in {SkillMode.NO_SKILL, SkillMode.RAW_SKILL_PROMPT}:
-        raise ValueError("policy training supports no_skill or raw_skill_prompt")
+    if mode not in {
+        SkillMode.NO_SKILL,
+        SkillMode.RAW_SKILL_PROMPT,
+        SkillMode.INFO_SKILL,
+    }:
+        raise ValueError(f"unsupported policy training mode: {mode.value}")
+    if mode is SkillMode.INFO_SKILL and not config.paths.grounding_data:
+        raise ValueError("infoskill training requires paths.grounding_data")
 
     if config.paths.policy_adapter is not None:
         raise ValueError(
@@ -149,7 +155,7 @@ def run_policy_training(
     # independently without introducing previously unseen retrieval queries.
     if (
         plan.evaluation_kind == "valid_seen"
-        or mode is SkillMode.RAW_SKILL_PROMPT
+        or mode in {SkillMode.RAW_SKILL_PROMPT, SkillMode.INFO_SKILL}
     ):
         valid_seen_tasks = discover_tasks(
             config.paths.alfworld_data,
@@ -179,33 +185,60 @@ def run_policy_training(
             f"formal task schedule resolves to {available_updates} updates instead of 445"
         )
 
-    raw_skill_setup = None
-    raw_skill_provenance: dict[str, object] | None = None
-    if mode is SkillMode.RAW_SKILL_PROMPT:
+    skill_setup = None
+    skill_provenance: dict[str, object] | None = None
+    grounding_provenance: dict[str, object] | None = None
+    retrieval_queries = {
+        task.task_id: task.goal
+        for task in (*all_train_tasks, *valid_seen_tasks)
+    }
+    if mode in {SkillMode.RAW_SKILL_PROMPT, SkillMode.INFO_SKILL}:
         from infoskill.builders import (
             audit_raw_skill_prompt_budget_for_model,
             build_raw_skill_setup,
         )
 
-        raw_skill_setup = build_raw_skill_setup(
+        skill_setup = build_raw_skill_setup(
             config,
-            retrieval_queries={
-                task.task_id: task.goal
-                for task in (*all_train_tasks, *valid_seen_tasks)
-            },
+            retrieval_queries=retrieval_queries,
             prompt_format=raw_skill_prompt_format,
         )
-        raw_skill_provenance = {
-            **raw_skill_setup.provenance,
-            **audit_raw_skill_prompt_budget_for_model(
-                raw_skill_setup,
-                model_path=config.paths.policy_model,
-                max_prompt_tokens=config.max_prompt_tokens,
-            ),
-        }
-        conditioner: SkillConditioner = raw_skill_setup.conditioner
+        if mode is SkillMode.RAW_SKILL_PROMPT:
+            skill_provenance = {
+                **skill_setup.provenance,
+                **audit_raw_skill_prompt_budget_for_model(
+                    skill_setup,
+                    model_path=config.paths.policy_model,
+                    max_prompt_tokens=config.max_prompt_tokens,
+                ),
+            }
+            training_conditioner: SkillConditioner | None = skill_setup.conditioner
+        else:
+            from infoskill.integrations.alfworld import GroundingDataset
+
+            grounding = GroundingDataset.load(config.paths.grounding_data)
+            grounding_provenance = {
+                "root": str(grounding.root),
+                "manifest_sha256": grounding.manifest_sha256,
+                "game_count": grounding.game_count,
+                "sample_count": grounding.sample_count,
+                "source_split": grounding.manifest.get("source_split"),
+                "formal_gate_passed": grounding.manifest.get(
+                    "formal_gate_passed"
+                ),
+            }
+            skill_provenance = {
+                **skill_setup.provenance,
+                "prompt_format": "continuous_soft_prefix_v1",
+                "soft_prefix_length": 5,
+                "latent_dim": 32,
+                "latent_train_mode": "sample",
+                "latent_eval_mode": "mean",
+                "dynamic_skill_updates": False,
+            }
+            training_conditioner = None
     else:
-        conditioner = NoSkillConditioner()
+        training_conditioner = NoSkillConditioner()
     run_directory, checkpoint_to_load, forked_resume = resolve_training_run_directory(
         output_root=config.paths.output_root,
         profile_name=plan.profile.value,
@@ -214,7 +247,11 @@ def run_policy_training(
         default_run_name=(
             f"m0-{plan.profile.value}"
             if mode is SkillMode.NO_SKILL
-            else f"raw-skill-prompt-{plan.profile.value}"
+            else (
+                f"raw-skill-prompt-{plan.profile.value}"
+                if mode is SkillMode.RAW_SKILL_PROMPT
+                else f"infoskill-{plan.profile.value}"
+            )
         ),
     )
     logger = _configure_training_logging(run_directory)
@@ -234,6 +271,13 @@ def run_policy_training(
             "balance_policy_tokens_across_ranks": (
                 balance_policy_tokens_across_ranks
             ),
+            "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
+            "infoskill_auxiliary_micro_batch_size": (
+                8 if mode is SkillMode.INFO_SKILL else None
+            ),
+            "infoskill_offline_games_per_update": (
+                256 if mode is SkillMode.INFO_SKILL else None
+            ),
         },
         "evaluation_manifest": (
             {
@@ -245,8 +289,10 @@ def run_policy_training(
             else None
         ),
     }
-    if raw_skill_provenance is not None:
-        resolved["skill_conditioning"] = raw_skill_provenance
+    if skill_provenance is not None:
+        resolved["skill_conditioning"] = skill_provenance
+    if grounding_provenance is not None:
+        resolved["grounding_data"] = grounding_provenance
     resume_source_num_gpus: int | None = None
     if checkpoint_to_load is not None:
         resume_source_num_gpus = validate_resume_config(
@@ -285,8 +331,20 @@ def run_policy_training(
         "policy_model": policy_model_identity.as_dict(),
         "verbose_runtime_logs": verbose_runtime_logs,
     }
-    if raw_skill_provenance is not None:
-        provenance["skill_conditioning"] = raw_skill_provenance
+    if skill_provenance is not None:
+        provenance["skill_conditioning"] = skill_provenance
+    if grounding_provenance is not None:
+        provenance["grounding_data"] = grounding_provenance
+        provenance["infoskill_initialization"] = {
+            "schema_version": 1,
+            "initialization_seed": config.master_seed,
+            "latent_dim": 32,
+            "soft_prefix_length": 5,
+            "projector_initial_gate": 0.01,
+            "fidelity_weight": 1.0,
+            "rate_weight": 0.001,
+            "grounding_weight": 0.1,
+        }
     if checkpoint_to_load is not None:
         provenance.update(
             {
@@ -339,16 +397,55 @@ def run_policy_training(
                 balance_policy_tokens_across_ranks
             ),
             gpu_memory_utilization=0.45,
-            require_hybrid_prefix=False,
+            require_hybrid_prefix=mode is SkillMode.INFO_SKILL,
+            soft_prefix_length=5,
             master_seed=config.master_seed,
             persistent_rollout_session=persistent_rollout_session,
             verbose_runtime_logs=verbose_runtime_logs,
             cuda_memory_poll_interval_ms=cuda_memory_poll_interval_ms,
+            enable_infoskill_modules=mode is SkillMode.INFO_SKILL,
+            semantic_model_path=(
+                config.paths.semantic_model
+                if mode is SkillMode.INFO_SKILL
+                else None
+            ),
+            skill_bank_path=(
+                config.paths.skill_bank
+                if mode is SkillMode.INFO_SKILL
+                else None
+            ),
+            enable_infoskill_auxiliary=mode is SkillMode.INFO_SKILL,
+            grounding_data_path=(
+                config.paths.grounding_data
+                if mode is SkillMode.INFO_SKILL
+                else None
+            ),
+            infoskill_history_length=config.history_length,
         )
     )
     logger.info("Runtime ready in %.1f seconds", time.perf_counter() - runtime_started)
     trainer: InfoSkillTrainer | None = None
     try:
+        evaluation_conditioner = training_conditioner
+        if mode is SkillMode.INFO_SKILL:
+            from infoskill.conditioning import RuntimeInfoSkillConditioner
+
+            if skill_setup is None or skill_setup.retriever is None:
+                raise RuntimeError("infoskill retrieval setup is incomplete")
+            training_conditioner = RuntimeInfoSkillConditioner(
+                retriever=skill_setup.retriever,
+                runtime=runtime,
+                latent_mode="sample",
+                query_by_task_id=retrieval_queries,
+            )
+            evaluation_conditioner = RuntimeInfoSkillConditioner(
+                retriever=skill_setup.retriever,
+                runtime=runtime,
+                latent_mode="mean",
+                query_by_task_id=retrieval_queries,
+            )
+        if training_conditioner is None or evaluation_conditioner is None:
+            raise RuntimeError("training conditioner was not initialized")
         factory = AlfworldEnvironmentFactory.from_paths(
             alfworld_source=config.paths.alfworld_source,
             config_path=config.paths.alfworld_config,
@@ -359,7 +456,7 @@ def run_policy_training(
             config,
             factory=factory,
             runtime=runtime,
-            conditioner=conditioner,
+            conditioner=training_conditioner,
             training=True,
             environment_workers=environment_workers,
             environment_backend=environment_backend,
@@ -368,7 +465,7 @@ def run_policy_training(
             config,
             factory=factory,
             runtime=runtime,
-            conditioner=conditioner,
+            conditioner=evaluation_conditioner,
             training=False,
             environment_workers=environment_workers,
             environment_backend=environment_backend,
@@ -460,7 +557,7 @@ def run_policy_training(
             task_groups_per_update=plan.task_groups_per_update,
             rollouts_per_task=plan.rollouts_per_task,
             master_seed=config.master_seed,
-            auxiliary_enabled=False,
+            auxiliary_enabled=mode is SkillMode.INFO_SKILL,
             on_update=update_callback,
             on_evaluate=evaluate,
             on_checkpoint=checkpoint,

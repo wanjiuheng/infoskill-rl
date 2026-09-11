@@ -63,6 +63,7 @@ class OnlineAuxiliaryBatch:
     replay: CompressionReplayBatch
     trajectory_index: Tensor
     fidelity_target: Tensor
+    step_weight: Tensor | None = None
 
     def validate(self) -> None:
         self.replay.validate(name="online")
@@ -71,6 +72,11 @@ class OnlineAuxiliaryBatch:
             raise ValueError("online.trajectory_index must have one value per step")
         if tuple(self.fidelity_target.shape) != (batch,):
             raise ValueError("online.fidelity_target must have one value per step")
+        if self.step_weight is not None:
+            if tuple(self.step_weight.shape) != (batch,):
+                raise ValueError("online.step_weight must have one value per step")
+            if (self.step_weight < 0).any():
+                raise ValueError("online.step_weight must be non-negative")
         if self.trajectory_index.dtype not in (torch.int32, torch.int64):
             raise ValueError("online.trajectory_index must use an integer dtype")
 
@@ -81,6 +87,7 @@ class OfflineGroundingBatch:
     command_embeddings: Tensor
     command_valid: Tensor
     grounding_target: Tensor
+    sample_weight: Tensor | None = None
 
     def validate(self) -> None:
         self.replay.validate(name="offline")
@@ -95,6 +102,11 @@ class OfflineGroundingBatch:
             raise ValueError("offline.command_valid must match command embeddings")
         if tuple(self.grounding_target.shape) != (batch,):
             raise ValueError("offline.grounding_target must have one value per sample")
+        if self.sample_weight is not None:
+            if tuple(self.sample_weight.shape) != (batch,):
+                raise ValueError("offline.sample_weight must have one value per sample")
+            if (self.sample_weight < 0).any():
+                raise ValueError("offline.sample_weight must be non-negative")
         if self.grounding_target.dtype not in (torch.int32, torch.int64):
             raise ValueError("offline.grounding_target must use an integer dtype")
         command_count = self.command_embeddings.shape[1]

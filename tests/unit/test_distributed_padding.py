@@ -69,14 +69,24 @@ class DistributedPaddingTests(unittest.TestCase):
         self.assertEqual(set(order[0:2] + order[4:6]), {0, 1, 4, 5})
         self.assertEqual(set(order[2:4] + order[6:8]), {2, 3, 6, 7})
 
-    def test_rank_balance_rejects_non_divisible_global_minibatch(self) -> None:
-        with self.assertRaisesRegex(ValueError, "divisible"):
-            policy_rank_balanced_order(
-                [1, 2, 3, 4],
-                world_size=2,
-                global_minibatch_size=3,
-                partitioner=lambda *_: [[0, 1], [2, 3]],
-            )
+    def test_rank_balance_matches_verl_floor_for_non_divisible_minibatch(self) -> None:
+        calls = []
+
+        def one_per_rank(lengths, partitions, equal_size):
+            calls.append(tuple(lengths))
+            self.assertEqual(partitions, 2)
+            self.assertTrue(equal_size)
+            return [[0], [1]]
+
+        order = policy_rank_balanced_order(
+            [1, 2, 3, 4],
+            world_size=2,
+            global_minibatch_size=3,
+            partitioner=one_per_rank,
+        )
+
+        self.assertEqual(order, (0, 1, 2, 3))
+        self.assertEqual(calls, [(1, 3), (2, 4)])
 
 
 if __name__ == "__main__":

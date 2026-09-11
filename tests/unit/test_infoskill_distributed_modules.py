@@ -10,7 +10,7 @@ except ModuleNotFoundError:  # pragma: no cover - local docs-only environment
 
 @unittest.skipIf(torch is None, "torch is not installed")
 class InfoSkillDistributedModulesTests(unittest.TestCase):
-    def test_wraps_both_modules_and_builds_projector_optimizer_domain(self) -> None:
+    def test_wraps_all_modules_and_keeps_optimizer_domains_disjoint(self) -> None:
         from infoskill.integrations.verl.distributed_modules import (
             build_distributed_infoskill_modules,
         )
@@ -23,9 +23,15 @@ class InfoSkillDistributedModulesTests(unittest.TestCase):
 
         compressor = torch.nn.Linear(3, 2)
         projector = torch.nn.Linear(2, 4)
+        prior = torch.nn.Linear(2, 4)
+        fidelity = torch.nn.Linear(4, 1)
+        grounding = torch.nn.Linear(4, 3)
         modules = build_distributed_infoskill_modules(
             compressor=compressor,
             projector=projector,
+            prior=prior,
+            fidelity=fidelity,
+            grounding=grounding,
             device_index=2,
             total_policy_steps=100,
             ddp_factory=wrap,
@@ -33,7 +39,10 @@ class InfoSkillDistributedModulesTests(unittest.TestCase):
 
         self.assertIs(modules.compressor.module, compressor)
         self.assertIs(modules.projector.module, projector)
-        self.assertEqual(len(calls), 2)
+        self.assertIs(modules.prior.module, prior)
+        self.assertIs(modules.fidelity.module, fidelity)
+        self.assertIs(modules.grounding.module, grounding)
+        self.assertEqual(len(calls), 5)
         self.assertEqual(calls[0][1]["device_ids"], [2])
         self.assertEqual(calls[0][1]["output_device"], 2)
         self.assertFalse(calls[0][1]["broadcast_buffers"])
@@ -44,6 +53,20 @@ class InfoSkillDistributedModulesTests(unittest.TestCase):
             for parameter in group["params"]
         }
         self.assertEqual(optimized, {id(item) for item in projector.parameters()})
+        auxiliary_optimized = {
+            id(parameter)
+            for group in modules.auxiliary_optimizer.param_groups
+            for parameter in group["params"]
+        }
+        self.assertEqual(
+            auxiliary_optimized,
+            {
+                id(parameter)
+                for module in (compressor, prior, fidelity, grounding)
+                for parameter in module.parameters()
+            },
+        )
+        self.assertTrue(optimized.isdisjoint(auxiliary_optimized))
         group = modules.projector_optimizer.param_groups[0]
         self.assertEqual(group["initial_lr"], 1e-4)
         self.assertEqual(group["weight_decay"], 0.01)
@@ -59,6 +82,9 @@ class InfoSkillDistributedModulesTests(unittest.TestCase):
             build_distributed_infoskill_modules(
                 compressor=torch.nn.Linear(2, 2),
                 projector=torch.nn.Linear(2, 2),
+                prior=torch.nn.Linear(2, 2),
+                fidelity=torch.nn.Linear(2, 1),
+                grounding=torch.nn.Linear(2, 2),
                 device_index=0,
                 total_policy_steps=0,
                 ddp_factory=lambda module, **_: _Wrapper(module),

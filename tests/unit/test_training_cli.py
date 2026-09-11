@@ -97,12 +97,78 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(json.loads(output.getvalue())["retrieval_mode"], "template")
 
-    def test_infoskill_training_remains_fail_fast(self) -> None:
+    def test_infoskill_training_dry_run_reports_complete_m1_contract(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "infoskill"
+        base = AppConfig.load("configs/alfworld_qwen25_7b.yaml")
+
+        from dataclasses import replace
+
+        configured = replace(
+            base,
+            paths=replace(base.paths, grounding_data="/runs/grounding"),
+        )
+
+        with (
+            patch("infoskill.cli.AppConfig.load", return_value=configured),
+            patch("pathlib.Path.exists", return_value=True),
+            redirect_stdout(output),
+        ):
+            result = main(arguments)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["mode"], "infoskill")
+        self.assertEqual(payload["retrieval_mode"], "embedding")
+        self.assertIsNone(payload["raw_skill_prompt_format"])
+        self.assertTrue(payload["infoskill_auxiliary_enabled"])
+        self.assertEqual(payload["infoskill_latent_mode"], "sample")
+        self.assertEqual(payload["infoskill_soft_prefix_length"], 5)
+
+    def test_infoskill_training_requires_grounding_data(self) -> None:
         arguments = self._arguments()
         arguments[arguments.index("no_skill")] = "infoskill"
 
-        with self.assertRaisesRegex(NotImplementedError, "infoskill"):
-            main(arguments)
+        with patch("pathlib.Path.exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "grounding_data"):
+                main(arguments)
+
+    def test_infoskill_grounding_data_can_be_overridden_from_cli(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "infoskill"
+        arguments.extend(["--grounding-data", "/runs/formal-grounding"])
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["mode"], "infoskill")
+        self.assertEqual(payload["grounding_data"], "/runs/formal-grounding")
+
+    def test_infoskill_grounding_override_reaches_training_runtime(self) -> None:
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "infoskill"
+        arguments.remove("--dry-run")
+        arguments.extend(["--grounding-data", "/runs/formal-grounding"])
+
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "infoskill.training.m0.run_policy_training",
+                return_value=0,
+            ) as train,
+        ):
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            train.call_args.kwargs["config"].paths.grounding_data,
+            "/runs/formal-grounding",
+        )
 
     def test_raw_skill_prompt_dispatches_to_shared_policy_training(self) -> None:
         arguments = self._arguments()
@@ -358,6 +424,45 @@ class TrainingCliTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "reached task discovery"):
                 main(arguments)
+
+    def test_infoskill_verl_evaluation_reaches_task_discovery_without_legacy_pt(self) -> None:
+        arguments = [
+            "eval",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--mode",
+            "infoskill",
+            "--backend",
+            "verl",
+            "--num-gpus",
+            "3",
+        ]
+
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "infoskill.integrations.alfworld.discover_tasks",
+                side_effect=RuntimeError("reached task discovery"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "reached task discovery"):
+                main(arguments)
+
+    def test_infoskill_transformers_evaluation_is_rejected_explicitly(self) -> None:
+        arguments = [
+            "eval",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--mode",
+            "infoskill",
+            "--backend",
+            "transformers",
+            "--num-gpus",
+            "1",
+        ]
+
+        with self.assertRaisesRegex(ValueError, "backend=verl"):
+            main(arguments)
 
     def test_checkpoint_effect_accepts_portable_checkpoint_and_gpu_count(self) -> None:
         arguments = [

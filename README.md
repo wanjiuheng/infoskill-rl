@@ -94,8 +94,10 @@ GPUS=0 RAW_SKILL_PROMPT_FORMAT=compact \
 GPUS=0 RETRIEVAL_MODE=template \
   bash scripts/run_alfworld.sh eval raw_skill_prompt
 
-# 训练后的 LoRA + INFO-SKILL 模块；先在 YAML 中填写 checkpoint/adapter
-GPUS=0 bash scripts/run_alfworld.sh eval infoskill
+# 训练后的 LoRA + INFO-SKILL 模块；portable checkpoint 必须来自 infoskill 模式
+GPUS=0,1,2 EVAL_BACKEND=verl \
+  POLICY_CHECKPOINT=/absolute/run/checkpoints/step-000001 \
+  bash scripts/run_alfworld.sh eval infoskill
 
 # 与 M0 训练完全相同的四卡 VERL/vLLM 路径，评测共同原版 Qwen 起点（update 0）
 GPUS=0,1,2,3 EVAL_BACKEND=verl \
@@ -123,6 +125,16 @@ GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 RUN_NAME=m0-smoke \
 GPUS=0,1,2,3 PROFILE=smoke MAX_UPDATES=1 \
   RUN_NAME=raw-skill-smoke \
   bash scripts/run_alfworld.sh train raw_skill_prompt
+
+# M1 静态预检：grounding 路径可从启动参数覆盖，无需修改共享 YAML
+GROUNDING_DATA=/absolute/path/to/completed-grounding-run \
+GPUS=0,1,2 PROFILE=smoke MAX_UPDATES=1 DRY_RUN=1 \
+  bash scripts/run_alfworld.sh train infoskill
+
+# M1 首次真实 smoke；当前三卡恢复拓扑下有效动作 minibatch 为 15
+GROUNDING_DATA=/absolute/path/to/completed-grounding-run \
+GPUS=0,1,2 PROFILE=smoke MAX_UPDATES=1 RUN_NAME=m1-infoskill-smoke-u1 \
+  bash scripts/run_alfworld.sh train infoskill
 ```
 
 训练档位固定为 `smoke`、`integration`、`pilot`、`formal`。前三者允许用
@@ -187,10 +199,17 @@ smoke、rollout/recompute 审计、同拓扑恢复以及 4→2、2→4 可移植
 独立初始化，M0、`raw_skill_prompt` 与 M1 不互相 warm-start。发布的
 `Alfworld-7B-SFT/checkpoint-140` 仅由 `configs/alfworld_qwen25_7b_sft.yaml`
 保留为明确的 SFT 对照，不再是默认训练起点。
-`raw_skill_prompt` 尚需在目标 Linux/A800 服务器通过真实 smoke 与 checkpoint
-评测门；`infoskill` 顶层训练仍保持 fail-fast。M1 已具备独立可测试的 online
-fidelity/rate + offline grounding/rate Auxiliary Updater，但 trajectory
-replay batch 构造现已具备内部实现，并以稳定语义 seed 保存可重放 epsilon，rollout
-期间不会保留 compressor/projector 计算图。正式规模的 micro-batch 累积、分布式
-Auxiliary Adapter、projector policy update 与 checkpoint 接线仍未完成。M1 正式训练
-仍受 Hybrid Prefix Input parity gate 约束。
+`raw_skill_prompt` 已在目标 Linux/A800 服务器通过真实 smoke、checkpoint、跨 GPU
+恢复和 25-update pilot。M1 `infoskill` 的顶层训练与 VERL 评测入口、episode-level
+检索、随机 compressor、5-token soft prefix、LoRA/projector 联合策略更新、online
+fidelity/rate + offline grounding/rate 辅助更新，以及包含五个 M1 模块、两个 optimizer、
+两个 scheduler 和 RNG 的可移植 checkpoint/恢复均已接通。trajectory replay 使用稳定
+语义 seed 保存可重放 epsilon，rollout 期间不保留 compressor/projector 计算图。
+当前边界不再是代码缺口，而是尚未在目标 Linux/A800 上通过首次 M1 GPU smoke、恢复和
+140 条 `valid_seen` 门；通过这些门之前不得把 M1 表述为实验验证完成。
+
+M1 训练需要一个通过正式门禁的 train-only grounding 运行目录。无需修改共享 YAML，
+可在启动时设置 `GROUNDING_DATA=/absolute/path/to/grounding-run`。三卡恢复拓扑受固定
+VERL floor normalization 约束：配置的 256 动作 minibatch 实际为 255（smoke 的 16
+实际为 15），所有样本仍被训练，只改变同步 minibatch 边界；实际值记录为
+`runtime/effective_action_minibatch_size`。两卡和四卡仍精确使用配置值。

@@ -41,10 +41,8 @@ def policy_rank_balanced_order(
     """Balance rank work without changing synchronized minibatch membership."""
     if world_size <= 0:
         raise ValueError("world_size must be positive")
-    if global_minibatch_size <= 0 or global_minibatch_size % world_size:
-        raise ValueError(
-            "global_minibatch_size must be positive and divisible by world_size"
-        )
+    if global_minibatch_size <= 0:
+        raise ValueError("global_minibatch_size must be positive")
     counts = [int(value) for value in token_counts]
     if not counts or len(counts) % world_size:
         raise ValueError("token_counts must be non-empty and divisible by world_size")
@@ -56,6 +54,8 @@ def policy_rank_balanced_order(
 
     rows_per_rank = len(counts) // world_size
     rows_per_rank_minibatch = global_minibatch_size // world_size
+    if rows_per_rank_minibatch <= 0:
+        raise ValueError("global_minibatch_size must cover every worker")
     rank_orders: list[list[int]] = [[] for _ in range(world_size)]
 
     for local_start in range(0, rows_per_rank, rows_per_rank_minibatch):

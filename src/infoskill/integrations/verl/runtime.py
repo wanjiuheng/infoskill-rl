@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import statistics
 import sys
 import time
@@ -64,10 +66,26 @@ class VerlRuntimeConfig:
     infoskill_projector_learning_rate: float = 1e-4
     infoskill_projector_weight_decay: float = 0.01
     infoskill_policy_warmup_ratio: float = 0.03
+    enable_infoskill_auxiliary: bool = False
+    grounding_data_path: str | None = None
+    infoskill_history_length: int = 2
+    infoskill_auxiliary_micro_batch_size: int = 8
+    infoskill_offline_games_per_update: int = 256
+    infoskill_auxiliary_learning_rate: float = 1e-4
+    infoskill_auxiliary_weight_decay: float = 0.01
+    infoskill_auxiliary_warmup_ratio: float = 0.03
+    infoskill_fidelity_weight: float = 1.0
+    infoskill_rate_weight: float = 0.001
+    infoskill_grounding_weight: float = 0.1
+    infoskill_auxiliary_max_grad_norm: float = 1.0
 
     def __post_init__(self) -> None:
         if self.soft_prefix_length <= 0:
             raise ValueError("soft prefix length must be positive")
+        if self.enable_infoskill_auxiliary and not self.enable_infoskill_modules:
+            raise ValueError(
+                "INFO-SKILL auxiliary training requires INFO-SKILL modules"
+            )
         if not self.enable_infoskill_modules:
             return
         if not self.require_hybrid_prefix:
@@ -88,6 +106,31 @@ class VerlRuntimeConfig:
             raise ValueError("INFO-SKILL projector weight decay must be non-negative")
         if not 0 <= self.infoskill_policy_warmup_ratio <= 1:
             raise ValueError("INFO-SKILL policy warmup ratio must be in [0, 1]")
+        if not self.enable_infoskill_auxiliary:
+            return
+        if not self.grounding_data_path or not self.grounding_data_path.strip():
+            raise ValueError("INFO-SKILL auxiliary training requires grounding data")
+        if self.infoskill_history_length < 0:
+            raise ValueError("INFO-SKILL history length must be non-negative")
+        if min(
+            self.infoskill_auxiliary_micro_batch_size,
+            self.infoskill_offline_games_per_update,
+        ) <= 0:
+            raise ValueError("INFO-SKILL auxiliary batch sizes must be positive")
+        if self.infoskill_auxiliary_learning_rate <= 0:
+            raise ValueError("INFO-SKILL auxiliary learning rate must be positive")
+        if self.infoskill_auxiliary_weight_decay < 0:
+            raise ValueError("INFO-SKILL auxiliary weight decay must be non-negative")
+        if not 0 <= self.infoskill_auxiliary_warmup_ratio <= 1:
+            raise ValueError("INFO-SKILL auxiliary warmup ratio must be in [0, 1]")
+        if min(
+            self.infoskill_fidelity_weight,
+            self.infoskill_rate_weight,
+            self.infoskill_grounding_weight,
+        ) < 0:
+            raise ValueError("INFO-SKILL auxiliary weights must be non-negative")
+        if self.infoskill_auxiliary_max_grad_norm <= 0:
+            raise ValueError("INFO-SKILL auxiliary grad norm must be positive")
 
 
 class VerlRuntime:
@@ -109,6 +152,13 @@ class VerlRuntime:
         self._generation_seconds = 0.0
         self._generation_worker_seconds = 0.0
         self._rollout_session_active = False
+        self._grounding_dataset = None
+        if config.enable_infoskill_auxiliary:
+            from infoskill.integrations.alfworld import GroundingDataset
+
+            self._grounding_dataset = GroundingDataset.load(
+                config.grounding_data_path
+            )
 
     @classmethod
     def start(cls, config: VerlRuntimeConfig) -> "VerlRuntime":
@@ -395,6 +445,12 @@ class VerlRuntime:
                 "runtime/training_sample_count": float(real_sample_count),
                 "runtime/training_padding_count": float(padding_count),
                 "runtime/training_padded_sample_count": float(len(data)),
+                "runtime/effective_action_minibatch_size": float(
+                    _effective_global_minibatch_size(
+                        self.config.action_minibatch_size,
+                        self.worker_group.world_size,
+                    )
+                ),
                 "perf/rollout_generation_calls": float(self._generation_calls),
                 "perf/rollout_generation_requests": float(self._generation_requests),
                 "perf/rollout_generation_seconds": self._generation_seconds,
@@ -423,8 +479,65 @@ class VerlRuntime:
         *,
         global_update: int,
     ) -> Mapping[str, float]:
-        del groups, fidelity_targets, global_update
-        raise RuntimeError("token-only VERL runtime has no INFO-SKILL auxiliary worker")
+        if not self.config.enable_infoskill_auxiliary:
+            raise RuntimeError("INFO-SKILL auxiliary runtime is not enabled")
+        if self._grounding_dataset is None:
+            raise RuntimeError("INFO-SKILL grounding dataset is not loaded")
+        import numpy as np
+        import torch
+        from verl import DataProto
+
+        from infoskill.training.auxiliary_work import (
+            build_offline_auxiliary_examples,
+            collect_online_auxiliary_examples,
+            partition_auxiliary_work,
+        )
+
+        sample_seed = _named_seed(
+            self.config.master_seed,
+            "offline-grounding-sample",
+            global_update,
+        )
+        samples = self._grounding_dataset.sample_games(
+            game_count=self.config.infoskill_offline_games_per_update,
+            seed=sample_seed,
+        )
+        epsilon_seeds = tuple(
+            _named_seed(
+                self.config.master_seed,
+                "offline-grounding-epsilon",
+                global_update,
+                index,
+                sample.state.task_id,
+                sample.state.step_index,
+            )
+            for index, sample in enumerate(samples)
+        )
+        work = partition_auxiliary_work(
+            online=collect_online_auxiliary_examples(groups, fidelity_targets),
+            offline=build_offline_auxiliary_examples(samples, epsilon_seeds),
+            world_size=self.worker_group.world_size,
+            micro_batch_size=self.config.infoskill_auxiliary_micro_batch_size,
+        )
+        data = DataProto.from_dict(
+            tensors={
+                "infoskill_auxiliary_rank": torch.arange(len(work)),
+            },
+            non_tensors={
+                "infoskill_auxiliary_work": np.asarray(work, dtype=object),
+            },
+        )
+        result = self.worker_group.update_infoskill_auxiliary(data)
+        ranks = tuple(
+            int(value)
+            for value in result.batch["infoskill_auxiliary_rank"].tolist()
+        )
+        if ranks != tuple(range(self.worker_group.world_size)):
+            raise RuntimeError("INFO-SKILL auxiliary workers changed rank order")
+        reports = tuple(
+            result.non_tensor_batch["infoskill_auxiliary_metrics"].tolist()
+        )
+        return _require_equal_auxiliary_metrics(reports)
 
     def synchronize_rollout_weights(self) -> None:
         # VERL's hybrid FSDP/vLLM sharding manager synchronizes on the next generation context.
@@ -436,9 +549,14 @@ class VerlRuntime:
             str(directory / "actor"), self._completed_updates
         )
         return {
-            "format": "infoskill-rank0-portable-v1",
+            "format": (
+                "infoskill-full-rank0-portable-v1"
+                if self.config.enable_infoskill_modules
+                else "infoskill-rank0-portable-v1"
+            ),
             "portable": True,
             "base_weights_included": False,
+            "infoskill_modules_included": self.config.enable_infoskill_modules,
         }
 
     def load_portable_state(
@@ -526,6 +644,26 @@ def _actor_config(settings: VerlRuntimeConfig):
         actor_ref.model.infoskill_policy_warmup_ratio = (
             settings.infoskill_policy_warmup_ratio
         )
+        actor_ref.model.infoskill_history_length = settings.infoskill_history_length
+        actor_ref.model.infoskill_auxiliary_learning_rate = (
+            settings.infoskill_auxiliary_learning_rate
+        )
+        actor_ref.model.infoskill_auxiliary_weight_decay = (
+            settings.infoskill_auxiliary_weight_decay
+        )
+        actor_ref.model.infoskill_auxiliary_warmup_ratio = (
+            settings.infoskill_auxiliary_warmup_ratio
+        )
+        actor_ref.model.infoskill_fidelity_weight = (
+            settings.infoskill_fidelity_weight
+        )
+        actor_ref.model.infoskill_rate_weight = settings.infoskill_rate_weight
+        actor_ref.model.infoskill_grounding_weight = (
+            settings.infoskill_grounding_weight
+        )
+        actor_ref.model.infoskill_auxiliary_max_grad_norm = (
+            settings.infoskill_auxiliary_max_grad_norm
+        )
     actor_ref.actor.strategy = "fsdp"
     actor_ref.actor.optim.lr = settings.actor_learning_rate
     actor_ref.actor.optim.weight_decay = 0.0
@@ -534,7 +672,12 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.actor.optim.warmup_style = "constant"
     actor_ref.actor.optim.total_training_steps = settings.total_training_steps
     actor_ref.actor.ppo_mini_batch_size = settings.action_minibatch_size
-    actor_ref.actor.ppo_micro_batch_size_per_gpu = 4
+    actor_ref.actor.ppo_micro_batch_size_per_gpu = (
+        _policy_micro_batch_size_per_gpu(
+            settings.action_minibatch_size,
+            settings.num_gpus,
+        )
+    )
     actor_ref.actor.ppo_max_token_len_per_gpu = settings.policy_max_tokens_per_gpu
     actor_ref.actor.use_dynamic_bsz = True
     actor_ref.actor.ppo_epochs = 1
@@ -584,6 +727,40 @@ def _actor_config(settings: VerlRuntimeConfig):
     return config
 
 
+def _policy_micro_batch_size_per_gpu(
+    global_minibatch_size: int,
+    world_size: int,
+    *,
+    preferred: int = 4,
+) -> int:
+    """Choose a worker-valid divisor without changing the global minibatch."""
+
+    if min(global_minibatch_size, world_size, preferred) <= 0:
+        raise ValueError("policy batch dimensions must be positive")
+    normalized = global_minibatch_size // world_size
+    if normalized <= 0:
+        raise ValueError("global policy minibatch must cover every GPU")
+    return max(
+        candidate
+        for candidate in range(1, min(preferred, normalized) + 1)
+        if normalized % candidate == 0
+    )
+
+
+def _effective_global_minibatch_size(
+    configured_size: int,
+    world_size: int,
+) -> int:
+    """Expose VERL's per-rank floor normalization as an auditable value."""
+
+    if min(configured_size, world_size) <= 0:
+        raise ValueError("policy batch dimensions must be positive")
+    effective = (configured_size // world_size) * world_size
+    if effective <= 0:
+        raise ValueError("global policy minibatch must cover every GPU")
+    return effective
+
+
 def _require_hybrid_prefix_runtime() -> None:
     try:
         from vllm import envs as vllm_envs
@@ -613,3 +790,27 @@ def _reduce_metrics(metrics: Mapping[str, object]) -> dict[str, float]:
             except (TypeError, ValueError):
                 continue
     return reduced
+
+
+def _named_seed(master_seed: int, namespace: str, *parts: object) -> int:
+    payload = "\0".join(str(item) for item in (master_seed, namespace, *parts))
+    digest = hashlib.sha256(payload.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % (2**63 - 1)
+
+
+def _require_equal_auxiliary_metrics(
+    reports: tuple[object, ...],
+) -> dict[str, float]:
+    if not reports or not all(isinstance(report, Mapping) for report in reports):
+        raise RuntimeError("INFO-SKILL auxiliary workers returned invalid metrics")
+    normalized = tuple(_reduce_metrics(report) for report in reports)
+    keys = set(normalized[0])
+    if any(set(report) != keys for report in normalized[1:]):
+        raise RuntimeError("INFO-SKILL auxiliary metric keys differ across ranks")
+    for key in keys:
+        values = [report[key] for report in normalized]
+        if not all(math.isclose(value, values[0], rel_tol=1e-6, abs_tol=1e-6) for value in values[1:]):
+            raise RuntimeError(
+                f"INFO-SKILL auxiliary metric {key} differs across ranks: {values}"
+            )
+    return normalized[0]

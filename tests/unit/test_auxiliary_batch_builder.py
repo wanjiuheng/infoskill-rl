@@ -126,7 +126,9 @@ class AuxiliaryBatchBuilderTests(unittest.TestCase):
         self.assertEqual(tuple(batch.online.replay.state_tokens.shape), (3, 3, 6))
         self.assertEqual(batch.online.trajectory_index.tolist(), [0, 1, 1])
         self.assertEqual(batch.online.fidelity_target.tolist(), [-0.5, 0.5, 0.5])
+        self.assertEqual(batch.online.step_weight.tolist(), [1.0, 0.5, 0.5])
         self.assertEqual(batch.offline.grounding_target.tolist(), [0])
+        self.assertEqual(batch.offline.sample_weight.tolist(), [1.0])
         self.assertEqual(tuple(batch.online.replay.skill_tokens.shape[:2]), (3, 3))
         self.assertEqual(tuple(batch.offline.replay.epsilon.shape), (1, 4))
 
@@ -139,6 +141,14 @@ class AuxiliaryBatchBuilderTests(unittest.TestCase):
         self.assertTrue(
             torch.equal(batch.offline.replay.epsilon, repeated.offline.replay.epsilon)
         )
+
+        with self.assertRaisesRegex(ValueError, "equal length"):
+            builder.build(
+                groups=(TrajectoryGroup(task, trajectories),),
+                fidelity_targets=((-0.5, 0.5),),
+                grounding_samples=(GroundingSample(state, "look"),),
+                grounding_epsilon_seeds=(19, 20),
+            )
 
 
 if __name__ == "__main__":

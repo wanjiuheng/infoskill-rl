@@ -17,6 +17,7 @@ CHECKPOINT_EFFECT_MAX_NEW_TOKENS="${CHECKPOINT_EFFECT_MAX_NEW_TOKENS:-64}"
 PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark | pilot | formal
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
+GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
@@ -286,6 +287,9 @@ case "${ACTION}" in
     fi
     if [[ -n "${RESUME}" ]]; then
       TRAIN_ARGS+=(--resume "${RESUME}")
+    fi
+    if [[ -n "${GROUNDING_DATA}" ]]; then
+      TRAIN_ARGS+=(--grounding-data "${GROUNDING_DATA}")
     fi
     if [[ "${DRY_RUN}" == "1" ]]; then
       TRAIN_ARGS+=(--dry-run)
