@@ -1660,7 +1660,11 @@ bash scripts/run_alfworld.sh grounding-timeout-rescue
 
 M1 的旧评测路径仍是默认。以下候选只把同一 native environment batch 中各任务的 soft-prefix
 conditioning 合并到一个分布式调用，不改变模型、checkpoint、检索结果、生成参数、环境或
-评测集合。第一次只跑 update 0，并复用已有 update-0 作为 baseline；预期约 20--45 分钟。
+评测集合。首轮直接把不同任务组成 worker batch 的实现虽然达到 `1.101x` rollout 提速，
+但改变了 latent 并被 exact parity 门拒绝。当前修正版只合并 RPC；每个 rank 接收相同任务
+序列，worker 仍逐条以 batch-size 1 计算并保留 rank-0 结果。第一次只跑 update 0，并复用
+已有 update-0 作为 baseline；预期约 25--45 分钟。不要复用旧的
+`20260912T190852Z-m1-infoskill-grouped-conditioning-update0` 失败 run。
 
 ```bash
 cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
@@ -1669,7 +1673,7 @@ git pull origin main
 BASE=/root/autodl-tmp/wjh/alfworld_eval/infoskill/runs/20260912T164508Z-m1-infoskill-valid-seen-update0
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)
-LOG="$PWD/logs/m1-infoskill-grouped-conditioning-update0-${STAMP}.log"
+LOG="$PWD/logs/m1-infoskill-rpc-amortized-update0-${STAMP}.log"
 
 nohup env \
   GPUS=0,1,2 \
@@ -1679,7 +1683,7 @@ nohup env \
   ENVIRONMENT_BACKEND=native_batch \
   GROUPED_INFOSKILL_CONDITIONING=1 \
   INFO_SKILL_CPU_THREADS=1 \
-  RUN_NAME=m1-infoskill-grouped-conditioning-update0 \
+  RUN_NAME=m1-infoskill-rpc-amortized-update0 \
   bash scripts/run_alfworld.sh eval infoskill \
   >"$LOG" 2>&1 &
 
@@ -1697,7 +1701,7 @@ tail -f "$LOG"
 
 ```bash
 OPTIMIZED=$(find "$PWD/runs" -maxdepth 1 -type d \
-  -name '*-m1-infoskill-grouped-conditioning-update0' \
+  -name '*-m1-infoskill-rpc-amortized-update0' \
   | sort | tail -n 1)
 
 python scripts/compare_infoskill_conditioning_runs.py \

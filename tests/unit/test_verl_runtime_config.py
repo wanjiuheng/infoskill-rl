@@ -130,6 +130,65 @@ class VerlRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(outputs[0].soft_prefix, "prefix-0")
         self.assertEqual(outputs[0].replay_trace.latent_seed, 11)
 
+    def test_grouped_conditioning_replicates_rank_zero_sequence_exactly(self) -> None:
+        import numpy as np
+        from verl import DataProto
+
+        from infoskill.conditioning import ConditioningRequest
+        from infoskill.domain.state import CanonicalAgentState, render_state_views
+        from infoskill.integrations.verl.runtime import VerlRuntime, VerlRuntimeConfig
+
+        worker_group = _WorkerGroup(DataProto, np)
+        runtime = VerlRuntime(
+            worker_group=worker_group,
+            codec=object(),  # type: ignore[arg-type]
+            config=VerlRuntimeConfig(
+                skillrl_source="/skillrl",
+                model_path="/policy",
+                num_gpus=2,
+                enable_infoskill_modules=True,
+                require_hybrid_prefix=True,
+                semantic_model_path="/semantic",
+                skill_bank_path="/skills.json",
+            ),
+        )
+        state = CanonicalAgentState(
+            task_id="task-1",
+            split="train",
+            task_type="pick_and_place_simple",
+            goal="put an object somewhere",
+            step_index=0,
+            observation="room",
+            history=(),
+            admissible_commands=("look",),
+        )
+        requests = tuple(
+            ConditioningRequest(
+                state=state,
+                views=render_state_views(state),
+                rollout_id=index,
+                global_update=0,
+                latent_seed=11 + index,
+            )
+            for index in range(2)
+        )
+
+        outputs = runtime.condition_infoskill_grouped(
+            requests,
+            (("skill-1",), ("skill-2",)),
+            latent_mode="mean",
+        )
+
+        self.assertEqual(worker_group.received_rows, 4)
+        self.assertEqual(
+            worker_group.received_candidate_groups,
+            (("skill-1",), ("skill-2",), ("skill-1",), ("skill-2",)),
+        )
+        self.assertEqual(
+            tuple(output.soft_prefix for output in outputs),
+            ("prefix-0", "prefix-1"),
+        )
+
 
 class _WorkerGroup:
     world_size = 2
@@ -172,6 +231,9 @@ class _WorkerGroup:
                 )
             },
         )
+
+    def condition_infoskill_serial(self, data):
+        return self.condition_infoskill(data)
 
 
 if __name__ == "__main__":

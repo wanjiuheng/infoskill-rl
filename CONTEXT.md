@@ -330,6 +330,15 @@ task 的 conditioning 合并为一次 RPC，同时保留每条请求自己的候
 上通过完整 trajectory/token/logprob 对比，并至少达到 1.05x rollout 提速，才可讨论升级默认；
 失败时保持开关为 0，不影响现有结果。
 
+首轮跨任务 batch 候选实测把 conditioning RPC 降到 540 次，并将 rollout 从
+`2412.33s` 降到 `2190.86s`（`1.101x`），但门禁正确阻止了采用：相同任务第一步的
+32 维 latent 最大差约 `0.0171`，继而造成动作、轨迹与 logprob 分叉。根因是优化同时改变了
+worker 内冻结语义编码器和 compressor 的 batch 几何，而不只是减少 RPC。修正版继续默认关闭，
+只在一个 RPC 中让每个 data-parallel rank 接收相同逻辑序列，并逐条以 batch-size 1 计算；
+返回时仍选择与历史单条调用一致的 rank-0 副本。默认训练路径继续使用原批处理实现，不受该
+评测候选影响。修正版必须重新通过同一 140 条 exact parity 与 1.05x 性能门，首轮失败 run
+不得作为方法结果或性能依据。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

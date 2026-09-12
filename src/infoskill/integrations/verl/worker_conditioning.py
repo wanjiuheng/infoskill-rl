@@ -110,6 +110,18 @@ class InfoSkillWorkerConditioner:
             for index, item in enumerate(items)
         )
 
+    def condition_serially(
+        self,
+        items: tuple[InfoSkillConditioningWorkItem, ...],
+    ) -> tuple[InfoSkillConditioningResult, ...]:
+        """Retain batch-size-one numerics while sharing the outer RPC."""
+
+        from infoskill.conditioning.distributed_layout import (
+            _condition_rows_individually,
+        )
+
+        return _condition_rows_individually(items, self.condition)
+
 
 def _unwrap(module: nn.Module) -> nn.Module:
     return cast(nn.Module, getattr(module, "module", module))

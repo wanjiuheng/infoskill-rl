@@ -18,6 +18,10 @@ from infoskill.conditioning import (
     InfoSkillConditioningResult,
     InfoSkillConditioningWorkItem,
 )
+from infoskill.conditioning.distributed_layout import (
+    _rank_replicated_conditioning_rows,
+    _select_rank_zero_conditioning_rows,
+)
 from infoskill.config import DEFAULT_POLICY_MAX_TOKENS_PER_GPU
 from infoskill.distributed import pad_batch_to_divisor, policy_rank_balanced_order
 from infoskill.episode import TrajectoryGroup
@@ -264,29 +268,10 @@ class VerlRuntime:
     ) -> tuple[InfoSkillConditioningResult, ...]:
         """Condition states on the same workers that own trainable M1 modules."""
 
-        return self.condition_infoskill_grouped(
-            requests,
-            tuple(candidate_skill_ids for _ in requests),
-            latent_mode=latent_mode,
-        )
-
-    def condition_infoskill_grouped(
-        self,
-        requests: tuple[ConditioningRequest, ...],
-        candidate_skill_ids_by_request: tuple[tuple[str, ...], ...],
-        *,
-        latent_mode: Literal["sample", "mean"],
-    ) -> tuple[InfoSkillConditioningResult, ...]:
-        """Condition requests with per-episode candidates in one worker RPC."""
-
         if not self.config.enable_infoskill_modules:
             raise RuntimeError("INFO-SKILL runtime modules are not enabled")
         if not requests:
-            if candidate_skill_ids_by_request:
-                raise ValueError("empty requests cannot have candidate skills")
             return ()
-        if len(requests) != len(candidate_skill_ids_by_request):
-            raise ValueError("conditioning requests and candidate skills must align")
         import numpy as np
         import torch
         from verl import DataProto
@@ -299,10 +284,7 @@ class VerlRuntime:
                 latent_seed=request.latent_seed,
                 latent_mode=latent_mode,
             )
-            for request, candidate_skill_ids in zip(
-                requests,
-                candidate_skill_ids_by_request,
-            )
+            for request in requests
         )
         data = DataProto.from_dict(
             tensors={"infoskill_row_id": torch.arange(len(items))},
@@ -331,6 +313,70 @@ class VerlRuntime:
         ):
             raise RuntimeError("INFO-SKILL worker returned an invalid conditioning batch")
         return results
+
+    def condition_infoskill_grouped(
+        self,
+        requests: tuple[ConditioningRequest, ...],
+        candidate_skill_ids_by_request: tuple[tuple[str, ...], ...],
+        *,
+        latent_mode: Literal["sample", "mean"],
+    ) -> tuple[InfoSkillConditioningResult, ...]:
+        """Condition requests with per-episode candidates in one worker RPC."""
+
+        if not self.config.enable_infoskill_modules:
+            raise RuntimeError("INFO-SKILL runtime modules are not enabled")
+        if not requests:
+            if candidate_skill_ids_by_request:
+                raise ValueError("empty requests cannot have candidate skills")
+            return ()
+        if len(requests) != len(candidate_skill_ids_by_request):
+            raise ValueError("conditioning requests and candidate skills must align")
+        import numpy as np
+        import torch
+        from verl import DataProto
+
+        logical_items = tuple(
+            InfoSkillConditioningWorkItem(
+                compression_view=request.views.compression_view,
+                candidate_skill_ids=candidate_skill_ids,
+                latent_seed=request.latent_seed,
+                latent_mode=latent_mode,
+            )
+            for request, candidate_skill_ids in zip(
+                requests,
+                candidate_skill_ids_by_request,
+            )
+        )
+        items = _rank_replicated_conditioning_rows(
+            logical_items,
+            self.worker_group.world_size,
+        )
+        data = DataProto.from_dict(
+            tensors={"infoskill_row_id": torch.arange(len(items))},
+            non_tensors={
+                "infoskill_work_item": np.asarray(items, dtype=object),
+            },
+        )
+        output = self.worker_group.condition_infoskill_serial(data)
+        row_ids = tuple(
+            int(value)
+            for value in output.batch["infoskill_row_id"].tolist()
+        )
+        if row_ids != tuple(range(len(items))):
+            raise RuntimeError("INFO-SKILL worker conditioning changed row order")
+        physical_results = tuple(
+            output.non_tensor_batch["infoskill_conditioning_result"].tolist()
+        )
+        if len(physical_results) != len(items) or not all(
+            isinstance(result, InfoSkillConditioningResult)
+            for result in physical_results
+        ):
+            raise RuntimeError("INFO-SKILL worker returned an invalid conditioning batch")
+        return _select_rank_zero_conditioning_rows(
+            physical_results,
+            logical_size=len(logical_items),
+            world_size=self.worker_group.world_size,
+        )
 
     @contextmanager
     def rollout_session(self):

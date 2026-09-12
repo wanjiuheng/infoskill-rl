@@ -104,6 +104,49 @@ class InfoSkillWorkerConditionerTests(unittest.TestCase):
         )
         self.assertTrue(torch.count_nonzero(outputs[0].replay_trace.epsilon) == 0)
 
+    def test_serial_conditioning_preserves_single_item_batch_geometry(self) -> None:
+        from infoskill.conditioning import InfoSkillConditioningWorkItem
+        from infoskill.integrations.verl.worker_conditioning import (
+            InfoSkillWorkerConditioner,
+        )
+
+        engine = InfoSkillWorkerConditioner(
+            library=_Library(),
+            semantic_encoder=_BatchSensitiveSemanticEncoder(),
+            feature_cache=_FlexibleFeatureCache(),
+            compressor=_Compressor(),
+            projector=_Projector(),
+        )
+        items = tuple(
+            InfoSkillConditioningWorkItem(
+                compression_view=text,
+                candidate_skill_ids=("skill-1",),
+                latent_seed=seed,
+                latent_mode="mean",
+            )
+            for text, seed in (("state one", 13), ("state two", 17))
+        )
+        expected = tuple(engine.condition((item,))[0] for item in items)
+
+        actual = engine.condition_serially(items)
+
+        self.assertTrue(
+            all(
+                torch.equal(
+                    expected_item.replay_trace.latent,
+                    actual_item.replay_trace.latent,
+                )
+                for expected_item, actual_item in zip(expected, actual)
+            )
+        )
+        batched = engine.condition(items)
+        self.assertFalse(
+            torch.equal(
+                expected[0].replay_trace.latent,
+                batched[0].replay_trace.latent,
+            )
+        )
+
 
 if torch is not None:
 
@@ -128,6 +171,24 @@ if torch is not None:
             )
 
 
+    class _BatchSensitiveSemanticEncoder:
+        def encode_tokens(self, texts):
+            values = {
+                "state one": (1.0, 2.0, 3.0),
+                "state two": (4.0, 5.0, 6.0),
+            }
+            batch_offset = float(len(texts) - 1) * 100.0
+            return _Features(
+                torch.tensor(
+                    [
+                        [[value + batch_offset for value in values[text]]]
+                        for text in texts
+                    ]
+                ),
+                torch.ones((len(texts), 1), dtype=torch.bool),
+            )
+
+
     class _Library:
         def get(self, skill_id):
             if skill_id != "skill-1":
@@ -143,6 +204,18 @@ if torch is not None:
                 torch.ones((2, 1, 1, 3)),
                 torch.ones((2, 1, 1), dtype=torch.bool),
                 torch.zeros((2, 1), dtype=torch.long),
+            )
+
+
+    class _FlexibleFeatureCache:
+        def heterogeneous_skill_batch(self, groups):
+            if any(group != ("skill-1",) for group in groups):
+                raise AssertionError(groups)
+            size = len(groups)
+            return (
+                torch.ones((size, 1, 1, 3)),
+                torch.ones((size, 1, 1), dtype=torch.bool),
+                torch.zeros((size, 1), dtype=torch.long),
             )
 
 

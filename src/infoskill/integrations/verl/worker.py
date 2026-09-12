@@ -266,6 +266,25 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         )
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def condition_infoskill_serial(self, data):
+        conditioner = self._infoskill_worker_conditioner
+        if conditioner is None:
+            raise RuntimeError("INFO-SKILL worker conditioning is not initialized")
+        from verl import DataProto
+
+        items = tuple(data.non_tensor_batch["infoskill_work_item"].tolist())
+        results = conditioner.condition_serially(items)
+        return DataProto.from_dict(
+            tensors={"infoskill_row_id": data.batch["infoskill_row_id"]},
+            non_tensors={
+                "infoskill_conditioning_result": np.asarray(
+                    results,
+                    dtype=object,
+                )
+            },
+        )
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def update_infoskill_auxiliary(self, data):
         builder = self._infoskill_auxiliary_batch_builder
         updater = self._infoskill_auxiliary_updater
