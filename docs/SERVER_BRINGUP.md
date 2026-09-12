@@ -1754,6 +1754,16 @@ tail -f "$LOG"
 `RUN_FULL_EVAL_ON_PASS=0`。`GROUPED_INFOSKILL_CONDITIONING` 必须保持为已经单独通过
 一致性门的值，batch-size 门本身不负责同时验证另一项优化。
 
+2026-09-13 首轮三卡门禁中，batch 12 的 rollout/generation 分别达到约
+`1.80x/1.93x`，最低物理显存余量约 `29.91 GiB`，但 12 条压力轨迹全部发生 token 分叉，
+因此门禁失败且未启动 140 条。该结果不能归因于 checkpoint、检索或 prompt 不一致；首次
+分叉前这些输入字段逐项相同。正式评测继续使用 batch 8。不要放宽 exact parity 门来采用
+batch 12；如以后更改 vLLM、CUDA 或 kernel 实现，必须重新运行同一门禁。
+
+报告中的 `logprob_comparison_valid=false` 表示两边 token 或 logprob 长度已不同，逐 token
+概率不再具有完整一一对应关系。此时 `logprobs_close` 必须为 false；不能把
+`logprob_count=0`、`max_logprob_abs_error=0` 解释为概率一致。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

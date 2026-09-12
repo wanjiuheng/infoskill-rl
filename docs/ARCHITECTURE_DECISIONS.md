@@ -169,3 +169,18 @@ SSH 或父进程中断后校验恢复。
 work-item 和结果 SHA，并只合并其中成功的重放。一旦累计救回 8 条使完整 3,553 条派生 manifest
 通过原门禁，即可生成新的只读正式目录；尚未提交或再次超时的任务继续沿用源 quarantine。
 finalization 不在活跃 rescue run 内写派生产物，避免与并发提交互相覆盖。
+
+## D021：M1 正式评测保持 batch 8，batch 12 未通过 exact parity
+
+固定 12 条压力集、同一 update-2 portable checkpoint 和三卡拓扑的首轮门禁显示，batch 12
+相对 batch 8 将 rollout 从 `528.69s` 降至 `293.48s`，且最低物理显存仍余约
+`29.91 GiB`；但 12/12 条轨迹均产生 token/语义分叉。首次分叉前，两边的 canonical state、
+policy user message、候选技能、conditioning replay 和 soft-prefix 统计均一致；可归因的变化
+只剩每 rank 本地 batch 几何及其 BF16/vLLM kernel 数值路径。greedy 解码并不保证跨 batch
+几何逐 bit 不变，近似并列 logits 会把细小误差放大为不同动作和环境状态。
+
+因此正式 M1 `valid_seen` 继续使用 batch 8。不得因成功率相近、平均概率误差较小或吞吐收益
+而放宽完整轨迹/token exact gate；batch 12 只有在未来运行栈变化后重新通过同一门禁才能启用。
+当 token 或 logprob 长度漂移时，完整 logprob 比较定义为不可用，报告必须给出
+`logprob_comparison_valid=false` 与 `logprobs_close=false`，不能以零个可比较 token 的默认
+零误差宣称一致。

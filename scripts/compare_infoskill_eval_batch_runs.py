@@ -86,11 +86,24 @@ def compare_runs(
             and candidate_summary.get("reportable_as_valid_seen") is False
         ),
     }
+    baseline_records = _read_diagnostic_trace(baseline)
+    candidate_records = _read_diagnostic_trace(candidate)
     parity = compare_records(
-        _read_diagnostic_trace(baseline),
-        _read_diagnostic_trace(candidate),
+        baseline_records,
+        candidate_records,
         logprob_tolerance=logprob_tolerance,
     )
+    tokens_exact = _token_sequences_exact(baseline_records, candidate_records)
+    logprob_comparison_valid = (
+        tokens_exact
+        and _logprob_shapes_match(baseline_records, candidate_records)
+        and int(parity["logprob_count"]) > 0
+    )
+    logprobs_close = (
+        logprob_comparison_valid and bool(parity["logprobs_close"])
+    )
+    parity["logprobs_close"] = logprobs_close
+    parity["passed"] = bool(parity["semantic_exact"]) and logprobs_close
     baseline_rollout = _metric(baseline_summary, "timing_seconds", "rollout_seconds")
     candidate_rollout = _metric(candidate_summary, "timing_seconds", "rollout_seconds")
     baseline_generation = _metric(
@@ -142,7 +155,13 @@ def compare_runs(
         "checkpoint_load_checks": checkpoint_load_checks,
         "checkpoint_load_valid": checkpoint_load_valid,
         **parity,
-        "tokens_exact": bool(parity["semantic_exact"]),
+        "tokens_exact": tokens_exact,
+        "logprob_comparison_valid": logprob_comparison_valid,
+        "logprob_comparison_status": (
+            "compared"
+            if logprob_comparison_valid
+            else "not_comparable_due_to_token_or_length_drift"
+        ),
         "baseline_performance": {
             "rollout_seconds": baseline_rollout,
             "generation_seconds": baseline_generation,
@@ -206,6 +225,55 @@ def _metric(payload: dict[str, object], section: str, key: str) -> float:
 
 def _speedup(baseline: float, candidate: float) -> float:
     return baseline / candidate if baseline > 0.0 and candidate > 0.0 else 0.0
+
+
+def _token_sequences_exact(baseline: list[dict], candidate: list[dict]) -> bool:
+    pairs = _aligned_record_pairs(baseline, candidate)
+    if pairs is None:
+        return False
+    for left, right in pairs:
+        left_steps = left.get("steps", [])
+        right_steps = right.get("steps", [])
+        if len(left_steps) != len(right_steps):
+            return False
+        for left_step, right_step in zip(left_steps, right_steps, strict=True):
+            if left_step.get("response_token_ids", []) != right_step.get(
+                "response_token_ids", []
+            ):
+                return False
+    return True
+
+
+def _logprob_shapes_match(baseline: list[dict], candidate: list[dict]) -> bool:
+    pairs = _aligned_record_pairs(baseline, candidate)
+    if pairs is None:
+        return False
+    for left, right in pairs:
+        left_steps = left.get("steps", [])
+        right_steps = right.get("steps", [])
+        if len(left_steps) != len(right_steps):
+            return False
+        for left_step, right_step in zip(left_steps, right_steps, strict=True):
+            if len(left_step.get("old_token_logprobs", [])) != len(
+                right_step.get("old_token_logprobs", [])
+            ):
+                return False
+    return True
+
+
+def _aligned_record_pairs(
+    baseline: list[dict], candidate: list[dict]
+) -> list[tuple[dict, dict]] | None:
+    def identity(record: dict) -> tuple[str, int]:
+        return str(record.get("task_id", "")), int(record.get("rollout_id", 0))
+
+    left = sorted(baseline, key=identity)
+    right = sorted(candidate, key=identity)
+    if len(left) != len(right):
+        return None
+    if [identity(record) for record in left] != [identity(record) for record in right]:
+        return None
+    return list(zip(left, right, strict=True))
 
 
 def _read_json(path: Path) -> dict[str, object]:

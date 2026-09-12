@@ -112,6 +112,51 @@ class EvalBatchGateTests(unittest.TestCase):
         self.assertFalse(report["physical_memory_valid"])
         self.assertFalse(report["passed"])
 
+    def test_token_drift_makes_logprob_comparison_invalid(self) -> None:
+        baseline_record = {
+            "task_id": "task-1",
+            "rollout_id": 0,
+            "steps": [
+                {
+                    "response_token_ids": [1],
+                    "old_token_logprobs": [-0.5],
+                }
+            ],
+        }
+        candidate_record = {
+            "task_id": "task-1",
+            "rollout_id": 0,
+            "steps": [
+                {
+                    "response_token_ids": [2],
+                    "old_token_logprobs": [-0.5],
+                }
+            ],
+        }
+        with (
+            patch(
+                "scripts.compare_infoskill_eval_batch_runs._read_json",
+                side_effect=(
+                    _provenance(batch_size=8),
+                    _provenance(batch_size=12),
+                    _summary(rollout=120.0, generation=100.0, free=10.0),
+                    _summary(rollout=90.0, generation=75.0, free=9.0),
+                    _checkpoint_load(),
+                    _checkpoint_load(),
+                ),
+            ),
+            patch(
+                "scripts.compare_infoskill_eval_batch_runs._read_diagnostic_trace",
+                side_effect=([baseline_record], [candidate_record]),
+            ),
+        ):
+            report = compare_runs(Path("/runs/a"), Path("/runs/b"))
+
+        self.assertFalse(report["tokens_exact"])
+        self.assertFalse(report["logprob_comparison_valid"])
+        self.assertFalse(report["logprobs_close"])
+        self.assertFalse(report["passed"])
+
 
 def _provenance(*, batch_size: int) -> dict[str, object]:
     return {

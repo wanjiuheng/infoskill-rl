@@ -346,6 +346,15 @@ worker 内冻结语义编码器和 compressor 的 batch 几何，而不只是减
 报告明确标记为不可作为 valid_seen 结果。只有全部通过时脚本才自动启动 batch 12 的完整
 140 条；任一门失败则 fail closed，正式 YAML 默认仍为 batch 8。
 
+首轮 3-GPU、update-2 checkpoint 压力门实测拒绝 batch 12：虽然 rollout 从
+`528.69s` 降至 `293.48s`（`1.80x`），生成阶段达到 `1.93x`，物理显存最低仍余
+`29.91 GiB`，但 12/12 条轨迹均发生 token/语义分叉。两边在首次分叉前的状态、prompt、
+候选技能、conditioning replay 与 soft-prefix 统计逐项相同，漂移来自 batch 8（每 rank
+3 个 padding 后请求）变为 batch 12（每 rank 4 个请求）后的 BF16/vLLM batch 几何与 kernel
+数值路径变化；greedy 解码在近似并列 token 处放大成后续环境分叉。因此正式评测继续固定
+batch 8，不以统计相近替代 exact parity。比较器也明确把 token 或 logprob 长度漂移标为
+`logprob_comparison_valid=false`，避免零个可对齐 token 时误报 `logprobs_close=true`。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard
