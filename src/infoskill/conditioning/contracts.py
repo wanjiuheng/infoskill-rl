@@ -93,3 +93,11 @@ class InfoSkillConditioningRuntime(Protocol):
         *,
         latent_mode: Literal["sample", "mean"],
     ) -> tuple[InfoSkillConditioningResult, ...]: ...
+
+    def condition_infoskill_grouped(
+        self,
+        requests: tuple[ConditioningRequest, ...],
+        candidate_skill_ids_by_request: tuple[tuple[str, ...], ...],
+        *,
+        latent_mode: Literal["sample", "mean"],
+    ) -> tuple[InfoSkillConditioningResult, ...]: ...

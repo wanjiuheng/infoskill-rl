@@ -94,6 +94,15 @@ def _parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    evaluate.add_argument(
+        "--grouped-infoskill-conditioning",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "experimental M1 evaluation optimization; batch conditioning "
+            "across active tasks after exact parity validation"
+        ),
+    )
     evaluate.add_argument("--verbose-runtime-logs", action="store_true")
     raw_skill_ab = subparsers.add_parser(
         "raw-skill-ab",
@@ -638,6 +647,11 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "num_gpus": args.num_gpus,
         "environment_backend": args.environment_backend,
         "persistent_rollout_session": args.persistent_rollout_session,
+        "grouped_infoskill_conditioning": (
+            args.grouped_infoskill_conditioning
+            if mode is SkillMode.INFO_SKILL
+            else False
+        ),
         "policy_checkpoint": (
             str(checkpoint.directory) if checkpoint is not None else None
         ),
@@ -791,6 +805,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     query_by_task_id={
                         task.task_id: task.goal for task in tasks
                     },
+                    group_across_tasks=args.grouped_infoskill_conditioning,
                 )
             stage_started = time.perf_counter()
             collector = build_verl_policy_evaluation(
@@ -874,11 +889,13 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     values.update(
         {f"perf/{key}": value for key, value in timing_seconds.items()}
     )
+    values.update(run.performance_metrics or {})
     values.update({f"success/{key}": value for key, value in summary.per_task_type_success.items()})
     metrics.log(step=evaluation_step, phase="valid_seen", values=values)
     summary_payload = _summary_payload(run)
     summary_payload["task_manifest_sha256"] = valid_seen_manifest_sha256
     summary_payload["timing_seconds"] = timing_seconds
+    summary_payload["rollout_performance"] = dict(run.performance_metrics or {})
     _write_json(run_directory / "valid_seen_summary.json", summary_payload)
     logger.info("Structured trace: %s", trace_path)
     logger.info(
@@ -891,6 +908,23 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         timing_seconds["rollout_seconds"],
         timing_seconds["runtime_close_seconds"],
         timing_seconds["total_seconds"],
+    )
+    rollout_performance = run.performance_metrics or {}
+    logger.info(
+        "Evaluation rollout breakdown: conditioning=%.1fs generation=%.1fs "
+        "environment=%.1fs action-resolution=%.1fs",
+        rollout_performance.get("perf/rollout_conditioning_seconds", 0.0),
+        rollout_performance.get("perf/rollout_backend_generate_seconds", 0.0),
+        sum(
+            rollout_performance.get(key, 0.0)
+            for key in (
+                "perf/environment_create_seconds",
+                "perf/environment_reset_seconds",
+                "perf/environment_step_seconds",
+                "perf/environment_close_seconds",
+            )
+        ),
+        rollout_performance.get("perf/rollout_action_resolution_seconds", 0.0),
     )
     logger.info(
         "Evaluation summary:\n%s",

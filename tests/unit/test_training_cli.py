@@ -12,6 +12,30 @@ from infoskill.cli import _parser, main
 
 
 class TrainingCliTests(unittest.TestCase):
+    def test_infoskill_eval_grouped_conditioning_is_explicitly_opt_in(self) -> None:
+        default = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+            ]
+        )
+        optimized = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+                "--grouped-infoskill-conditioning",
+            ]
+        )
+
+        self.assertFalse(default.grouped_infoskill_conditioning)
+        self.assertTrue(optimized.grouped_infoskill_conditioning)
+
     def test_grounding_accepts_explicit_resume_and_inactivity_timeout(self) -> None:
         arguments = _parser().parse_args(
             [

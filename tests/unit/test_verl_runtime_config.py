@@ -138,6 +138,7 @@ class _WorkerGroup:
         self._data_proto = data_proto
         self._numpy = numpy_module
         self.received_rows = 0
+        self.received_candidate_groups = ()
 
     def condition_infoskill(self, data):
         from infoskill.conditioning import (
@@ -146,6 +147,10 @@ class _WorkerGroup:
         )
 
         self.received_rows = len(data)
+        self.received_candidate_groups = tuple(
+            item.candidate_skill_ids
+            for item in data.non_tensor_batch["infoskill_work_item"]
+        )
         results = []
         for row, item in enumerate(data.non_tensor_batch["infoskill_work_item"]):
             trace = InfoSkillReplayTrace(

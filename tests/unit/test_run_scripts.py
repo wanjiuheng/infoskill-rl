@@ -5,6 +5,21 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_grouped_infoskill_conditioning_is_eval_only_and_opt_in(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'GROUPED_INFOSKILL_CONDITIONING="${GROUPED_INFOSKILL_CONDITIONING:-0}"',
+            script,
+        )
+        eval_case = script.split("  eval)\n", 1)[1].split("  raw-skill-ab|", 1)[0]
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+        self.assertIn("--grouped-infoskill-conditioning", eval_case)
+        self.assertNotIn("grouped-infoskill-conditioning", train_case)
+
     def test_timeout_rescue_is_targeted_resumable_and_longer_bounded(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

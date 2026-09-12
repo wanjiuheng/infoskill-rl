@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from infoskill.conditioning import (
+    ConditioningContext,
     ConditioningRequest,
     InfoSkillConditioningResult,
     InfoSkillConditioningWorkItem,
@@ -132,6 +133,114 @@ class RuntimeInfoSkillConditionerTests(unittest.TestCase):
                 conditioner.prepare_group(state),
             )
 
+    def test_groups_share_one_runtime_call_and_keep_per_task_candidates(self) -> None:
+        first = _request("task-1", latent_seed=11)
+        second = _request("task-2", latent_seed=12)
+        trace = InfoSkillReplayTrace(
+            latent_seed=11,
+            state_summary="summary",
+            state_tokens="tokens",
+            posterior_mu="mu",
+            posterior_logvar="logvar",
+            latent="latent",
+            epsilon="epsilon",
+        )
+        runtime = _Runtime(
+            outputs=(
+                InfoSkillConditioningResult("prefix-1", trace),
+                InfoSkillConditioningResult("prefix-2", trace),
+            )
+        )
+        conditioner = RuntimeInfoSkillConditioner(
+            retriever=_Retriever(
+                RetrievalResult("embedding", "goal", ())
+            ),
+            runtime=runtime,
+            latent_mode="mean",
+            group_across_tasks=True,
+        )
+        contexts = (
+            ConditioningContext(
+                candidate_skill_ids=("skill-1",),
+                retrieval=RetrievalResult("embedding", "goal-1", ()),
+            ),
+            ConditioningContext(
+                candidate_skill_ids=("skill-2", "skill-3"),
+                retrieval=RetrievalResult("embedding", "goal-2", ()),
+            ),
+        )
+
+        grouped = conditioner.condition_groups(
+            ((first,), (second,)),
+            contexts,
+        )
+
+        self.assertEqual(runtime.grouped_calls, 1)
+        self.assertEqual(
+            runtime.call[1],
+            (("skill-1",), ("skill-2", "skill-3")),
+        )
+        self.assertEqual(
+            tuple(item[0].candidate_skill_ids for item in grouped),
+            (("skill-1",), ("skill-2", "skill-3")),
+        )
+
+    def test_grouping_is_opt_in_and_default_preserves_per_task_calls(self) -> None:
+        first = _request("task-1", latent_seed=11)
+        second = _request("task-2", latent_seed=12)
+        trace = InfoSkillReplayTrace(
+            latent_seed=11,
+            state_summary="summary",
+            state_tokens="tokens",
+            posterior_mu="mu",
+            posterior_logvar="logvar",
+            latent="latent",
+            epsilon="epsilon",
+        )
+        runtime = _Runtime(
+            outputs=(InfoSkillConditioningResult("prefix", trace),)
+        )
+        conditioner = RuntimeInfoSkillConditioner(
+            retriever=_Retriever(RetrievalResult("embedding", "goal", ())),
+            runtime=runtime,
+            latent_mode="mean",
+        )
+        contexts = (
+            ConditioningContext(
+                candidate_skill_ids=("skill-1",),
+                retrieval=RetrievalResult("embedding", "goal-1", ()),
+            ),
+            ConditioningContext(
+                candidate_skill_ids=("skill-2",),
+                retrieval=RetrievalResult("embedding", "goal-2", ()),
+            ),
+        )
+
+        conditioner.condition_groups(((first,), (second,)), contexts)
+
+        self.assertEqual(runtime.grouped_calls, 0)
+        self.assertEqual(runtime.regular_calls, 2)
+
+
+def _request(task_id: str, *, latent_seed: int) -> ConditioningRequest:
+    state = CanonicalAgentState(
+        task_id=task_id,
+        split="train",
+        task_type="pick_and_place_simple",
+        goal="goal",
+        step_index=0,
+        observation="room",
+        history=(),
+        admissible_commands=("look",),
+    )
+    return ConditioningRequest(
+        state=state,
+        views=render_state_views(state),
+        rollout_id=0,
+        global_update=0,
+        latent_seed=latent_seed,
+    )
+
 
 class _Retriever:
     def __init__(self, result: RetrievalResult) -> None:
@@ -147,9 +256,23 @@ class _Runtime:
     def __init__(self, *, outputs: tuple[InfoSkillConditioningResult, ...]) -> None:
         self.outputs = outputs
         self.call = None
+        self.grouped_calls = 0
+        self.regular_calls = 0
 
     def condition_infoskill(self, requests, candidate_skill_ids, *, latent_mode):
+        self.regular_calls += 1
         self.call = (requests, candidate_skill_ids, latent_mode)
+        return self.outputs
+
+    def condition_infoskill_grouped(
+        self,
+        requests,
+        candidate_skill_ids_by_request,
+        *,
+        latent_mode,
+    ):
+        self.grouped_calls += 1
+        self.call = (requests, candidate_skill_ids_by_request, latent_mode)
         return self.outputs
 
 

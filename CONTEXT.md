@@ -316,6 +316,20 @@ manifest，并记录源 manifest SHA 和救援生命周期。理论最坏约 110
 16 GiB，救援过程可按一任务一 shard 断点恢复。只有派生 manifest 重新通过 formal gate 后
 才能作为 M1 grounding 输入。
 
+M1 首个 3-GPU smoke 已完成两个 update，并在固定 140 条 `valid_seen` 上验证了 update 0 与
+update 2。update 2 的 portable checkpoint 在三个 rank 上均加载 LoRA 与 INFO-SKILL 状态；
+主指标由 37/140、macro 0.25618 变为 36/140、macro 0.25043，无效动作率由 0.08787 降至
+0.07949。两个 update 只构成链路 smoke，不据此宣称学习改善或退化。两次评测分别约 40 与
+70 分钟，但轨迹步数、prompt token 和 response token 几乎相同，证明额外耗时不是样本工作量
+增加。代码审计发现 native-batch collector 每一步仍按 task 分别调用 M1 conditioning，单次
+140 条评测约产生 3,500 个小型分布式调用；3-GPU 下单请求还需补齐到 world size。
+
+现提供仅限评测、默认关闭的 `GROUPED_INFOSKILL_CONDITIONING=1` 候选，把同一环境批次中各
+task 的 conditioning 合并为一次 RPC，同时保留每条请求自己的候选技能。旧训练与评测默认
+语义不变。候选必须在相同模型、checkpoint、GPU 数、环境后端、检索计划和 140 条 manifest
+上通过完整 trajectory/token/logprob 对比，并至少达到 1.05x rollout 提速，才可讨论升级默认；
+失败时保持开关为 0，不影响现有结果。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

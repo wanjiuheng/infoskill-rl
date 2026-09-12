@@ -104,6 +104,40 @@ class EvaluationRunnerTests(unittest.TestCase):
             },
         )
 
+    def test_performance_metrics_are_aggregated_across_evaluation_batches(self) -> None:
+        task = TaskSpec(
+            task_id="task-1",
+            split="valid_seen",
+            task_type="pick_and_place_simple",
+            goal="goal",
+        )
+
+        class TimedCollector(_RecordingCollector):
+            def performance_metrics(self):
+                return {
+                    "perf/collector_seconds": 2.0,
+                    "perf/rollout_conditioning_seconds": 0.5,
+                    "perf/environment_workers": 1.0,
+                    "perf/native_environment_batch": 1.0,
+                }
+
+        run = EvaluationRunner(
+            collector_factory=TimedCollector,  # type: ignore[arg-type]
+            config=EvaluationConfig(),
+            task_batch_size=1,
+        ).run((task, task))
+
+        self.assertEqual(run.performance_metrics["perf/collector_seconds"], 4.0)
+        self.assertEqual(
+            run.performance_metrics["perf/rollout_conditioning_seconds"],
+            1.0,
+        )
+        self.assertEqual(run.performance_metrics["perf/environment_workers"], 1.0)
+        self.assertEqual(
+            run.performance_metrics["perf/native_environment_batch"],
+            1.0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

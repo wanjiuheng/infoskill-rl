@@ -238,6 +238,25 @@ class _RecordingConditioner(NoSkillConditioner):
         return super().condition_batch(requests, context)
 
 
+class _GroupedRecordingConditioner(NoSkillConditioner):
+    groups_across_tasks = True
+
+    def __init__(self) -> None:
+        self.grouped_call_sizes: list[tuple[int, ...]] = []
+
+    def condition_groups(self, request_groups, contexts):
+        self.grouped_call_sizes.append(
+            tuple(len(requests) for requests in request_groups)
+        )
+        return tuple(
+            super(_GroupedRecordingConditioner, self).condition_batch(
+                requests,
+                context,
+            )
+            for requests, context in zip(request_groups, contexts)
+        )
+
+
 class TrajectoryCollectorTests(unittest.TestCase):
     def test_prompt_overflow_removes_oldest_history_and_records_it(self) -> None:
         backend = _HistoryOverflowBackend()
@@ -379,6 +398,36 @@ class TrajectoryCollectorTests(unittest.TestCase):
 
         self.assertEqual(len(groups), 2)
         self.assertEqual(backend.batch_sizes, [4])
+
+    def test_multiple_task_groups_share_one_conditioning_batch(self) -> None:
+        conditioner = _GroupedRecordingConditioner()
+        collector = TrajectoryCollector(
+            environment_factory=_FakeEnvironmentFactory(),
+            conditioner=conditioner,
+            rollout_backend=_FakeRolloutBackend(),
+            max_steps=1,
+            history_limit=2,
+            invalid_action_penalty=0.01,
+        )
+        tasks = tuple(
+            TaskSpec(
+                task_id=f"game-{index}",
+                split="train",
+                task_type="pick_and_place_simple",
+                goal="put the apple in the fridge",
+            )
+            for index in range(2)
+        )
+
+        collector.collect_task_groups(tasks, rollouts_per_task=2, master_seed=0)
+
+        self.assertEqual(conditioner.grouped_call_sizes, [(2, 2)])
+        self.assertEqual(
+            collector.performance_metrics()[
+                "perf/rollout_conditioning_batch_calls"
+            ],
+            1.0,
+        )
 
     def test_nested_collections_share_one_backend_rollout_session(self) -> None:
         backend = _FakeRolloutBackend()

@@ -56,6 +56,9 @@ PLANNER_LOOP_MAX_REPLAY_STEPS="${PLANNER_LOOP_MAX_REPLAY_STEPS:-300}"
 DRY_RUN="${DRY_RUN:-0}"
 # Validated by exact semantic/token/logprob A/B parity; set to 0 for rollback.
 PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
+# Experimental M1 eval-only fast path. Default 0 preserves the registered
+# per-task conditioning behavior until exact server parity is demonstrated.
+GROUPED_INFOSKILL_CONDITIONING="${GROUPED_INFOSKILL_CONDITIONING:-0}"
 # Used only by the individual backend; native_batch owns one process per slot.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
 # Validated by CPU differential, 64-trajectory A/B and two-update longevity gates.
@@ -111,6 +114,10 @@ if [[ ! "${POLICY_MAX_TOKENS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "1" ]]; then
   echo "BALANCE_POLICY_TOKENS_ACROSS_RANKS must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "${GROUPED_INFOSKILL_CONDITIONING}" != "0" && "${GROUPED_INFOSKILL_CONDITIONING}" != "1" ]]; then
+  echo "GROUPED_INFOSKILL_CONDITIONING must be 0 or 1" >&2
   exit 2
 fi
 if [[ ! "${RAW_SKILL_AB_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
@@ -257,6 +264,10 @@ case "${ACTION}" in
         echo "PERSISTENT_ROLLOUT_SESSION must be 0 or 1" >&2
         exit 2
         ;;
+    esac
+    case "${GROUPED_INFOSKILL_CONDITIONING}" in
+      1) EVAL_ARGS+=(--grouped-infoskill-conditioning) ;;
+      0) EVAL_ARGS+=(--no-grouped-infoskill-conditioning) ;;
     esac
     case "${VERBOSE_RUNTIME_LOGS}" in
       0) ;;

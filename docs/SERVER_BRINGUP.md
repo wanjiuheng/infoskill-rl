@@ -1656,6 +1656,61 @@ bash scripts/run_alfworld.sh grounding-timeout-rescue
 只有新目录的 `grounding-rescue-report.json` 显示
 `derived_formal_gate_passed: true` 后，才停止原救援进程并把新目录登记为 `GROUNDING_DATA`。
 
+## M1 评测 conditioning 合批候选
+
+M1 的旧评测路径仍是默认。以下候选只把同一 native environment batch 中各任务的 soft-prefix
+conditioning 合并到一个分布式调用，不改变模型、checkpoint、检索结果、生成参数、环境或
+评测集合。第一次只跑 update 0，并复用已有 update-0 作为 baseline；预期约 20--45 分钟。
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+git pull origin main
+
+BASE=/root/autodl-tmp/wjh/alfworld_eval/infoskill/runs/20260912T164508Z-m1-infoskill-valid-seen-update0
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-infoskill-grouped-conditioning-update0-${STAMP}.log"
+
+nohup env \
+  GPUS=0,1,2 \
+  EVAL_BACKEND=verl \
+  CHECKPOINT_STEP=0 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  GROUPED_INFOSKILL_CONDITIONING=1 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-infoskill-grouped-conditioning-update0 \
+  bash scripts/run_alfworld.sh eval infoskill \
+  >"$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" >"${LOG}.pid"
+disown "$PID"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+完成后执行严格门禁。旧 baseline 没有新加入的细分计时是正常的；candidate 会在
+`valid_seen_summary.json.rollout_performance` 中报告 conditioning/generation/environment
+分项和 conditioning batch call 数。
+
+```bash
+OPTIMIZED=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-infoskill-grouped-conditioning-update0' \
+  | sort | tail -n 1)
+
+python scripts/compare_infoskill_conditioning_runs.py \
+  "$BASE" \
+  "$OPTIMIZED" \
+  --minimum-rollout-speedup 1.05 \
+  | tee "$OPTIMIZED/conditioning-parity.json"
+```
+
+只有报告同时满足 `settings_valid=true`、`semantic_exact=true`、`logprobs_close=true`、
+`performance_valid=true` 和 `passed=true` 才进入下一步；否则保持默认关闭，不用于训练或正式
+评测。若通过，再用相同 checkpoint 做一次 update-2 复核后决定是否扩大到训练路径。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

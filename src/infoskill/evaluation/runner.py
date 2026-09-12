@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 from infoskill.config import EvaluationConfig
 from infoskill.episode import TaskSpec, TrajectoryCollector, TrajectoryGroup
@@ -15,6 +15,7 @@ class EvaluationRun:
     records: tuple[EpisodeEvaluation, ...]
     summary: EvaluationSummary
     groups: tuple[TrajectoryGroup, ...] = ()
+    performance_metrics: Mapping[str, float] | None = None
 
 
 class EvaluationRunner:
@@ -39,11 +40,13 @@ class EvaluationRunner:
         del checkpoint_step
         records: list[EpisodeEvaluation] = []
         all_groups: list[TrajectoryGroup] = []
+        performance_metrics: dict[str, float] = {}
         for start in range(0, len(tasks), self.task_batch_size):
             batch = tuple(tasks[start : start + self.task_batch_size])
-            batch_records, groups = self._run_batch(batch)
+            batch_records, groups, batch_metrics = self._run_batch(batch)
             records.extend(batch_records)
             all_groups.extend(groups)
+            _merge_performance_metrics(performance_metrics, batch_metrics)
             if self.on_progress:
                 self.on_progress(len(batch))
         frozen = tuple(records)
@@ -51,11 +54,16 @@ class EvaluationRunner:
             frozen,
             aggregate_valid_seen(frozen, config=self.config),
             tuple(all_groups),
+            performance_metrics,
         )
 
     def _run_batch(
         self, tasks: tuple[TaskSpec, ...]
-    ) -> tuple[list[EpisodeEvaluation], tuple[TrajectoryGroup, ...]]:
+    ) -> tuple[
+        list[EpisodeEvaluation],
+        tuple[TrajectoryGroup, ...],
+        Mapping[str, float],
+    ]:
         last_error: Exception | None = None
         for _ in range(self.config.infrastructure_retries + 1):
             collector = self.collector_factory()
@@ -66,7 +74,7 @@ class EvaluationRunner:
                     master_seed=self.master_seed,
                     global_update=0,
                 )
-                return [
+                records = [
                     EpisodeEvaluation(
                         task_id=group.task.task_id,
                         task_type=group.task.task_type,
@@ -75,7 +83,10 @@ class EvaluationRunner:
                         invalid_action_count=group.trajectories[0].invalid_action_count,
                     )
                     for group in groups
-                ], groups
+                ]
+                metrics_factory = getattr(collector, "performance_metrics", None)
+                metrics = metrics_factory() if metrics_factory is not None else {}
+                return records, groups, metrics
             except Exception as error:
                 last_error = error
         assert last_error is not None
@@ -94,4 +105,21 @@ class EvaluationRunner:
                 ),
             )
             for task in tasks
-        ], ()
+        ], (), {}
+
+
+_MAXIMUM_PERFORMANCE_METRICS = {
+    "perf/environment_workers",
+    "perf/native_environment_batch",
+}
+
+
+def _merge_performance_metrics(
+    aggregate: dict[str, float],
+    batch: Mapping[str, float],
+) -> None:
+    for key, value in batch.items():
+        if key in _MAXIMUM_PERFORMANCE_METRICS:
+            aggregate[key] = max(aggregate.get(key, value), value)
+        else:
+            aggregate[key] = aggregate.get(key, 0.0) + value

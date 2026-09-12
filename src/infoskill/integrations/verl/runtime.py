@@ -264,10 +264,29 @@ class VerlRuntime:
     ) -> tuple[InfoSkillConditioningResult, ...]:
         """Condition states on the same workers that own trainable M1 modules."""
 
+        return self.condition_infoskill_grouped(
+            requests,
+            tuple(candidate_skill_ids for _ in requests),
+            latent_mode=latent_mode,
+        )
+
+    def condition_infoskill_grouped(
+        self,
+        requests: tuple[ConditioningRequest, ...],
+        candidate_skill_ids_by_request: tuple[tuple[str, ...], ...],
+        *,
+        latent_mode: Literal["sample", "mean"],
+    ) -> tuple[InfoSkillConditioningResult, ...]:
+        """Condition requests with per-episode candidates in one worker RPC."""
+
         if not self.config.enable_infoskill_modules:
             raise RuntimeError("INFO-SKILL runtime modules are not enabled")
         if not requests:
+            if candidate_skill_ids_by_request:
+                raise ValueError("empty requests cannot have candidate skills")
             return ()
+        if len(requests) != len(candidate_skill_ids_by_request):
+            raise ValueError("conditioning requests and candidate skills must align")
         import numpy as np
         import torch
         from verl import DataProto
@@ -280,7 +299,10 @@ class VerlRuntime:
                 latent_seed=request.latent_seed,
                 latent_mode=latent_mode,
             )
-            for request in requests
+            for request, candidate_skill_ids in zip(
+                requests,
+                candidate_skill_ids_by_request,
+            )
         )
         data = DataProto.from_dict(
             tensors={"infoskill_row_id": torch.arange(len(items))},

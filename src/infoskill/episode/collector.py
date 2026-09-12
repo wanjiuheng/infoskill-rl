@@ -7,7 +7,12 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from typing import Callable, Literal, TypeVar, cast
 
-from infoskill.conditioning import ConditioningRequest, SkillConditioner
+from infoskill.conditioning import (
+    ConditionedPolicyInput,
+    ConditioningContext,
+    ConditioningRequest,
+    SkillConditioner,
+)
 from infoskill.domain.actions import resolve_action
 from infoskill.domain.rewards import trajectory_reward
 from infoskill.domain.state import CanonicalAgentState, render_state_views
@@ -54,6 +59,23 @@ def _ordered_map(
     if executor is None:
         return tuple(map(function, items))
     return tuple(executor.map(function, items))
+
+
+def _condition_request_groups(
+    conditioner: SkillConditioner,
+    request_groups: tuple[tuple[ConditioningRequest, ...], ...],
+    contexts: tuple[ConditioningContext, ...],
+) -> tuple[tuple[ConditionedPolicyInput, ...], ...]:
+    grouped = getattr(conditioner, "condition_groups", None)
+    if grouped is not None:
+        return cast(
+            tuple[tuple[ConditionedPolicyInput, ...], ...],
+            grouped(request_groups, contexts),
+        )
+    return tuple(
+        conditioner.condition_batch(requests, context)
+        for requests, context in zip(request_groups, contexts)
+    )
 
 
 def _semantic_seed(
@@ -162,6 +184,7 @@ class TrajectoryCollector:
         environment_step_seconds = 0.0
         environment_close_seconds = 0.0
         conditioning_seconds = 0.0
+        conditioning_batch_calls = 0.0
         backend_generate_seconds = 0.0
         action_resolution_seconds = 0.0
         environment_forced_terminations = 0.0
@@ -265,6 +288,7 @@ class TrajectoryCollector:
                     prepared: list[tuple[int, int, CanonicalAgentState, object]] = []
                     history_limits: dict[tuple[int, int], int] = {}
                     configured_history_limits: dict[tuple[int, int], int] = {}
+                    pending_groups = []
                     for task_index in range(len(tasks)):
                         rollout_ids = [
                             rollout_id for index, rollout_id in active if index == task_index
@@ -294,9 +318,7 @@ class TrajectoryCollector:
                             render_state_views(state, history_limit=limit)
                             for state, limit in zip(active_states, limits)
                         )
-                        stage_started = time.perf_counter()
-                        conditioned = self._conditioner.condition_batch(
-                            tuple(
+                        requests = tuple(
                                 ConditioningRequest(
                                     state=state,
                                     views=view,
@@ -315,10 +337,43 @@ class TrajectoryCollector:
                                 for rollout_id, state, view, limit in zip(
                                     rollout_ids, active_states, views, limits
                                 )
-                            ),
-                            contexts[task_index],
                         )
-                        conditioning_seconds += time.perf_counter() - stage_started
+                        pending_groups.append(
+                            (
+                                task_index,
+                                rollout_ids,
+                                active_states,
+                                limits,
+                                requests,
+                                contexts[task_index],
+                            )
+                        )
+
+                    stage_started = time.perf_counter()
+                    conditioning_batch_calls += (
+                        1.0
+                        if getattr(
+                            self._conditioner,
+                            "groups_across_tasks",
+                            False,
+                        )
+                        else float(len(pending_groups))
+                    )
+                    conditioned_groups = _condition_request_groups(
+                        self._conditioner,
+                        tuple(group[4] for group in pending_groups),
+                        tuple(group[5] for group in pending_groups),
+                    )
+                    conditioning_seconds += time.perf_counter() - stage_started
+                    if len(conditioned_groups) != len(pending_groups):
+                        raise RuntimeError(
+                            "conditioner returned a different task-group count"
+                        )
+                    for pending, conditioned in zip(
+                        pending_groups,
+                        conditioned_groups,
+                    ):
+                        task_index, rollout_ids, active_states, limits, _, _ = pending
                         if len(conditioned) != len(rollout_ids):
                             raise RuntimeError("conditioner returned a different batch size")
                         conditioned = tuple(
@@ -597,6 +652,9 @@ class TrajectoryCollector:
                     "perf/environment_step_seconds": environment_step_seconds,
                     "perf/environment_close_seconds": environment_close_seconds,
                     "perf/rollout_conditioning_seconds": conditioning_seconds,
+                    "perf/rollout_conditioning_batch_calls": (
+                        conditioning_batch_calls
+                    ),
                     "perf/rollout_backend_generate_seconds": backend_generate_seconds,
                     "perf/rollout_action_resolution_seconds": action_resolution_seconds,
                     "perf/environment_workers": float(self._environment_workers),
