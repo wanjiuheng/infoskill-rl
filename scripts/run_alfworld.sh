@@ -375,14 +375,7 @@ case "${ACTION}" in
       --native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}"
       --worker-inactivity-timeout-seconds "${GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS}"
     )
-    if [[ -n "${GROUNDING_RESCUE_FINALIZE_RUN}" ]]; then
-      if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
-        echo "GROUNDING_RESCUE_FINALIZE_RUN cannot be combined with GROUNDING_RESUME_RUN" >&2
-        exit 2
-      fi
-      GROUNDING_RESCUE_ARGS+=(--finalize-committed-rescue-run "${GROUNDING_RESCUE_FINALIZE_RUN}")
-      GROUNDING_RESCUE_ARGS+=("${EXTRA_ARGS[@]}")
-    elif [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
+    if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
       if [[ -n "${RUN_NAME}" ]]; then
         echo "GROUNDING_RESUME_RUN cannot be combined with RUN_NAME" >&2
         exit 2
@@ -404,7 +397,14 @@ case "${ACTION}" in
       --worker-processes "${GROUNDING_RESCUE_WORKER_PROCESSES}"
       --worker-inactivity-timeout-seconds "${GROUNDING_RESCUE_TIMEOUT_SECONDS}"
     )
-    if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
+    if [[ -n "${GROUNDING_RESCUE_FINALIZE_RUN}" ]]; then
+      if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
+        echo "GROUNDING_RESCUE_FINALIZE_RUN cannot be combined with GROUNDING_RESUME_RUN" >&2
+        exit 2
+      fi
+      GROUNDING_RESCUE_ARGS+=(--finalize-committed-rescue-run "${GROUNDING_RESCUE_FINALIZE_RUN}")
+      GROUNDING_RESCUE_ARGS+=("${EXTRA_ARGS[@]}")
+    elif [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
       if [[ -n "${RUN_NAME}" ]]; then
         echo "GROUNDING_RESUME_RUN cannot be combined with RUN_NAME" >&2
         exit 2

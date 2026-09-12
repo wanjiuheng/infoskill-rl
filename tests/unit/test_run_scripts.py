@@ -32,6 +32,13 @@ class RunScriptTests(unittest.TestCase):
             'GROUNDING_RESCUE_ARGS+=(--finalize-committed-rescue-run "${GROUNDING_RESCUE_FINALIZE_RUN}")',
             script,
         )
+        grounding_case = script.split("  grounding)\n", 1)[1].split("    ;;", 1)[0]
+        rescue_case = script.split("  grounding-timeout-rescue)\n", 1)[1].split(
+            "    ;;", 1
+        )[0]
+        self.assertNotIn("GROUNDING_RESCUE_FINALIZE_RUN", grounding_case)
+        self.assertIn("GROUNDING_RESCUE_FINALIZE_RUN", rescue_case)
+        self.assertIn("--finalize-committed-rescue-run", rescue_case)
 
     def test_planner_loop_diagnostic_is_cpu_only_and_uses_source_pilot(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
