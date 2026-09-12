@@ -104,3 +104,26 @@ Grounding 的并发单位是相互独立的短生命周期 CPU worker，而不�
 监控；低于下限时终止 worker、保留失败报告，不允许等待磁盘写满。正式默认仍为
 `individual`，只有 12 条 exact parity 与 60 条生命周期/性能门同时通过，才可在
 3,553 条正式运行中显式选择更快后端。
+
+## D019：grounding 分片必须可恢复，并对 planner 无进展设置墙钟熔断
+
+2026-09-12 的首个 3,553 条 `native_batch_size=4` 正式运行在 3,008 条后停止推进：
+第 48 个 64 条 shard 已创建输入但尚未写出任何结果，其中一个 TextWorld/Fast Downward
+子进程持续占满单核超过一小时。磁盘仍有约 24 GiB、inode 充足、系统 I/O wait 为零且
+绝大多数 CPU 空闲，因此根因不是资源总量不足，而是 planner 的同步
+`policy_commands`/搜索调用缺少墙钟上限；逻辑 `max_replay_steps=150` 只能限制已经返回的
+环境步数，无法中断一次不返回的 reset/step。父进程原先又只在全部 3,553 条结束后写正式
+结果，导致已完成的 3,008 条只存在内存，进程终止后无法可靠恢复。
+
+此后 bounded grounding 在 run 目录保存不可变的 `grounding-resume.json`，并在每个 shard
+完成后先原子写 `grounding-shards/shard-NNNN/results.jsonl`，再提交带工作项、结果和计划
+SHA-256 的 `complete.json`。恢复时逐项验证任务顺序、候选技能、种子、源码校验和、配置、
+后端、批大小、并发、horizon 与超时设置；任一字段或校验和不符即 fail closed，绝不混合
+两套标签。没有
+这些文件的历史运行不可恢复。
+
+worker 默认连续 300 秒没有完成任何任务即视为无进展。父进程以独立 POSIX process group
+启动 worker，并在超时时终止整棵 TextWorld 子进程树；已 flush 且已经宣布完成的前缀结果
+予以保留，未完成部分改用 `individual` 逐任务隔离。单任务再次超时不会伪造专家动作，而以
+`expert_wall_timeout` 进入 quarantine，并保留异常类型和阶段。formal 的 99% 覆盖率门保持
+不变，所以超时过多会让数据生成明确失败，而不会静默降低训练数据质量。

@@ -8,10 +8,26 @@ from pathlib import Path
 from unittest.mock import patch
 
 from infoskill.app_config import AppConfig
-from infoskill.cli import main
+from infoskill.cli import _parser, main
 
 
 class TrainingCliTests(unittest.TestCase):
+    def test_grounding_accepts_explicit_resume_and_inactivity_timeout(self) -> None:
+        arguments = _parser().parse_args(
+            [
+                "grounding",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--resume-run",
+                "/runs/formal-grounding",
+                "--worker-inactivity-timeout-seconds",
+                "420",
+            ]
+        )
+
+        self.assertEqual(arguments.resume_run, "/runs/formal-grounding")
+        self.assertEqual(arguments.worker_inactivity_timeout_seconds, 420.0)
+
     @staticmethod
     def _arguments() -> list[str]:
         return [

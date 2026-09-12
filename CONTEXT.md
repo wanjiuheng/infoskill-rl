@@ -275,13 +275,19 @@ grounding。
 v2 并记录/强制校验专家身份。旧 schema v1 或未验证的 handcoded grounding 不能被 M1
 加载。
 
-正式 grounding 尚未切换到提速后端。当前代码提供两个可回退候选：4 个独立 bounded
-worker 的 `process_parallel`，以及单 worker 内固定 slot 的 `native_batch` planner
-replay。后者会逐 slot 保存与串行相同的状态、专家动作和终局数据，完成 slot 的占位动作
-不会落入样本；运行时按环境 slot 预留磁盘并以 0.5 秒周期执行 4 GiB 硬熔断。采用顺序
-固定为：12 条四 worker exact parity、12 条 native-batch exact parity、60 条
-native-batch exact/性能/生命周期压力门。只有候选逐字段完全一致、身份和清理门通过且
-60 条达到设定提速门槛，才能用于 3,553 条；否则回滚到已验证的双 worker individual。
+Grounding 提速候选包括 4 个独立 bounded worker 的 `process_parallel`，以及单 worker 内
+固定 slot 的 `native_batch` planner replay。后者会逐 slot 保存与串行相同的状态、专家动作
+和终局数据，完成 slot 的占位动作不会落入样本；运行时按环境 slot 预留磁盘并以 0.5 秒
+周期执行 4 GiB 硬熔断。12 条四 worker 和 12 条 native-batch exact parity 已通过，用户随后
+批准以 `native_batch_size=4` 启动正式运行；原计划中的 60 条生命周期压力门没有执行，因而
+该次正式运行仍承担了尚未覆盖的长尾存活性风险。
+
+首个 `native_batch_size=4` 的 3,553 条正式运行在 3,008 条后暴露 planner 单核搜索长期
+不返回；磁盘、inode、内存与整机 CPU 均非瓶颈。该历史运行由旧提交 `925498c` 产生，只在
+父进程内存保留已完成结果，因此不能恢复。当前修复增加逐 shard 原子提交、严格校验恢复、
+默认 300 秒无任务完成熔断、POSIX 子进程组清理，以及卡住批次的 individual 隔离；单任务
+仍超时则以 `expert_wall_timeout` quarantine，99% formal gate 不放宽。该机制已通过本地
+故障注入单元测试，仍需服务器小样本超时/恢复 smoke 后才能重新启动正式 grounding。
 
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。

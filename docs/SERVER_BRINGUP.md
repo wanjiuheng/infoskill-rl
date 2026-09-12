@@ -1444,3 +1444,32 @@ echo "pid=${PID} log=${LOG}"
 `field_checks/lifecycle_checks/identity_checks=true`、`performance_passed=true`，并且
 `parallel.peak_environment_slots` 与候选一致。任何失败都不要启动 3,553 条正式运行；
 保留对应 run 目录用于诊断。
+
+## Grounding 卡死保护与断点恢复
+
+提交 `925498c` 生成的旧正式运行没有逐 shard 持久化；即使进度曾到 3,008/3,553，也不能
+从该数字安全恢复。更新代码后应先停止旧进程树，再创建一次新的小规模验证运行。新运行会
+生成 `grounding-resume.json` 和 `grounding-shards/shard-NNNN/{results.jsonl,complete.json}`。
+只有存在并通过 SHA-256、任务顺序及参数校验的 `complete.json` 才算可恢复。
+
+默认无进展上限为 300 秒。这个计时器在每完成一个任务后重置；触发时会终止整个 worker
+进程组，把尚未完成的任务改为逐条隔离。单条任务仍超时会明确写为
+`expert_wall_timeout`，不会产生伪造标签，也不会放宽 99% formal coverage gate。需要调整时
+使用 `GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS`，正式运行建议保持 300。
+
+恢复一个由新版本创建、参数完全相同的 run 时，不要同时设置 `RUN_NAME`：
+
+```bash
+GROUNDING_RESUME_RUN=/absolute/path/to/runs/<grounding-run> \
+GROUNDING_WORKER_BATCH_SIZE=64 \
+GROUNDING_WORKER_PROCESSES=1 \
+GROUNDING_REPLAY_BACKEND=native_batch \
+GROUNDING_NATIVE_BATCH_SIZE=4 \
+GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS=300 \
+INFO_SKILL_CPU_THREADS=1 \
+bash scripts/run_alfworld.sh grounding
+```
+
+程序会先把已提交任务计入进度条，只执行缺失 shard。若工作项、源码校验和、配置文件内容
+或任何关键运行参数与原 run 不一致，会在启动 worker 前拒绝恢复；此时应检出原提交后再
+恢复，不要手工修改 `grounding-resume.json`。

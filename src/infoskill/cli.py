@@ -147,6 +147,13 @@ def _parser() -> argparse.ArgumentParser:
     grounding.add_argument("--config", required=True)
     grounding.add_argument("--run-name")
     grounding.add_argument(
+        "--resume-run",
+        help=(
+            "existing grounding run directory whose committed shards should "
+            "be validated and reused"
+        ),
+    )
+    grounding.add_argument(
         "--worker-batch-size",
         type=int,
         default=64,
@@ -162,6 +169,15 @@ def _parser() -> argparse.ArgumentParser:
         default="individual",
     )
     grounding.add_argument("--native-batch-size", type=int, default=4)
+    grounding.add_argument(
+        "--worker-inactivity-timeout-seconds",
+        type=float,
+        default=300.0,
+        help=(
+            "terminate a worker after this many seconds without a completed "
+            "task, then isolate unfinished tasks"
+        ),
+    )
     grounding_diagnostic = subparsers.add_parser(
         "grounding-expert-diagnostic",
         help="compare strict handcoded replay with the ALFWorld planner",
@@ -1392,8 +1408,11 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         args.worker_batch_size <= 0
         or args.worker_processes <= 0
         or args.native_batch_size <= 0
+        or args.worker_inactivity_timeout_seconds <= 0
     ):
         raise ValueError("grounding worker sizes must be positive")
+    if args.resume_run and args.run_name:
+        raise ValueError("grounding resume-run cannot be combined with run-name")
     from tqdm.auto import tqdm
 
     from infoskill.integrations.alfworld import (
@@ -1411,7 +1430,14 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         TemplateRetriever,
     )
 
-    run_directory = _run_directory(config, args.run_name or "grounding")
+    if args.resume_run:
+        run_directory = Path(args.resume_run).expanduser().resolve()
+        if not run_directory.is_dir():
+            raise FileNotFoundError(
+                f"grounding resume run does not exist: {run_directory}"
+            )
+    else:
+        run_directory = _run_directory(config, args.run_name or "grounding")
     logger = _configure_logging(run_directory)
     tasks = discover_tasks(config.paths.alfworld_data, split="train")
     expert_binding = prepare_alfworld_expert_type_binding(
@@ -1451,6 +1477,7 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         )
         for task in tasks
     )
+    source_checksum = _source_checksum()
     with tqdm(
         total=len(tasks),
         desc="train/expert-replay",
@@ -1468,6 +1495,10 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
             expert_type="planner",
             replay_backend=args.replay_backend,
             native_batch_size=args.native_batch_size,
+            worker_inactivity_timeout_seconds=(
+                args.worker_inactivity_timeout_seconds
+            ),
+            source_checksum=source_checksum,
             on_progress=progress.update,
         )
     manifest = build_grounding_manifest(
@@ -1475,9 +1506,9 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
         source_checksums={
             "skill_bank": library.source_sha256,
             "train_task_manifest": _task_manifest_checksum(tasks),
-            "infoskill_source": _source_checksum(),
+            "infoskill_source": source_checksum,
         },
-        code_revision=_source_checksum()[:16],
+        code_revision=source_checksum[:16],
         max_replay_steps=150,
         persist_horizon=config.max_steps,
         expert_type="planner",

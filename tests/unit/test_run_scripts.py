@@ -108,6 +108,18 @@ class RunScriptTests(unittest.TestCase):
             '--worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}"',
             script,
         )
+        self.assertIn(
+            'GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS="${GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS:-300}"',
+            script,
+        )
+        self.assertIn(
+            '--worker-inactivity-timeout-seconds "${GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS}"',
+            script,
+        )
+        self.assertIn(
+            'GROUNDING_ARGS+=(--resume-run "${GROUNDING_RESUME_RUN}")',
+            script,
+        )
 
     def test_grounding_expert_diagnostic_is_cpu_only_and_stratified(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

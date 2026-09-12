@@ -27,6 +27,10 @@ GROUNDING_WORKER_PROCESSES="${GROUNDING_WORKER_PROCESSES:-1}"
 # and the 60-task lifecycle/performance gate pass on the target server.
 GROUNDING_REPLAY_BACKEND="${GROUNDING_REPLAY_BACKEND:-individual}" # individual | native_batch
 GROUNDING_NATIVE_BATCH_SIZE="${GROUNDING_NATIVE_BATCH_SIZE:-4}"
+# A completed task is the heartbeat. A stuck planner is killed and retried alone.
+GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS="${GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS:-300}"
+# Existing post-fix run directory whose committed shards should be reused.
+GROUNDING_RESUME_RUN="${GROUNDING_RESUME_RUN:-}"
 # CPU-only strict handcoded/planner comparison against an existing grounding run.
 GROUNDING_SOURCE_RUN="${GROUNDING_SOURCE_RUN:-}"
 GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"
@@ -121,6 +125,10 @@ if [[ "${GROUNDING_REPLAY_BACKEND}" != "individual" && "${GROUNDING_REPLAY_BACKE
 fi
 if [[ ! "${GROUNDING_NATIVE_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
   echo "GROUNDING_NATIVE_BATCH_SIZE must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS}" =~ ^([1-9][0-9]*([.][0-9]+)?|0[.][0-9]*[1-9][0-9]*)$ ]]; then
+  echo "GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS must be positive" >&2
   exit 2
 fi
 if [[ "${GROUNDING_REPLAY_BACKEND}" == "native_batch" ]] && (( GROUNDING_NATIVE_BATCH_SIZE < 2 )); then
@@ -343,13 +351,24 @@ case "${ACTION}" in
     python -m infoskill.cli checkpoint-effect "${EFFECT_ARGS[@]}"
     ;;
   grounding)
-    python -m infoskill.cli grounding \
-      --config "${CONFIG}" \
-      --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
-      --worker-processes "${GROUNDING_WORKER_PROCESSES}" \
-      --replay-backend "${GROUNDING_REPLAY_BACKEND}" \
-      --native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}" \
-      "${EXTRA_ARGS[@]}"
+    GROUNDING_ARGS=(
+      --config "${CONFIG}"
+      --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}"
+      --worker-processes "${GROUNDING_WORKER_PROCESSES}"
+      --replay-backend "${GROUNDING_REPLAY_BACKEND}"
+      --native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}"
+      --worker-inactivity-timeout-seconds "${GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS}"
+    )
+    if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
+      if [[ -n "${RUN_NAME}" ]]; then
+        echo "GROUNDING_RESUME_RUN cannot be combined with RUN_NAME" >&2
+        exit 2
+      fi
+      GROUNDING_ARGS+=(--resume-run "${GROUNDING_RESUME_RUN}")
+    else
+      GROUNDING_ARGS+=("${EXTRA_ARGS[@]}")
+    fi
+    python -m infoskill.cli grounding "${GROUNDING_ARGS[@]}"
     ;;
   grounding-expert-diagnostic)
     if [[ -z "${GROUNDING_SOURCE_RUN}" ]]; then
