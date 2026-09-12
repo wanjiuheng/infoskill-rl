@@ -5,6 +5,30 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_timeout_rescue_is_targeted_resumable_and_longer_bounded(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'GROUNDING_RESCUE_WORKER_PROCESSES="${GROUNDING_RESCUE_WORKER_PROCESSES:-4}"',
+            script,
+        )
+        self.assertIn(
+            'GROUNDING_RESCUE_TIMEOUT_SECONDS="${GROUNDING_RESCUE_TIMEOUT_SECONDS:-600}"',
+            script,
+        )
+        self.assertIn("grounding-timeout-rescue)", script)
+        self.assertIn(
+            '--source-grounding-run "${GROUNDING_SOURCE_RUN}"',
+            script,
+        )
+        self.assertIn(
+            'GROUNDING_RESCUE_ARGS+=(--resume-run "${GROUNDING_RESUME_RUN}")',
+            script,
+        )
+
     def test_planner_loop_diagnostic_is_cpu_only_and_uses_source_pilot(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

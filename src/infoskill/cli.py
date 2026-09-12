@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import logging
@@ -46,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         return _checkpoint_effect(config, args)
     if args.command == "grounding":
         return _grounding(config, args)
+    if args.command == "grounding-timeout-rescue":
+        return _grounding_timeout_rescue(config, args)
     if args.command == "grounding-expert-diagnostic":
         return _grounding_expert_diagnostic(config, args)
     if args.command == "grounding-planner-pilot":
@@ -177,6 +180,26 @@ def _parser() -> argparse.ArgumentParser:
             "terminate a worker after this many seconds without a completed "
             "task, then isolate unfinished tasks"
         ),
+    )
+    grounding_rescue = subparsers.add_parser(
+        "grounding-timeout-rescue",
+        help=(
+            "retry only expert_wall_timeout rows from a committed formal "
+            "grounding run and derive a checksum-audited merged dataset"
+        ),
+    )
+    grounding_rescue.add_argument("--config", required=True)
+    grounding_rescue.add_argument("--source-grounding-run", required=True)
+    grounding_rescue.add_argument("--run-name")
+    grounding_rescue.add_argument(
+        "--resume-run",
+        help="existing timeout-rescue run whose committed shards should be reused",
+    )
+    grounding_rescue.add_argument("--worker-processes", type=int, default=4)
+    grounding_rescue.add_argument(
+        "--worker-inactivity-timeout-seconds",
+        type=float,
+        default=600.0,
     )
     grounding_diagnostic = subparsers.add_parser(
         "grounding-expert-diagnostic",
@@ -1543,6 +1566,281 @@ def _grounding(config: AppConfig, args: argparse.Namespace) -> int:
     )
     logger.info("Grounding manifest:\n%s", json.dumps(manifest.__dict__ if hasattr(manifest, "__dict__") else _dataclass_dict(manifest), ensure_ascii=False, indent=2))
     return 0 if manifest.formal_gate_passed else 4
+
+
+def _grounding_timeout_rescue(
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    """Retry only committed planner timeouts and derive a formal dataset."""
+
+    _validate_paths(
+        config,
+        mode=SkillMode.INFO_SKILL,
+        require_checkpoint=False,
+    )
+    if args.worker_processes <= 0 or args.worker_inactivity_timeout_seconds <= 0:
+        raise ValueError("grounding rescue worker settings must be positive")
+    if args.resume_run and args.run_name:
+        raise ValueError("grounding rescue resume-run cannot be combined with run-name")
+
+    from tqdm.auto import tqdm
+
+    from infoskill.integrations.alfworld import (
+        GroundingWorkItem,
+        build_grounding_manifest,
+        discover_tasks,
+        grounding_work_items_sha256,
+        load_committed_grounding_results,
+        merge_timeout_grounding_results,
+        prepare_alfworld_expert_type_binding,
+        run_bounded_grounding,
+        select_timeout_work_items,
+        sha256_file,
+        write_grounding_artifacts,
+        write_serialized_grounding_results,
+    )
+    from infoskill.skills import (
+        FixedSkillLibrary,
+        PrecomputedEmbeddingRetriever,
+        SentenceTransformerEncoder,
+        TemplateRetriever,
+    )
+
+    source_run = Path(args.source_grounding_run).expanduser().resolve()
+    source_manifest_path = source_run / "manifest.json"
+    source_resume_path = source_run / "grounding-resume.json"
+    if not source_manifest_path.is_file() or not source_resume_path.is_file():
+        raise FileNotFoundError(
+            "source grounding run must contain manifest.json and "
+            "grounding-resume.json"
+        )
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    source_resume = json.loads(source_resume_path.read_text(encoding="utf-8"))
+    if source_manifest.get("schema_version") != 2:
+        raise ValueError("grounding rescue requires a schema v2 source manifest")
+    if source_manifest.get("source_split") != "train":
+        raise ValueError("grounding rescue source must use the train split")
+    if source_manifest.get("expert_identity_gate_passed") is not True:
+        raise ValueError("grounding rescue source failed the planner identity gate")
+    if source_manifest.get("expert_type") != "planner":
+        raise ValueError("grounding rescue source is not planner-generated")
+    source_failures = source_manifest.get("formal_gate_failures")
+    if source_failures != ["success_coverage_below_threshold"]:
+        raise ValueError(
+            "grounding rescue only accepts a source whose sole formal failure "
+            "is success coverage"
+        )
+    source_checksums = source_manifest.get("source_checksums")
+    if not isinstance(source_checksums, dict):
+        raise ValueError("grounding rescue source lacks source checksums")
+    if source_resume.get("source_checksum") != source_checksums.get(
+        "infoskill_source"
+    ):
+        raise ValueError(
+            "source manifest and resume plan disagree on INFO-SKILL source"
+        )
+
+    tasks = discover_tasks(config.paths.alfworld_data, split="train")
+    task_manifest_checksum = _task_manifest_checksum(tasks)
+    if source_manifest.get("total_games") != len(tasks):
+        raise ValueError("source grounding task count differs from current train data")
+    if source_checksums.get("train_task_manifest") != task_manifest_checksum:
+        raise ValueError("source grounding train task manifest has changed")
+
+    expert_binding = prepare_alfworld_expert_type_binding(
+        config.paths.alfworld_source,
+        requested_expert_type="planner",
+    )
+    library = FixedSkillLibrary.load(config.paths.skill_bank)
+    if source_checksums.get("skill_bank") != library.source_sha256:
+        raise ValueError("source grounding skill bank has changed")
+    if config.retrieval_mode == "embedding":
+        encoder = SentenceTransformerEncoder(
+            config.paths.semantic_model,
+            device="cuda:0",
+            show_progress_bar=True,
+        )
+        try:
+            retriever = PrecomputedEmbeddingRetriever(
+                library,
+                encoder,
+                queries=[task.goal for task in tasks],
+                general_top_k=config.general_top_k,
+                task_top_k=config.task_top_k,
+                mistake_count=config.mistake_count,
+            )
+        finally:
+            encoder.close()
+    else:
+        retriever = TemplateRetriever(
+            library,
+            general_count=config.general_top_k,
+            task_count=config.task_top_k,
+            mistake_count=config.mistake_count,
+        )
+    all_work_items = tuple(
+        GroundingWorkItem(
+            task=task,
+            candidate_skill_ids=retriever.retrieve(task.goal).skill_ids,
+            seed=_stable_seed(config.master_seed, task.task_id),
+        )
+        for task in tasks
+    )
+    current_work_items_sha256 = grounding_work_items_sha256(all_work_items)
+    if source_resume.get("work_items_sha256") != current_work_items_sha256:
+        raise ValueError(
+            "source grounding work items changed (task, retrieval, or seed)"
+        )
+    source_results = load_committed_grounding_results(source_run, all_work_items)
+    rescue_work_items = select_timeout_work_items(all_work_items, source_results)
+    result_successes = sum(result.succeeded for _, result in source_results)
+    result_reasons = Counter(
+        result.quarantine_reason or "unknown"
+        for _, result in source_results
+        if not result.succeeded
+    )
+    if source_manifest.get("successful_games") != result_successes:
+        raise ValueError(
+            "source manifest success count differs from committed shard results"
+        )
+    if source_manifest.get("quarantined_games") != (
+        len(source_results) - result_successes
+    ):
+        raise ValueError(
+            "source manifest quarantine count differs from committed shard results"
+        )
+    manifest_reasons = source_manifest.get("quarantine_reasons")
+    if not isinstance(manifest_reasons, dict) or manifest_reasons != dict(
+        sorted(result_reasons.items())
+    ):
+        raise ValueError(
+            "source manifest quarantine reasons differ from committed shard results"
+        )
+    expected_timeouts = manifest_reasons.get("expert_wall_timeout")
+    if expected_timeouts != len(rescue_work_items):
+        raise ValueError(
+            "source manifest timeout count differs from committed shard results"
+        )
+    if not rescue_work_items:
+        raise ValueError("source grounding run has no timeout rows to rescue")
+
+    if args.resume_run:
+        run_directory = Path(args.resume_run).expanduser().resolve()
+        if not run_directory.is_dir():
+            raise FileNotFoundError(
+                f"grounding rescue run does not exist: {run_directory}"
+            )
+    else:
+        run_directory = _run_directory(
+            config,
+            args.run_name or "grounding-timeout-rescue",
+        )
+    logger = _configure_logging(run_directory)
+    source_manifest_sha256 = sha256_file(source_manifest_path)
+    current_source_checksum = _source_checksum()
+    rescue_plan_source_checksum = hashlib.sha256(
+        (
+            f"{current_source_checksum}\0{source_manifest_sha256}\0"
+            f"{current_work_items_sha256}"
+        ).encode("utf-8")
+    ).hexdigest()
+    with tqdm(
+        total=len(rescue_work_items),
+        desc="train/planner-timeout-rescue",
+        unit="task",
+        dynamic_ncols=True,
+    ) as progress:
+        rescue_results, lifecycle = run_bounded_grounding(
+            work_items=rescue_work_items,
+            config_path=args.config,
+            run_directory=run_directory,
+            worker_batch_size=1,
+            worker_processes=args.worker_processes,
+            max_replay_steps=int(source_manifest["max_replay_steps"]),
+            persist_horizon=int(source_manifest["persist_horizon"]),
+            expert_type="planner",
+            replay_backend="individual",
+            native_batch_size=1,
+            worker_inactivity_timeout_seconds=(
+                args.worker_inactivity_timeout_seconds
+            ),
+            source_checksum=rescue_plan_source_checksum,
+            on_progress=progress.update,
+        )
+    merge = merge_timeout_grounding_results(source_results, rescue_results)
+    derived_manifest = build_grounding_manifest(
+        results=merge.results,
+        source_checksums={
+            "base_grounding_manifest": source_manifest_sha256,
+            "base_infoskill_source": str(source_checksums["infoskill_source"]),
+            "infoskill_source": current_source_checksum,
+            "skill_bank": library.source_sha256,
+            "train_task_manifest": task_manifest_checksum,
+        },
+        code_revision=current_source_checksum[:16],
+        max_replay_steps=int(source_manifest["max_replay_steps"]),
+        persist_horizon=int(source_manifest["persist_horizon"]),
+        expert_type="planner",
+        expert_binding=expert_binding,
+    )
+    write_serialized_grounding_results(
+        run_directory / "rescue-results.jsonl",
+        rescue_results,
+    )
+    write_grounding_artifacts(
+        output_directory=run_directory,
+        results=merge.results,
+        manifest=derived_manifest,
+    )
+    _write_json(
+        run_directory / "grounding-rescue-lifecycle.json",
+        _dataclass_dict(lifecycle),
+    )
+    rescue_report = {
+        "schema_version": 1,
+        "source_grounding_run": str(source_run),
+        "source_manifest_sha256": source_manifest_sha256,
+        "source_work_items_sha256": current_work_items_sha256,
+        "source_results_validated": len(source_results),
+        "attempted_tasks": len(merge.attempted_task_ids),
+        "rescued_tasks": len(merge.rescued_task_ids),
+        "remaining_timeout_tasks": len(merge.remaining_timeout_task_ids),
+        "attempted_task_ids": list(merge.attempted_task_ids),
+        "rescued_task_ids": list(merge.rescued_task_ids),
+        "remaining_timeout_task_ids": list(
+            merge.remaining_timeout_task_ids
+        ),
+        "source_successful_games": source_manifest["successful_games"],
+        "derived_successful_games": derived_manifest.successful_games,
+        "source_success_coverage": source_manifest["success_coverage"],
+        "derived_success_coverage": derived_manifest.success_coverage,
+        "derived_formal_gate_passed": derived_manifest.formal_gate_passed,
+        "derived_formal_gate_failures": list(
+            derived_manifest.formal_gate_failures
+        ),
+        "worker_processes": args.worker_processes,
+        "worker_inactivity_timeout_seconds": (
+            args.worker_inactivity_timeout_seconds
+        ),
+        "temporary_directories_cleaned": (
+            lifecycle.temporary_directories_cleaned
+        ),
+        "minimum_free_disk_bytes": lifecycle.minimum_free_disk_bytes,
+    }
+    _write_json(run_directory / "grounding-rescue-report.json", rescue_report)
+    logger.info(
+        "Grounding timeout rescue: attempted=%d rescued=%d remaining=%d "
+        "coverage=%.6f formal_gate=%s min_free=%.2f GiB",
+        len(merge.attempted_task_ids),
+        len(merge.rescued_task_ids),
+        len(merge.remaining_timeout_task_ids),
+        derived_manifest.success_coverage,
+        derived_manifest.formal_gate_passed,
+        lifecycle.minimum_free_disk_bytes / 1024**3,
+    )
+    logger.info("Grounding rescue report: %s", run_directory / "grounding-rescue-report.json")
+    return 0 if derived_manifest.formal_gate_passed else 4
 
 
 def _grounding_expert_diagnostic(

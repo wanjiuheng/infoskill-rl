@@ -290,6 +290,23 @@ def run_bounded_grounding(
                         ) from error
                     remaining = chunk[len(shard_results) :]
 
+                    if (
+                        replay_backend == "individual"
+                        and len(chunk) == 1
+                        and len(remaining) == 1
+                    ):
+                        item = remaining[0]
+                        with state_lock:
+                            timed_out_tasks.append(item.task.task_id)
+                        shard_progress(1)
+                        shard_results.append(
+                            (
+                                item.task.task_type,
+                                _timeout_quarantine(item.task, error),
+                            )
+                        )
+                        remaining = ()
+
                     def isolate_remaining_item(
                         indexed_item: tuple[int, GroundingWorkItem],
                     ) -> tuple[int, tuple[str, ExpertReplayResult]]:
@@ -562,6 +579,84 @@ def _work_items_sha256(work_items: Sequence[GroundingWorkItem]) -> str:
     return _sha256_text(
         _canonical_json_lines([_work_item_payload(item) for item in work_items])
     )
+
+
+def grounding_work_items_sha256(
+    work_items: Sequence[GroundingWorkItem],
+) -> str:
+    """Return the canonical identity used by resumable grounding plans."""
+
+    return _work_items_sha256(work_items)
+
+
+def load_committed_grounding_results(
+    run_directory: str | Path,
+    work_items: Sequence[GroundingWorkItem],
+) -> list[tuple[str, ExpertReplayResult]]:
+    """Read every committed shard after validating plan, checksums, and order."""
+
+    destination = Path(run_directory).expanduser().resolve()
+    plan_path = destination / "grounding-resume.json"
+    if not plan_path.is_file():
+        raise FileNotFoundError(
+            f"grounding run is missing grounding-resume.json: {destination}"
+        )
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan_without_hash = dict(plan)
+    claimed_plan_sha256 = plan_without_hash.pop("plan_sha256", None)
+    computed_plan_sha256 = _sha256_text(
+        json.dumps(
+            plan_without_hash,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    checks = {
+        "schema_version": plan.get("schema_version") == _RESUME_SCHEMA_VERSION,
+        "task_count": plan.get("task_count") == len(work_items),
+        "work_items_sha256": (
+            plan.get("work_items_sha256") == _work_items_sha256(work_items)
+        ),
+        "worker_batch_size": (
+            isinstance(plan.get("worker_batch_size"), int)
+            and plan["worker_batch_size"] > 0
+        ),
+        "plan_sha256": claimed_plan_sha256 == computed_plan_sha256,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise RuntimeError(
+            "grounding source resume plan failed validation: "
+            f"{failed}"
+        )
+    worker_batch_size = int(plan["worker_batch_size"])
+    results: list[tuple[str, ExpertReplayResult]] = []
+    for shard_index, start in enumerate(
+        range(0, len(work_items), worker_batch_size),
+        start=1,
+    ):
+        chunk = work_items[start : start + worker_batch_size]
+        committed = _load_completed_shard(
+            destination=destination,
+            shard_index=shard_index,
+            start_index=start,
+            chunk=chunk,
+            resume_plan_sha256=plan["plan_sha256"],
+        )
+        if committed is None:
+            raise RuntimeError(
+                f"grounding source shard {shard_index} is not committed"
+            )
+        shard_results, _ = committed
+        results.extend(shard_results)
+    expected_ids = [item.task.task_id for item in work_items]
+    actual_ids = [result.task_id for _, result in results]
+    if actual_ids != expected_ids:
+        raise RuntimeError(
+            "committed grounding results changed global task count or order"
+        )
+    return results
 
 
 def _ensure_resume_plan(

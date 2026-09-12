@@ -20,6 +20,65 @@ from infoskill.integrations.alfworld.grounding_shards import (
 
 
 class GroundingShardTests(unittest.TestCase):
+    def test_single_individual_timeout_is_not_retried_before_quarantine(self) -> None:
+        item = GroundingWorkItem(
+            task=TaskSpec(
+                task_id="task-0",
+                split="train",
+                task_type="pick_two_obj_and_place",
+                goal="put two objects somewhere",
+            ),
+            candidate_skill_ids=(),
+            seed=0,
+        )
+        invocations = 0
+
+        def worker(
+            items,
+            config_path,
+            temporary,
+            max_steps,
+            horizon,
+            expert_type,
+            replay_backend,
+            native_batch_size,
+            callback,
+        ):
+            nonlocal invocations
+            del (
+                config_path,
+                temporary,
+                max_steps,
+                horizon,
+                expert_type,
+                callback,
+            )
+            invocations += 1
+            self.assertEqual(tuple(items), (item,))
+            self.assertEqual(replay_backend, "individual")
+            self.assertEqual(native_batch_size, 1)
+            raise GroundingWorkerInactivityTimeout("still no progress")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            results, report = run_bounded_grounding(
+                work_items=(item,),
+                config_path=Path(temporary) / "config.yaml",
+                run_directory=temporary,
+                worker_batch_size=1,
+                worker_processes=1,
+                max_replay_steps=150,
+                persist_horizon=30,
+                expert_type="planner",
+                replay_backend="individual",
+                native_batch_size=1,
+                worker_runner=worker,
+            )
+
+        self.assertEqual(invocations, 1)
+        self.assertEqual(report.worker_processes_started, 1)
+        self.assertEqual(report.timed_out_tasks, ("task-0",))
+        self.assertEqual(results[0][1].quarantine_reason, "expert_wall_timeout")
+
     def test_timed_out_native_shard_isolates_and_quarantines_stuck_task(self) -> None:
         work_items = tuple(
             GroundingWorkItem(

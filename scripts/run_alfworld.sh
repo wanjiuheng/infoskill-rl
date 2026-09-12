@@ -33,6 +33,10 @@ GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS="${GROUNDING_WORKER_INACTIVITY_TIMEO
 GROUNDING_RESUME_RUN="${GROUNDING_RESUME_RUN:-}"
 # CPU-only strict handcoded/planner comparison against an existing grounding run.
 GROUNDING_SOURCE_RUN="${GROUNDING_SOURCE_RUN:-}"
+# Targeted retry of committed formal expert timeouts. Each process owns one
+# planner so the source run's native-batch long tail is not repeated.
+GROUNDING_RESCUE_WORKER_PROCESSES="${GROUNDING_RESCUE_WORKER_PROCESSES:-4}"
+GROUNDING_RESCUE_TIMEOUT_SECONDS="${GROUNDING_RESCUE_TIMEOUT_SECONDS:-600}"
 GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"
 GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS="${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS:-150}"
 # Balanced CPU-only planner candidate pilot; never produces formal M1 labels.
@@ -117,6 +121,14 @@ if [[ ! "${GROUNDING_WORKER_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "${GROUNDING_WORKER_PROCESSES}" =~ ^[1-9][0-9]*$ ]]; then
   echo "GROUNDING_WORKER_PROCESSES must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_RESCUE_WORKER_PROCESSES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "GROUNDING_RESCUE_WORKER_PROCESSES must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${GROUNDING_RESCUE_TIMEOUT_SECONDS}" =~ ^([1-9][0-9]*([.][0-9]+)?|0[.][0-9]*[1-9][0-9]*)$ ]]; then
+  echo "GROUNDING_RESCUE_TIMEOUT_SECONDS must be positive" >&2
   exit 2
 fi
 if [[ "${GROUNDING_REPLAY_BACKEND}" != "individual" && "${GROUNDING_REPLAY_BACKEND}" != "native_batch" ]]; then
@@ -372,6 +384,29 @@ case "${ACTION}" in
     fi
     python -m infoskill.cli grounding "${GROUNDING_ARGS[@]}"
     ;;
+  grounding-timeout-rescue)
+    if [[ -z "${GROUNDING_SOURCE_RUN}" ]]; then
+      echo "GROUNDING_SOURCE_RUN is required for grounding-timeout-rescue" >&2
+      exit 2
+    fi
+    GROUNDING_RESCUE_ARGS=(
+      --config "${CONFIG}"
+      --source-grounding-run "${GROUNDING_SOURCE_RUN}"
+      --worker-processes "${GROUNDING_RESCUE_WORKER_PROCESSES}"
+      --worker-inactivity-timeout-seconds "${GROUNDING_RESCUE_TIMEOUT_SECONDS}"
+    )
+    if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
+      if [[ -n "${RUN_NAME}" ]]; then
+        echo "GROUNDING_RESUME_RUN cannot be combined with RUN_NAME" >&2
+        exit 2
+      fi
+      GROUNDING_RESCUE_ARGS+=(--resume-run "${GROUNDING_RESUME_RUN}")
+    else
+      GROUNDING_RESCUE_ARGS+=("${EXTRA_ARGS[@]}")
+    fi
+    python -m infoskill.cli grounding-timeout-rescue \
+      "${GROUNDING_RESCUE_ARGS[@]}"
+    ;;
   grounding-expert-diagnostic)
     if [[ -z "${GROUNDING_SOURCE_RUN}" ]]; then
       echo "GROUNDING_SOURCE_RUN is required for grounding-expert-diagnostic" >&2
@@ -481,7 +516,7 @@ case "${ACTION}" in
     python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
-    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-expert-diagnostic, grounding-planner-pilot, grounding-planner-parity, grounding-planner-loop-diagnostic, or train" >&2
+    echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-timeout-rescue, grounding-expert-diagnostic, grounding-planner-pilot, grounding-planner-parity, grounding-planner-loop-diagnostic, or train" >&2
     exit 2
     ;;
 esac

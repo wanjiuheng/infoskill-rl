@@ -140,3 +140,26 @@ worker 默认连续 300 秒没有完成任何任务即视为无进展。父进�
 该 worker 原有的最多 3 个 slot 内使用互相隔离的临时目录并行 individual 重试，结果按原始
 任务顺序重组后再原子提交。该优化只缩短故障恢复墙钟时间，不改变专家动作、seed、状态、
 样本字段、覆盖率门或 quarantine 语义。
+
+## D020：正式 grounding 的超时长尾采用校验后定向救援
+
+2026-09-12 的 `native_batch_parallel` 正式运行完整提交 112/112 个 shard 和 3,553/3,553
+条结果，临时目录全部清理，最低空闲磁盘约 21.90 GiB；3,510 条成功，43 条
+`pick_two_obj_and_place` 在 native batch 超时后又于 300 秒 individual 隔离重试中超时。
+覆盖率为 98.7898%，其余五类全部成功、没有轨迹超过 30 步，formal gate 的唯一失败是
+`success_coverage_below_threshold`。99% 门要求至少 3,518 条成功，因此只差 8 条，重跑全部
+3,553 条既不增加对已成功标签的信心，也会浪费约五小时。
+
+采用 `grounding-timeout-rescue` 派生式救援：先重建全部任务的候选技能和 seed，并逐项验证
+源 manifest、train manifest、技能库、完整 work-item SHA、resume plan，以及每个已提交 shard
+的 marker、结果 SHA 和全局任务顺序；任一不符即 fail closed。随后只选择源结果中的
+`expert_wall_timeout`，以单任务 individual worker、默认 4 并发和 600 秒无进展上限重放。
+成功重放才替换对应源结果，失败重放不改变源 quarantine；合并后重新计算 3,553 条 formal
+manifest，并同时保存源 manifest SHA、旧/新源码 SHA、救援结果和生命周期。99% 覆盖率、
+1% horizon 门和 planner 身份门均不放宽。救援 run 自身按一任务一 shard 原子提交，可以在
+SSH 或父进程中断后校验恢复。
+
+单条 individual worker 首次超时后不得再自动重试同一条，否则 600 秒救援的最坏墙钟会被
+静默翻倍。43 条、4 worker 的理论最坏时间约为 `ceil(43/4)×600s=110min`，并发磁盘启动门
+为 4 GiB 硬下限加 4×3 GiB 预留，即 16 GiB。只有派生 manifest 的
+`formal_gate_passed=true` 时，救援目录才可作为 M1 grounding 数据输入。

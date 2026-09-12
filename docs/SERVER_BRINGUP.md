@@ -1571,3 +1571,89 @@ nohup env \
   bash scripts/run_alfworld.sh grounding \
   >"${LOG}" 2>&1 &
 ```
+
+## 正式 grounding 超时长尾救援
+
+当且仅当正式 grounding 已完整提交全部 shard，且 formal gate 的唯一失败为
+`success_coverage_below_threshold`、失败行为 `expert_wall_timeout` 时，使用定向救援。该入口
+不会重跑成功任务，也不会降低 99% coverage 门。它先逐 shard 校验源结果，再用 4 个独立
+planner worker 为超时任务各提供一次 600 秒窗口。运行前至少保留 16 GiB 空闲磁盘；建议
+保留 20 GiB 以上。GPU 只在父进程重建 embedding retrieval 时短暂使用，planner replay
+本身为 CPU-only。
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+
+SOURCE=/root/autodl-tmp/wjh/alfworld_eval/infoskill/runs/20260912T084938Z-m1-grounding-formal-native2x3
+FREE_BYTES=$(df -B1 --output=avail /root/autodl-tmp | tail -n 1 | tr -d ' ')
+if (( FREE_BYTES < 20 * 1024 * 1024 * 1024 )); then
+  echo "可用磁盘不足 20 GiB，拒绝启动。"
+  df -h /root/autodl-tmp
+  exit 1
+fi
+
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-grounding-timeout-rescue-${STAMP}.log"
+
+nohup env \
+  GPUS=0 \
+  GROUNDING_SOURCE_RUN="$SOURCE" \
+  GROUNDING_RESCUE_WORKER_PROCESSES=4 \
+  GROUNDING_RESCUE_TIMEOUT_SECONDS=600 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-grounding-timeout-rescue \
+  bash scripts/run_alfworld.sh grounding-timeout-rescue \
+  >"$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" >"${LOG}.pid"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+若 SSH 或父进程中断，定位刚才的 rescue run，并在相同源码和参数下恢复；恢复时不得再设置
+`RUN_NAME`：
+
+```bash
+RESCUE_RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-timeout-rescue' | sort | tail -n 1)
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-grounding-timeout-rescue-resume-${STAMP}.log"
+
+nohup env \
+  GPUS=0 \
+  GROUNDING_SOURCE_RUN="$SOURCE" \
+  GROUNDING_RESUME_RUN="$RESCUE_RUN" \
+  GROUNDING_RESCUE_WORKER_PROCESSES=4 \
+  GROUNDING_RESCUE_TIMEOUT_SECONDS=600 \
+  INFO_SKILL_CPU_THREADS=1 \
+  bash scripts/run_alfworld.sh grounding-timeout-rescue \
+  >"$LOG" 2>&1 &
+```
+
+结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
+`GROUNDING_DATA`：
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-timeout-rescue' | sort | tail -n 1)
+cat "$RUN/grounding-rescue-report.json"
+cat "$RUN/manifest.json"
+cat "$RUN/grounding-rescue-lifecycle.json"
+
+STAMP=$(date +%Y%m%d_%H%M%S)
+ARCHIVE="$PWD/m1-grounding-timeout-rescue-${STAMP}.tar.gz"
+tar -czf "$ARCHIVE" -C "$RUN" \
+  grounding-rescue-report.json \
+  manifest.json \
+  grounding-rescue-lifecycle.json \
+  grounding-resume.json \
+  rescue-results.jsonl \
+  quarantine.jsonl \
+  console.log \
+  grounding-shards
+echo "ARCHIVE=$ARCHIVE"
+ls -lh "$ARCHIVE"
+```

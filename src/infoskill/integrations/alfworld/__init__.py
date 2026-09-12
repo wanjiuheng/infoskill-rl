@@ -31,7 +31,14 @@ from .grounding_parity import (
 from .grounding_shards import (
     GroundingShardReport,
     GroundingWorkItem,
+    grounding_work_items_sha256,
+    load_committed_grounding_results,
     run_bounded_grounding,
+)
+from .grounding_rescue import (
+    GroundingRescueMerge,
+    merge_timeout_grounding_results,
+    select_timeout_work_items,
 )
 from .handcoded_expert import load_handcoded_expert
 from .planner_expert import PlannerPayloadExpert
@@ -62,6 +69,7 @@ __all__ = [
     "install_alfworld_expert_type_guard",
     "GroundingSample",
     "GroundingManifest",
+    "GroundingRescueMerge",
     "GroundingDataset",
     "GroundingShardReport",
     "GroundingWorkItem",
@@ -78,10 +86,14 @@ __all__ = [
     "discover_tasks",
     "load_handcoded_expert",
     "grounding_result_payload",
+    "grounding_work_items_sha256",
+    "load_committed_grounding_results",
+    "merge_timeout_grounding_results",
     "read_grounding_results",
     "run_bounded_grounding",
     "run_planner_loop_diagnostic",
     "select_loop_diagnostic_rows",
+    "select_timeout_work_items",
     "select_stratified_tasks",
     "serialize_grounding_results",
     "sha256_file",

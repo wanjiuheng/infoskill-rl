@@ -296,6 +296,20 @@ planner slot），shard 大小为 32。这个组合不改变任务、专家、�
 最多 3 个独立临时目录中并行 individual 重试，完成后仍按原任务顺序提交；这样避免一次
 长尾 shard 在 fallback 阶段再串行等待数小时。
 
+该 `native_batch_parallel` 正式运行随后完整处理并提交 3,553/3,553 条、112/112 shards，
+结构完整性、任务唯一性、结果校验和、planner 身份和临时目录清理均通过；总耗时约 5 小时。
+3,510 条成功，43 条均为双物体任务的 `expert_wall_timeout`，覆盖率 98.7898%，距离 99%
+formal 门只差救回 8 条。其余五类为 100%，成功轨迹最长 11 步，horizon 门通过。因此这不是
+全量结果损坏，也不应降低 99% 门或重跑已成功的 3,510 条。
+
+当前增加 `grounding-timeout-rescue`：它在读取源结果前校验 manifest、train/skill/work-item
+身份、resume plan 及全部 shard marker/结果 SHA，只重跑 43 条 timeout。默认采用 4 个
+individual CPU worker、每条一次 600 秒无进展上限；单条首次超时立即 quarantine，不再进行
+旧逻辑中的重复第二次等待。成功救援才按 task ID 原位替换，随后重新生成完整 3,553 条派生
+manifest，并记录源 manifest SHA 和救援生命周期。理论最坏约 110 分钟，磁盘并发启动门约
+16 GiB，救援过程可按一任务一 shard 断点恢复。只有派生 manifest 重新通过 formal gate 后
+才能作为 M1 grounding 输入。
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation
