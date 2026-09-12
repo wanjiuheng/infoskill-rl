@@ -72,9 +72,15 @@ batch 会 fail-fast，避免 partial policy update；`no_skill` 与 `raw_skill_p
 M1 worker modules，仍委托固定 VERL 原路径。auxiliary 的五个复制式 DDP 模块、独立
 optimizer/scheduler、全局归一化梯度累积和有限值门已经接通；可移植 checkpoint 会保存
 五个 M1 模块、LoRA、两个 optimizer、两个 scheduler 与 RNG，并在恢复时逐 rank 审计。
-剩余工作是目标服务器上的 M1 smoke、checkpoint 恢复和 `valid_seen` 验证，不是继续补写
-训练算法。三卡因 VERL floor normalization 将配置 minibatch 256 规范化为 255，实际值
-写入 `runtime/effective_action_minibatch_size`；所有样本仍参与后续 minibatch。
+首次三卡 M1 smoke 已完成一个真实 update：soft-prefix rollout、LoRA/projector 原子
+策略更新、auxiliary 更新、grounding 离线采样和完整 portable checkpoint 均通过；
+rollout/recompute P99 为 `0.23041`，低于统一 `0.30` 门限。该诊断 run 显式使用历史
+`16384` policy token budget，rollout 最差物理空闲显存仅约 `8.22 GiB`，因此只作为链路
+证据，新的 pilot/formal 仍使用正式 `12288`。下一步是从 step 1 恢复到 step 2，再做
+固定 140 条 `valid_seen`，不是继续补写训练算法。三卡因 VERL floor normalization 将
+配置 minibatch 256 规范化为 255（smoke 16 规范化为 15），实际值写入
+`runtime/effective_action_minibatch_size`；所有样本仍参与后续 minibatch。恢复配置门只在
+延长 `max_updates` 不改变 3% 整数 warmup 步数时允许该目标变化，其他配置继续严格锁定。
 
 **Skill-Injection Control Mode**:
 共享同一训练评测框架、但改变技能信息如何进入策略的实验模式；首阶段包括 `no_skill`、`raw_skill_prompt` 和 `infoskill`。

@@ -90,6 +90,107 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                     allow_gpu_change=True,
                 )
 
+    def test_resume_may_extend_target_when_warmup_schedule_is_unchanged(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 3,
+            "training_plan": {
+                "profile": "smoke",
+                "max_updates": 1,
+                "action_minibatch_size": 16,
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "training_plan": {
+                "profile": "smoke",
+                "max_updates": 2,
+                "action_minibatch_size": 16,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=False,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
+    def test_resume_rejects_shorter_target(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 3,
+            "training_plan": {"profile": "smoke", "max_updates": 2},
+        }
+        current = {
+            "num_gpus": 3,
+            "training_plan": {"profile": "smoke", "max_updates": 1},
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
+    def test_resume_rejects_extension_across_warmup_boundary(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 3,
+            "training_plan": {"profile": "smoke", "max_updates": 32},
+        }
+        current = {
+            "num_gpus": 3,
+            "training_plan": {"profile": "smoke", "max_updates": 34},
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
+    def test_resume_extension_still_rejects_other_plan_changes(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
+        previous = {
+            "num_gpus": 3,
+            "training_plan": {
+                "profile": "smoke",
+                "max_updates": 1,
+                "action_minibatch_size": 16,
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "training_plan": {
+                "profile": "smoke",
+                "max_updates": 2,
+                "action_minibatch_size": 32,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_missing_historical_environment_workers_means_serial(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000001"
         previous = {

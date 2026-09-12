@@ -10,6 +10,7 @@ from infoskill.persistence.model_identity import provenance_matches_pinned_model
 
 
 _RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_POLICY_WARMUP_RATIO = 0.03
 
 
 def resolve_training_run_directory(
@@ -49,6 +50,12 @@ def validate_resume_config(
 
     previous_without_gpus = _with_runtime_defaults(previous)
     current_without_gpus = _with_runtime_defaults(current)
+    previous_without_gpus, current_without_gpus = (
+        _normalize_extendable_training_target(
+            previous_without_gpus,
+            current_without_gpus,
+        )
+    )
     matching_model_id = _matching_policy_model_id(previous, current)
     if matching_model_id is not None:
         _validate_checkpoint_policy_provenance(checkpoint_path, matching_model_id)
@@ -63,6 +70,42 @@ def validate_resume_config(
             "changing GPU count during resume requires a new run_name"
         )
     return previous_gpus
+
+
+def _normalize_extendable_training_target(
+    previous: Mapping[str, object],
+    current: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Ignore a target-only extension when it preserves scheduler semantics."""
+    normalized_previous = dict(previous)
+    normalized_current = dict(current)
+    previous_plan = previous.get("training_plan")
+    current_plan = current.get("training_plan")
+    if not isinstance(previous_plan, Mapping) or not isinstance(
+        current_plan, Mapping
+    ):
+        return normalized_previous, normalized_current
+
+    previous_max = previous_plan.get("max_updates")
+    current_max = current_plan.get("max_updates")
+    if (
+        not isinstance(previous_max, int)
+        or isinstance(previous_max, bool)
+        or not isinstance(current_max, int)
+        or isinstance(current_max, bool)
+        or current_max < previous_max
+        or _warmup_steps(current_max) != _warmup_steps(previous_max)
+    ):
+        return normalized_previous, normalized_current
+
+    normalized_previous_plan = dict(previous_plan)
+    normalized_previous_plan["max_updates"] = current_max
+    normalized_previous["training_plan"] = normalized_previous_plan
+    return normalized_previous, normalized_current
+
+
+def _warmup_steps(max_updates: int) -> int:
+    return int(max_updates * _POLICY_WARMUP_RATIO)
 
 
 def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:

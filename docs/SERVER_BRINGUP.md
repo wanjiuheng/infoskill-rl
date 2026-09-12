@@ -1368,7 +1368,9 @@ echo "pid=${PID} log=${LOG}"
 ```
 
 首个 smoke 通过后，下一道门是从 `step-000001` 以相同三卡恢复到 update 2；之后才
-对该 checkpoint 做固定 140 条 `valid_seen`。不要直接启动 M1 pilot 或 formal。
+对该 checkpoint 做固定 140 条 `valid_seen`。恢复门允许把 `max_updates` 从 1 延长到
+2，因为两者按 3% 取整后的 warmup 步数同为 0；任何缩短、跨越 warmup 步数边界或
+其他配置变化仍会 fail-fast。不要直接启动 M1 pilot 或 formal。
 
 ## Planner grounding 安全提速门
 
