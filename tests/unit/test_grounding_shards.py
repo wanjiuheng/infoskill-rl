@@ -91,6 +91,85 @@ class GroundingShardTests(unittest.TestCase):
         self.assertEqual(report.timed_out_tasks, ("task-1",))
         self.assertEqual(report.worker_processes_started, 2)
 
+    def test_timed_out_native_shard_retries_remaining_tasks_in_parallel(self) -> None:
+        work_items = tuple(
+            GroundingWorkItem(
+                task=TaskSpec(
+                    task_id=f"task-{index}",
+                    split="train",
+                    task_type="pick_two_obj_and_place",
+                    goal="put two objects somewhere",
+                ),
+                candidate_skill_ids=(),
+                seed=index,
+            )
+            for index in range(4)
+        )
+        state_lock = threading.Lock()
+        active = 0
+        peak = 0
+        isolated_temporaries: list[Path] = []
+
+        def worker(
+            items,
+            config_path,
+            temporary,
+            max_steps,
+            horizon,
+            expert_type,
+            replay_backend,
+            native_batch_size,
+            callback,
+        ):
+            nonlocal active, peak
+            del config_path, max_steps, horizon, expert_type
+            if len(items) == 4:
+                self.assertEqual(replay_backend, "native_batch")
+                self.assertEqual(native_batch_size, 4)
+                raise GroundingWorkerInactivityTimeout("batch stalled")
+            self.assertEqual(replay_backend, "individual")
+            self.assertEqual(native_batch_size, 1)
+            with state_lock:
+                active += 1
+                peak = max(peak, active)
+                isolated_temporaries.append(temporary)
+            time.sleep(0.02)
+            if callback is not None:
+                callback(1)
+            with state_lock:
+                active -= 1
+            item = items[0]
+            return [
+                (
+                    item.task.task_type,
+                    ExpertReplayResult(item.task.task_id, True, (), 1, None),
+                )
+            ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            results, report = run_bounded_grounding(
+                work_items=work_items,
+                config_path=Path(temporary) / "config.yaml",
+                run_directory=temporary,
+                worker_batch_size=4,
+                max_replay_steps=150,
+                persist_horizon=30,
+                expert_type="planner",
+                replay_backend="native_batch",
+                native_batch_size=4,
+                worker_runner=worker,
+            )
+
+        self.assertEqual(peak, 4)
+        self.assertEqual(len(set(isolated_temporaries)), 4)
+        self.assertTrue(all(not path.exists() for path in isolated_temporaries))
+        self.assertEqual(
+            [result.task_id for _, result in results],
+            ["task-0", "task-1", "task-2", "task-3"],
+        )
+        self.assertEqual(report.timeout_fallback_shards, 1)
+        self.assertEqual(report.worker_processes_started, 5)
+
     def test_worker_is_terminated_after_inactivity_timeout(self) -> None:
         class SilentStdout:
             def __init__(self, process) -> None:

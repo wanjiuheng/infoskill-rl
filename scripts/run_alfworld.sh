@@ -135,8 +135,10 @@ if [[ "${GROUNDING_REPLAY_BACKEND}" == "native_batch" ]] && (( GROUNDING_NATIVE_
   echo "native_batch requires GROUNDING_NATIVE_BATCH_SIZE of at least 2" >&2
   exit 2
 fi
-if [[ "${GROUNDING_PARITY_CANDIDATE_BACKEND}" != "process_parallel" && "${GROUNDING_PARITY_CANDIDATE_BACKEND}" != "native_batch" ]]; then
-  echo "GROUNDING_PARITY_CANDIDATE_BACKEND must be process_parallel or native_batch" >&2
+if [[ "${GROUNDING_PARITY_CANDIDATE_BACKEND}" != "process_parallel" \
+  && "${GROUNDING_PARITY_CANDIDATE_BACKEND}" != "native_batch" \
+  && "${GROUNDING_PARITY_CANDIDATE_BACKEND}" != "native_batch_parallel" ]]; then
+  echo "GROUNDING_PARITY_CANDIDATE_BACKEND must be process_parallel, native_batch, or native_batch_parallel" >&2
   exit 2
 fi
 if [[ ! "${GROUNDING_PARITY_MINIMUM_SPEEDUP}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then

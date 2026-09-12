@@ -127,3 +127,16 @@ worker 默认连续 300 秒没有完成任何任务即视为无进展。父进�
 予以保留，未完成部分改用 `individual` 逐任务隔离。单任务再次超时不会伪造专家动作，而以
 `expert_wall_timeout` 进入 quarantine，并保留异常类型和阶段。formal 的 99% 覆盖率门保持
 不变，所以超时过多会让数据生成明确失败，而不会静默降低训练数据质量。
+
+故障现场还表明，112 核主机在单个 `native_batch_size=4` worker 卡住时绝大多数 CPU 空闲；
+固定 12 条测试中，4 个 independent worker 与单 worker/native-batch-4 的耗时分别约为
+168 秒和 165 秒，说明主要吞吐近似取决于同时活跃的 planner slot，而不是某一种包装方式。
+因此允许把两种已逐步验证的并行层组合为 `native_batch_parallel` 候选，但组合后仍必须重新
+通过 12 条 full-row exact parity 和 60 条生命周期/性能门，不能由两项单独测试直接推断。
+
+当前正式候选固定为 2 个 bounded worker、每个 worker 内 3 个 native batch slot、每 shard
+32 条。总计 6 个环境 slot，使现有磁盘保护要求为 4 GiB 硬下限加 6×3 GiB 并发预留，即
+22 GiB；操作命令在至少 23 GiB 空闲时才启动。若原生 batch 触发无进展超时，未完成任务在
+该 worker 原有的最多 3 个 slot 内使用互相隔离的临时目录并行 individual 重试，结果按原始
+任务顺序重组后再原子提交。该优化只缩短故障恢复墙钟时间，不改变专家动作、seed、状态、
+样本字段、覆盖率门或 quarantine 语义。

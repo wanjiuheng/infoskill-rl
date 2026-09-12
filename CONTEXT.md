@@ -289,6 +289,13 @@ Grounding 提速候选包括 4 个独立 bounded worker 的 `process_parallel`�
 仍超时则以 `expert_wall_timeout` quarantine，99% formal gate 不放宽。该机制已通过本地
 故障注入单元测试，仍需服务器小样本超时/恢复 smoke 后才能重新启动正式 grounding。
 
+下一轮正式候选改为 2 个 bounded worker、每个 worker 内 3 个原生 batch slot（总计 6 个
+planner slot），shard 大小为 32。这个组合不改变任务、专家、种子、horizon 或 formal gate，
+但必须先通过固定 12 条完整字段 exact parity 和 60 条生命周期/性能门。按现有磁盘公式需要
+至少 22 GiB 空闲，启动前采用 23 GiB 操作门槛。某个原生 batch 超时时，其未完成任务会在
+最多 3 个独立临时目录中并行 individual 重试，完成后仍按原任务顺序提交；这样避免一次
+长尾 shard 在 fallback 阶段再串行等待数小时。
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation

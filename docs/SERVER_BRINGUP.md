@@ -1473,3 +1473,101 @@ bash scripts/run_alfworld.sh grounding
 程序会先把已提交任务计入进度条，只执行缺失 shard。若工作项、源码校验和、配置文件内容
 或任何关键运行参数与原 run 不一致，会在启动 worker 前拒绝恢复；此时应检出原提交后再
 恢复，不要手工修改 `grounding-resume.json`。
+
+### 2×3 组合并行正式候选
+
+旧提交 `925498c` 的 3,008 条进度不能恢复；以下命令只适用于更新后新建的 run。组合候选
+同时使用 2 个 bounded worker 和每 worker 3 个原生 planner slot，总并发为 6。它不使用
+GPU，但会并发创建 6 套 TextWorld 临时环境；要求启动前至少有 23 GiB 空闲磁盘。先运行
+固定 12 条完全一致性门：
+
+```bash
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/planner-parity-native2x3-${STAMP}.log"
+nohup env \
+  CUDA_VISIBLE_DEVICES="" \
+  GROUNDING_PARITY_TASKS_PER_TYPE=2 \
+  GROUNDING_PARITY_WORKER_BATCH_SIZE=6 \
+  GROUNDING_PARITY_PARALLEL_WORKERS=2 \
+  GROUNDING_PARITY_CANDIDATE_BACKEND=native_batch_parallel \
+  GROUNDING_NATIVE_BATCH_SIZE=3 \
+  GROUNDING_PARITY_MINIMUM_SPEEDUP=0 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-grounding-planner-parity-native2x3 \
+  bash scripts/run_alfworld.sh grounding-planner-parity \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+`planner-parity.json` 必须显示 `passed=true`、`mismatch_count=0`、
+`parallel.worker_concurrency=2`、`parallel.peak_worker_processes=2` 和
+`parallel.peak_environment_slots=6`。通过后用六类各 10 条重新验证一致性、生命周期和
+实际提速；预计约 20--45 分钟：
+
+```bash
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/planner-parity-native2x3-stress60-${STAMP}.log"
+nohup env \
+  CUDA_VISIBLE_DEVICES="" \
+  GROUNDING_PARITY_TASKS_PER_TYPE=10 \
+  GROUNDING_PARITY_WORKER_BATCH_SIZE=30 \
+  GROUNDING_PARITY_PARALLEL_WORKERS=2 \
+  GROUNDING_PARITY_CANDIDATE_BACKEND=native_batch_parallel \
+  GROUNDING_NATIVE_BATCH_SIZE=3 \
+  GROUNDING_PARITY_MINIMUM_SPEEDUP=1.20 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-grounding-planner-parity-native2x3-stress60 \
+  bash scripts/run_alfworld.sh grounding-planner-parity \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+60 条门也通过且 `timed_out_tasks` 为空后，检查磁盘并启动 3,553 条正式运行。预期墙钟约
+4--6 小时，具体仍取决于 `pick_two_obj_and_place` 长尾：
+
+```bash
+FREE_BYTES=$(df -B1 --output=avail /root/autodl-tmp | tail -n 1 | tr -d ' ')
+if (( FREE_BYTES < 23 * 1024 * 1024 * 1024 )); then
+  echo "可用磁盘不足 23 GiB，拒绝启动。"
+  df -h /root/autodl-tmp
+  exit 1
+fi
+
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-grounding-formal-native2x3-${STAMP}.log"
+nohup env \
+  CUDA_VISIBLE_DEVICES="" \
+  GROUNDING_WORKER_BATCH_SIZE=32 \
+  GROUNDING_WORKER_PROCESSES=2 \
+  GROUNDING_REPLAY_BACKEND=native_batch \
+  GROUNDING_NATIVE_BATCH_SIZE=3 \
+  GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS=300 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-grounding-formal-native2x3 \
+  bash scripts/run_alfworld.sh grounding \
+  >"${LOG}" 2>&1 &
+PID=$!
+echo "${PID}" >"${LOG}.pid"
+echo "pid=${PID} log=${LOG}"
+```
+
+若 SSH 断开或进程异常退出，使用同一代码版本和完全相同参数恢复；不要设置 `RUN_NAME`：
+
+```bash
+nohup env \
+  CUDA_VISIBLE_DEVICES="" \
+  GROUNDING_RESUME_RUN=/absolute/path/to/runs/<grounding-run> \
+  GROUNDING_WORKER_BATCH_SIZE=32 \
+  GROUNDING_WORKER_PROCESSES=2 \
+  GROUNDING_REPLAY_BACKEND=native_batch \
+  GROUNDING_NATIVE_BATCH_SIZE=3 \
+  GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS=300 \
+  INFO_SKILL_CPU_THREADS=1 \
+  bash scripts/run_alfworld.sh grounding \
+  >"${LOG}" 2>&1 &
+```

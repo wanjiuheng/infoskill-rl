@@ -289,40 +289,92 @@ def run_bounded_grounding(
                             "partial result set"
                         ) from error
                     remaining = chunk[len(shard_results) :]
-                    for item in remaining:
+
+                    def isolate_remaining_item(
+                        indexed_item: tuple[int, GroundingWorkItem],
+                    ) -> tuple[int, tuple[str, ExpertReplayResult]]:
+                        nonlocal worker_processes_started
+                        offset, item = indexed_item
                         try:
                             with state_lock:
                                 worker_processes_started += 1
-                            isolated = _invoke_runner(
-                                runner=runner,
-                                is_default_runner=worker_runner is None,
-                                work_items=(item,),
-                                config_path=resolved_config,
-                                temporary_directory=temporary_path,
-                                max_replay_steps=max_replay_steps,
-                                persist_horizon=persist_horizon,
-                                expert_type=expert_type,
-                                replay_backend="individual",
-                                native_batch_size=1,
-                                on_progress=shard_progress,
-                                inactivity_timeout_seconds=(
-                                    worker_inactivity_timeout_seconds
-                                ),
-                            )
-                            shard_results.extend(isolated)
+                            with tempfile.TemporaryDirectory(
+                                prefix=f"isolated-{offset:04d}-",
+                                dir=temporary_path,
+                            ) as isolated_temporary:
+                                isolated = _invoke_runner(
+                                    runner=runner,
+                                    is_default_runner=worker_runner is None,
+                                    work_items=(item,),
+                                    config_path=resolved_config,
+                                    temporary_directory=Path(isolated_temporary),
+                                    max_replay_steps=max_replay_steps,
+                                    persist_horizon=persist_horizon,
+                                    expert_type=expert_type,
+                                    replay_backend="individual",
+                                    native_batch_size=1,
+                                    on_progress=shard_progress,
+                                    inactivity_timeout_seconds=(
+                                        worker_inactivity_timeout_seconds
+                                    ),
+                                )
+                            if len(isolated) != 1:
+                                raise RuntimeError(
+                                    "isolated grounding retry must return exactly "
+                                    "one task"
+                                )
+                            return offset, isolated[0]
                         except GroundingWorkerInactivityTimeout as isolated_error:
+                            partial = tuple(isolated_error.partial_results)
+                            if (
+                                len(partial) == 1
+                                and partial[0][1].task_id == item.task.task_id
+                            ):
+                                return offset, partial[0]
                             with state_lock:
                                 timed_out_tasks.append(item.task.task_id)
                             shard_progress(1)
-                            shard_results.append(
+                            return (
+                                offset,
                                 (
                                     item.task.task_type,
                                     _timeout_quarantine(
                                         item.task,
                                         isolated_error,
                                     ),
-                                )
+                                ),
                             )
+
+                    indexed_remaining = tuple(enumerate(remaining))
+                    fallback_concurrency = min(
+                        environment_slots_per_worker,
+                        len(indexed_remaining),
+                    )
+                    isolated_results: dict[
+                        int, tuple[str, ExpertReplayResult]
+                    ] = {}
+                    if fallback_concurrency <= 1:
+                        for indexed_item in indexed_remaining:
+                            offset, isolated = isolate_remaining_item(indexed_item)
+                            isolated_results[offset] = isolated
+                    else:
+                        with ThreadPoolExecutor(
+                            max_workers=fallback_concurrency
+                        ) as fallback_executor:
+                            fallback_futures = {
+                                fallback_executor.submit(
+                                    isolate_remaining_item,
+                                    indexed_item,
+                                ): indexed_item[0]
+                                for indexed_item in indexed_remaining
+                            }
+                            for future in as_completed(fallback_futures):
+                                offset, isolated = future.result()
+                                isolated_results[offset] = isolated
+                    shard_results.extend(
+                        isolated_results[offset]
+                        for offset in range(len(indexed_remaining))
+                    )
                 expected_ids = [item.task.task_id for item in chunk]
                 actual_ids = [result.task_id for _, result in shard_results]
                 if actual_ids != expected_ids:

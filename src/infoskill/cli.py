@@ -213,7 +213,11 @@ def _parser() -> argparse.ArgumentParser:
     planner_parity.add_argument("--parallel-workers", type=int, default=2)
     planner_parity.add_argument(
         "--candidate-backend",
-        choices=("process_parallel", "native_batch"),
+        choices=(
+            "process_parallel",
+            "native_batch",
+            "native_batch_parallel",
+        ),
         default="process_parallel",
     )
     planner_parity.add_argument("--native-batch-size", type=int, default=4)
@@ -1806,13 +1810,14 @@ def _grounding_planner_parity(
         or args.native_batch_size <= 0
         or args.minimum_speedup < 0
         or (
-            args.candidate_backend == "process_parallel"
+            args.candidate_backend
+            in {"process_parallel", "native_batch_parallel"}
             and args.parallel_workers < 2
         )
     ):
         raise ValueError(
-            "planner parity sizes must be positive; process-parallel workers "
-            "must be at least 2"
+            "planner parity sizes must be positive; parallel candidates "
+            "must use at least 2 workers"
         )
     from tqdm.auto import tqdm
 
@@ -1837,7 +1842,8 @@ def _grounding_planner_parity(
         selection_seed=config.master_seed,
     )
     if (
-        args.candidate_backend == "process_parallel"
+        args.candidate_backend
+        in {"process_parallel", "native_batch_parallel"}
         and len(selected) <= args.worker_batch_size
     ):
         raise ValueError(
@@ -1887,7 +1893,8 @@ def _grounding_planner_parity(
             worker_batch_size=args.worker_batch_size,
             worker_processes=(
                 args.parallel_workers
-                if args.candidate_backend == "process_parallel"
+                if args.candidate_backend
+                in {"process_parallel", "native_batch_parallel"}
                 else 1
             ),
             max_replay_steps=args.max_replay_steps,
@@ -1895,7 +1902,8 @@ def _grounding_planner_parity(
             expert_type="planner",
             replay_backend=(
                 "native_batch"
-                if args.candidate_backend == "native_batch"
+                if args.candidate_backend
+                in {"native_batch", "native_batch_parallel"}
                 else "individual"
             ),
             native_batch_size=args.native_batch_size,
