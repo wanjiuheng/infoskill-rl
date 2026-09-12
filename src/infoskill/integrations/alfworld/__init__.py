@@ -32,6 +32,7 @@ from .grounding_shards import (
     GroundingShardReport,
     GroundingWorkItem,
     grounding_work_items_sha256,
+    load_available_committed_grounding_results,
     load_committed_grounding_results,
     run_bounded_grounding,
 )
@@ -87,6 +88,7 @@ __all__ = [
     "load_handcoded_expert",
     "grounding_result_payload",
     "grounding_work_items_sha256",
+    "load_available_committed_grounding_results",
     "load_committed_grounding_results",
     "merge_timeout_grounding_results",
     "read_grounding_results",

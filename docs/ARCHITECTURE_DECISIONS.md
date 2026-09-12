@@ -163,3 +163,9 @@ SSH 或父进程中断后校验恢复。
 静默翻倍。43 条、4 worker 的理论最坏时间约为 `ceil(43/4)×600s=110min`，并发磁盘启动门
 为 4 GiB 硬下限加 4×3 GiB 预留，即 16 GiB。只有派生 manifest 的
 `formal_gate_passed=true` 时，救援目录才可作为 M1 grounding 数据输入。
+
+救援不要求为得到 formal 数据而等待全部 timeout 重试结束。已完成任务继续按一任务一 shard
+原子提交；独立 finalization 入口可在任意时刻读取 committed marker 快照，逐 shard 复核 plan、
+work-item 和结果 SHA，并只合并其中成功的重放。一旦累计救回 8 条使完整 3,553 条派生 manifest
+通过原门禁，即可生成新的只读正式目录；尚未提交或再次超时的任务继续沿用源 quarantine。
+finalization 不在活跃 rescue run 内写派生产物，避免与并发提交互相覆盖。

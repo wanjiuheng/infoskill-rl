@@ -596,6 +596,73 @@ def load_committed_grounding_results(
     """Read every committed shard after validating plan, checksums, and order."""
 
     destination = Path(run_directory).expanduser().resolve()
+    plan = _load_validated_resume_plan(destination, work_items)
+    worker_batch_size = int(plan["worker_batch_size"])
+    results: list[tuple[str, ExpertReplayResult]] = []
+    for shard_index, start in enumerate(
+        range(0, len(work_items), worker_batch_size),
+        start=1,
+    ):
+        chunk = work_items[start : start + worker_batch_size]
+        committed = _load_completed_shard(
+            destination=destination,
+            shard_index=shard_index,
+            start_index=start,
+            chunk=chunk,
+            resume_plan_sha256=plan["plan_sha256"],
+        )
+        if committed is None:
+            raise RuntimeError(
+                f"grounding source shard {shard_index} is not committed"
+            )
+        shard_results, _ = committed
+        results.extend(shard_results)
+    expected_ids = [item.task.task_id for item in work_items]
+    actual_ids = [result.task_id for _, result in results]
+    if actual_ids != expected_ids:
+        raise RuntimeError(
+            "committed grounding results changed global task count or order"
+        )
+    return results
+
+
+def load_available_committed_grounding_results(
+    run_directory: str | Path,
+    work_items: Sequence[GroundingWorkItem],
+) -> list[tuple[str, ExpertReplayResult]]:
+    """Read a checksum-validated snapshot of the shards committed so far."""
+
+    destination = Path(run_directory).expanduser().resolve()
+    plan = _load_validated_resume_plan(destination, work_items)
+    worker_batch_size = int(plan["worker_batch_size"])
+    results: list[tuple[str, ExpertReplayResult]] = []
+    for shard_index, start in enumerate(
+        range(0, len(work_items), worker_batch_size),
+        start=1,
+    ):
+        chunk = work_items[start : start + worker_batch_size]
+        committed = _load_completed_shard(
+            destination=destination,
+            shard_index=shard_index,
+            start_index=start,
+            chunk=chunk,
+            resume_plan_sha256=plan["plan_sha256"],
+        )
+        if committed is None:
+            continue
+        shard_results, _ = committed
+        results.extend(shard_results)
+    expected_order = {
+        item.task.task_id: index for index, item in enumerate(work_items)
+    }
+    results.sort(key=lambda row: expected_order[row[1].task_id])
+    return results
+
+
+def _load_validated_resume_plan(
+    destination: Path,
+    work_items: Sequence[GroundingWorkItem],
+) -> dict[str, object]:
     plan_path = destination / "grounding-resume.json"
     if not plan_path.is_file():
         raise FileNotFoundError(
@@ -630,33 +697,7 @@ def load_committed_grounding_results(
             "grounding source resume plan failed validation: "
             f"{failed}"
         )
-    worker_batch_size = int(plan["worker_batch_size"])
-    results: list[tuple[str, ExpertReplayResult]] = []
-    for shard_index, start in enumerate(
-        range(0, len(work_items), worker_batch_size),
-        start=1,
-    ):
-        chunk = work_items[start : start + worker_batch_size]
-        committed = _load_completed_shard(
-            destination=destination,
-            shard_index=shard_index,
-            start_index=start,
-            chunk=chunk,
-            resume_plan_sha256=plan["plan_sha256"],
-        )
-        if committed is None:
-            raise RuntimeError(
-                f"grounding source shard {shard_index} is not committed"
-            )
-        shard_results, _ = committed
-        results.extend(shard_results)
-    expected_ids = [item.task.task_id for item in work_items]
-    actual_ids = [result.task_id for _, result in results]
-    if actual_ids != expected_ids:
-        raise RuntimeError(
-            "committed grounding results changed global task count or order"
-        )
-    return results
+    return plan
 
 
 def _ensure_resume_plan(

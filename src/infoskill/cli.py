@@ -195,6 +195,13 @@ def _parser() -> argparse.ArgumentParser:
         "--resume-run",
         help="existing timeout-rescue run whose committed shards should be reused",
     )
+    grounding_rescue.add_argument(
+        "--finalize-committed-rescue-run",
+        help=(
+            "read a checksum-validated snapshot of committed rescue shards and "
+            "write a separate derived formal run without waiting for every retry"
+        ),
+    )
     grounding_rescue.add_argument("--worker-processes", type=int, default=4)
     grounding_rescue.add_argument(
         "--worker-inactivity-timeout-seconds",
@@ -1583,6 +1590,11 @@ def _grounding_timeout_rescue(
         raise ValueError("grounding rescue worker settings must be positive")
     if args.resume_run and args.run_name:
         raise ValueError("grounding rescue resume-run cannot be combined with run-name")
+    if args.resume_run and args.finalize_committed_rescue_run:
+        raise ValueError(
+            "grounding rescue resume-run cannot be combined with committed "
+            "snapshot finalization"
+        )
 
     from tqdm.auto import tqdm
 
@@ -1591,6 +1603,7 @@ def _grounding_timeout_rescue(
         build_grounding_manifest,
         discover_tasks,
         grounding_work_items_sha256,
+        load_available_committed_grounding_results,
         load_committed_grounding_results,
         merge_timeout_grounding_results,
         prepare_alfworld_expert_type_binding,
@@ -1725,7 +1738,21 @@ def _grounding_timeout_rescue(
     if not rescue_work_items:
         raise ValueError("source grounding run has no timeout rows to rescue")
 
-    if args.resume_run:
+    committed_rescue_run = None
+    if args.finalize_committed_rescue_run:
+        committed_rescue_run = Path(
+            args.finalize_committed_rescue_run
+        ).expanduser().resolve()
+        if not committed_rescue_run.is_dir():
+            raise FileNotFoundError(
+                "committed timeout-rescue run does not exist: "
+                f"{committed_rescue_run}"
+            )
+        run_directory = _run_directory(
+            config,
+            args.run_name or "grounding-timeout-rescue-finalized",
+        )
+    elif args.resume_run:
         run_directory = Path(args.resume_run).expanduser().resolve()
         if not run_directory.is_dir():
             raise FileNotFoundError(
@@ -1745,29 +1772,85 @@ def _grounding_timeout_rescue(
             f"{current_work_items_sha256}"
         ).encode("utf-8")
     ).hexdigest()
-    with tqdm(
-        total=len(rescue_work_items),
-        desc="train/planner-timeout-rescue",
-        unit="task",
-        dynamic_ncols=True,
-    ) as progress:
-        rescue_results, lifecycle = run_bounded_grounding(
-            work_items=rescue_work_items,
-            config_path=args.config,
-            run_directory=run_directory,
-            worker_batch_size=1,
-            worker_processes=args.worker_processes,
-            max_replay_steps=int(source_manifest["max_replay_steps"]),
-            persist_horizon=int(source_manifest["persist_horizon"]),
-            expert_type="planner",
-            replay_backend="individual",
-            native_batch_size=1,
-            worker_inactivity_timeout_seconds=(
-                args.worker_inactivity_timeout_seconds
-            ),
-            source_checksum=rescue_plan_source_checksum,
-            on_progress=progress.update,
+    if committed_rescue_run is not None:
+        rescue_resume_path = committed_rescue_run / "grounding-resume.json"
+        if not rescue_resume_path.is_file():
+            raise FileNotFoundError(
+                "committed timeout-rescue run lacks grounding-resume.json: "
+                f"{committed_rescue_run}"
+            )
+        rescue_resume = json.loads(
+            rescue_resume_path.read_text(encoding="utf-8")
         )
+        rescue_plan_checks = {
+            "worker_batch_size": rescue_resume.get("worker_batch_size") == 1,
+            "expert_type": rescue_resume.get("expert_type") == "planner",
+            "replay_backend": rescue_resume.get("replay_backend") == "individual",
+            "native_batch_size": rescue_resume.get("native_batch_size") == 1,
+            "max_replay_steps": rescue_resume.get("max_replay_steps")
+            == int(source_manifest["max_replay_steps"]),
+            "persist_horizon": rescue_resume.get("persist_horizon")
+            == int(source_manifest["persist_horizon"]),
+            "source_checksum": isinstance(
+                rescue_resume.get("source_checksum"), str
+            ),
+        }
+        failed_rescue_plan_checks = [
+            name for name, passed in rescue_plan_checks.items() if not passed
+        ]
+        if failed_rescue_plan_checks:
+            raise ValueError(
+                "committed timeout-rescue plan is incompatible with the "
+                f"formal source: {failed_rescue_plan_checks}"
+            )
+        rescue_results = load_available_committed_grounding_results(
+            committed_rescue_run,
+            rescue_work_items,
+        )
+        if not rescue_results:
+            raise ValueError("committed timeout-rescue snapshot contains no results")
+        lifecycle_payload = {
+            "schema_version": 1,
+            "mode": "committed_rescue_snapshot",
+            "source_rescue_run": str(committed_rescue_run),
+            "source_rescue_plan_sha256": rescue_resume.get("plan_sha256"),
+            "snapshot_committed_tasks": len(rescue_results),
+        }
+        report_worker_processes = rescue_resume.get("worker_processes")
+        report_timeout_seconds = rescue_resume.get(
+            "worker_inactivity_timeout_seconds"
+        )
+        report_temporary_cleaned = None
+        report_minimum_free_disk_bytes = None
+    else:
+        with tqdm(
+            total=len(rescue_work_items),
+            desc="train/planner-timeout-rescue",
+            unit="task",
+            dynamic_ncols=True,
+        ) as progress:
+            rescue_results, lifecycle = run_bounded_grounding(
+                work_items=rescue_work_items,
+                config_path=args.config,
+                run_directory=run_directory,
+                worker_batch_size=1,
+                worker_processes=args.worker_processes,
+                max_replay_steps=int(source_manifest["max_replay_steps"]),
+                persist_horizon=int(source_manifest["persist_horizon"]),
+                expert_type="planner",
+                replay_backend="individual",
+                native_batch_size=1,
+                worker_inactivity_timeout_seconds=(
+                    args.worker_inactivity_timeout_seconds
+                ),
+                source_checksum=rescue_plan_source_checksum,
+                on_progress=progress.update,
+            )
+        lifecycle_payload = _dataclass_dict(lifecycle)
+        report_worker_processes = args.worker_processes
+        report_timeout_seconds = args.worker_inactivity_timeout_seconds
+        report_temporary_cleaned = lifecycle.temporary_directories_cleaned
+        report_minimum_free_disk_bytes = lifecycle.minimum_free_disk_bytes
     merge = merge_timeout_grounding_results(source_results, rescue_results)
     derived_manifest = build_grounding_manifest(
         results=merge.results,
@@ -1795,7 +1878,7 @@ def _grounding_timeout_rescue(
     )
     _write_json(
         run_directory / "grounding-rescue-lifecycle.json",
-        _dataclass_dict(lifecycle),
+        lifecycle_payload,
     )
     rescue_report = {
         "schema_version": 1,
@@ -1819,14 +1902,13 @@ def _grounding_timeout_rescue(
         "derived_formal_gate_failures": list(
             derived_manifest.formal_gate_failures
         ),
-        "worker_processes": args.worker_processes,
-        "worker_inactivity_timeout_seconds": (
-            args.worker_inactivity_timeout_seconds
+        "committed_rescue_snapshot_run": (
+            str(committed_rescue_run) if committed_rescue_run is not None else None
         ),
-        "temporary_directories_cleaned": (
-            lifecycle.temporary_directories_cleaned
-        ),
-        "minimum_free_disk_bytes": lifecycle.minimum_free_disk_bytes,
+        "worker_processes": report_worker_processes,
+        "worker_inactivity_timeout_seconds": report_timeout_seconds,
+        "temporary_directories_cleaned": report_temporary_cleaned,
+        "minimum_free_disk_bytes": report_minimum_free_disk_bytes,
     }
     _write_json(run_directory / "grounding-rescue-report.json", rescue_report)
     logger.info(
@@ -1837,7 +1919,11 @@ def _grounding_timeout_rescue(
         len(merge.remaining_timeout_task_ids),
         derived_manifest.success_coverage,
         derived_manifest.formal_gate_passed,
-        lifecycle.minimum_free_disk_bytes / 1024**3,
+        (
+            report_minimum_free_disk_bytes / 1024**3
+            if report_minimum_free_disk_bytes is not None
+            else float("nan")
+        ),
     )
     logger.info("Grounding rescue report: %s", run_directory / "grounding-rescue-report.json")
     return 0 if derived_manifest.formal_gate_passed else 4

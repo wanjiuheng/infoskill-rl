@@ -310,6 +310,13 @@ manifest，并记录源 manifest SHA 和救援生命周期。理论最坏约 110
 16 GiB，救援过程可按一任务一 shard 断点恢复。只有派生 manifest 重新通过 formal gate 后
 才能作为 M1 grounding 输入。
 
+该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
+`expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
+累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard
+快照，并写到一个独立派生目录；快照与源 formal run 均逐项校验，只有重算后的完整 3,553 条
+manifest 通过原 99% coverage、1% horizon 和 planner identity 门才返回成功。该路径不修改
+正在运行的救援目录，也不把未完成任务视为成功。
+
 **Hybrid Soft-Prefix Rollout**:
 rollout 侧用连续 soft prefix 高速采样、训练侧重算动作概率的执行模式。
 _Avoid_: token-only rollout、prefix-free recomputation

@@ -28,6 +28,26 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(arguments.resume_run, "/runs/formal-grounding")
         self.assertEqual(arguments.worker_inactivity_timeout_seconds, 420.0)
 
+    def test_grounding_rescue_accepts_a_committed_snapshot_to_finalize(self) -> None:
+        arguments = _parser().parse_args(
+            [
+                "grounding-timeout-rescue",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--source-grounding-run",
+                "/runs/formal-grounding",
+                "--finalize-committed-rescue-run",
+                "/runs/partial-rescue",
+                "--run-name",
+                "formal-grounding-rescued",
+            ]
+        )
+
+        self.assertEqual(
+            arguments.finalize_committed_rescue_run,
+            "/runs/partial-rescue",
+        )
+
     @staticmethod
     def _arguments() -> list[str]:
         return [

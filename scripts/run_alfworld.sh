@@ -37,6 +37,8 @@ GROUNDING_SOURCE_RUN="${GROUNDING_SOURCE_RUN:-}"
 # planner so the source run's native-batch long tail is not repeated.
 GROUNDING_RESCUE_WORKER_PROCESSES="${GROUNDING_RESCUE_WORKER_PROCESSES:-4}"
 GROUNDING_RESCUE_TIMEOUT_SECONDS="${GROUNDING_RESCUE_TIMEOUT_SECONDS:-600}"
+# Existing rescue run to snapshot into a separate derived formal directory.
+GROUNDING_RESCUE_FINALIZE_RUN="${GROUNDING_RESCUE_FINALIZE_RUN:-}"
 GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE="${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE:-3}"
 GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS="${GROUNDING_DIAGNOSTIC_MAX_REPLAY_STEPS:-150}"
 # Balanced CPU-only planner candidate pilot; never produces formal M1 labels.
@@ -373,7 +375,14 @@ case "${ACTION}" in
       --native-batch-size "${GROUNDING_NATIVE_BATCH_SIZE}"
       --worker-inactivity-timeout-seconds "${GROUNDING_WORKER_INACTIVITY_TIMEOUT_SECONDS}"
     )
-    if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
+    if [[ -n "${GROUNDING_RESCUE_FINALIZE_RUN}" ]]; then
+      if [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
+        echo "GROUNDING_RESCUE_FINALIZE_RUN cannot be combined with GROUNDING_RESUME_RUN" >&2
+        exit 2
+      fi
+      GROUNDING_RESCUE_ARGS+=(--finalize-committed-rescue-run "${GROUNDING_RESCUE_FINALIZE_RUN}")
+      GROUNDING_RESCUE_ARGS+=("${EXTRA_ARGS[@]}")
+    elif [[ -n "${GROUNDING_RESUME_RUN}" ]]; then
       if [[ -n "${RUN_NAME}" ]]; then
         echo "GROUNDING_RESUME_RUN cannot be combined with RUN_NAME" >&2
         exit 2

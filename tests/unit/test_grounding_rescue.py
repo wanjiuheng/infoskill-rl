@@ -9,6 +9,7 @@ from infoskill.integrations.alfworld import (
     ExpertReplayResult,
     GroundingWorkItem,
     build_grounding_manifest,
+    load_available_committed_grounding_results,
     load_committed_grounding_results,
     merge_timeout_grounding_results,
     run_bounded_grounding,
@@ -138,6 +139,70 @@ class GroundingRescueTests(unittest.TestCase):
                 load_committed_grounding_results(temporary, work_items)
 
         self.assertEqual(loaded, expected)
+
+    def test_loads_a_checksum_validated_snapshot_of_committed_shards(self) -> None:
+        work_items = tuple(_item(index) for index in range(3))
+
+        def worker(
+            items,
+            config_path,
+            temporary,
+            max_steps,
+            horizon,
+            expert_type,
+            replay_backend,
+            native_batch_size,
+            callback,
+        ):
+            del (
+                config_path,
+                temporary,
+                max_steps,
+                horizon,
+                expert_type,
+                replay_backend,
+                native_batch_size,
+            )
+            if callback is not None:
+                callback(len(items))
+            return [
+                (
+                    item.task.task_type,
+                    _result(int(item.task.task_id[-1]), succeeded=True),
+                )
+                for item in items
+            ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "config.yaml"
+            config.write_text("test: true\n", encoding="utf-8")
+            run_bounded_grounding(
+                work_items=work_items,
+                config_path=config,
+                run_directory=temporary,
+                worker_batch_size=1,
+                max_replay_steps=150,
+                persist_horizon=30,
+                expert_type="planner",
+                worker_runner=worker,
+            )
+            marker = (
+                Path(temporary)
+                / "grounding-shards"
+                / "shard-0002"
+                / "complete.json"
+            )
+            marker.unlink()
+
+            snapshot = load_available_committed_grounding_results(
+                temporary,
+                work_items,
+            )
+
+        self.assertEqual(
+            [result.task_id for _, result in snapshot],
+            ["task-0", "task-2"],
+        )
 
     def test_selects_only_timeout_work_items_in_original_order(self) -> None:
         work_items = tuple(_item(index) for index in range(4))

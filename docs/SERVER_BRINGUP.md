@@ -1633,6 +1633,27 @@ nohup env \
   >"$LOG" 2>&1 &
 ```
 
+本次正式源只需累计救回 8 条即可达到 99%。不必等待 43 条全部结束：当已提交成功数达到 8
+时，可让救援继续运行，同时从原子 committed shard 生成一个独立快照目录。该入口会重新校验
+源 formal run、rescue plan、每个 marker 和结果 SHA，并重算完整门禁；成功前不会把目录当成
+正式数据。
+
+```bash
+SOURCE=/root/autodl-tmp/wjh/alfworld_eval/infoskill/runs/20260912T084938Z-m1-grounding-formal-native2x3
+RESCUE_RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-grounding-timeout-rescue' | sort | tail -n 1)
+
+GPUS=0 \
+GROUNDING_SOURCE_RUN="$SOURCE" \
+GROUNDING_RESCUE_FINALIZE_RUN="$RESCUE_RUN" \
+INFO_SKILL_CPU_THREADS=1 \
+RUN_NAME=m1-grounding-formal-rescued \
+bash scripts/run_alfworld.sh grounding-timeout-rescue
+```
+
+只有新目录的 `grounding-rescue-report.json` 显示
+`derived_formal_gate_passed: true` 后，才停止原救援进程并把新目录登记为 `GROUNDING_DATA`。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

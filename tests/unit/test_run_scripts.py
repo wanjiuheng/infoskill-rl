@@ -28,6 +28,10 @@ class RunScriptTests(unittest.TestCase):
             'GROUNDING_RESCUE_ARGS+=(--resume-run "${GROUNDING_RESUME_RUN}")',
             script,
         )
+        self.assertIn(
+            'GROUNDING_RESCUE_ARGS+=(--finalize-committed-rescue-run "${GROUNDING_RESCUE_FINALIZE_RUN}")',
+            script,
+        )
 
     def test_planner_loop_diagnostic_is_cpu_only_and_uses_source_pilot(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
