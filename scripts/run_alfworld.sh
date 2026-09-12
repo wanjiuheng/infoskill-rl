@@ -529,6 +529,9 @@ case "${ACTION}" in
     if [[ -n "${GROUNDING_DATA}" ]]; then
       TRAIN_ARGS+=(--grounding-data "${GROUNDING_DATA}")
     fi
+    if [[ -n "${EVAL_BATCH_SIZE}" ]]; then
+      TRAIN_ARGS+=(--eval-batch-size "${EVAL_BATCH_SIZE}")
+    fi
     if [[ "${DRY_RUN}" == "1" ]]; then
       TRAIN_ARGS+=(--dry-run)
     fi
@@ -552,7 +555,7 @@ case "${ACTION}" in
         exit 2
         ;;
     esac
-    python -m infoskill.cli train "${TRAIN_ARGS[@]}"
+    exec python -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
     echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-timeout-rescue, grounding-expert-diagnostic, grounding-planner-pilot, grounding-planner-parity, grounding-planner-loop-diagnostic, or train" >&2

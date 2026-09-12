@@ -195,6 +195,109 @@ echo "ARCHIVE=$ARCHIVE"
 ls -lh "$ARCHIVE"
 ```
 
+## M1 445-update：batch-12 周期监控、实时曲线和安全暂停
+
+下面的正式训练只启动一个 run。它不会额外先跑独立 update-0；训练器自身在 update 0、25、
+50……周期点直接用 batch 12 评测固定 140 条，并在每次评测完整落盘后原子刷新
+`valid_seen_learning_curve.svg`。batch 12 未通过 batch-8 exact parity，因此曲线只用于同 run
+趋势监控；最终选中的 checkpoint 仍须用 batch 8 重评后才能进入跨方法主表。
+
+启动风险：该命令会长期占用 3 张 GPU、持续写 checkpoint/trace；运行前应确认三卡空闲且数据盘
+至少有 20 GiB 可用。后台 PID 就是训练 Python 进程，可直接接收安全暂停信号。
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+git pull origin main
+
+GROUNDING=/root/autodl-tmp/wjh/alfworld_eval/infoskill/runs/20260912T153809Z-m1-grounding-formal-rescued-finalized
+df -h /root/autodl-tmp
+nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free \
+  --format=csv,noheader,nounits
+
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-infoskill-formal-u445-batch12-${STAMP}.log"
+
+nohup env \
+  GROUNDING_DATA="$GROUNDING" \
+  GPUS=0,1,2 \
+  PROFILE=formal \
+  EVAL_BATCH_SIZE=12 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  ENVIRONMENT_WORKERS=1 \
+  POLICY_MAX_TOKENS_PER_GPU=12288 \
+  BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  CUDA_MEMORY_POLL_INTERVAL_MS=1000 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-infoskill-formal-u445-batch12-monitor \
+  bash scripts/run_alfworld.sh train infoskill \
+  >"$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" >"${LOG}.pid"
+disown "$PID"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+首次周期评测完成后，run 目录中会出现曲线。每次更新是临时文件写完再替换，不会留下半张图：
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-infoskill-formal-u445-batch12-monitor' | sort | tail -n 1)
+cat "$RUN/training-control.json"
+cat "$RUN/checkpoint_selection.json"
+ls -lh "$RUN/valid_seen_learning_curve.svg"
+```
+
+需要暂停时不要 `kill -9`。读取 run 自己登记的 Python PID 并发送一次 SIGINT；信号到达后会
+完成当前 update；若恰逢 25、50……周期边界，还会完整跑完该点的 140 条 batch-12 评测并刷新
+曲线，然后提交 portable checkpoint、把 summary/status 写成 `paused`，最后安全关闭
+Ray/FSDP/vLLM。因此暂停不是立即退出，等待当前 update（以及可能的周期评测）完成属于正常现象。
+
+```bash
+PY_PID=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' \
+  "$RUN/training-control.json")
+kill -INT "$PY_PID"
+tail -f "$LOG"
+```
+
+确认 `training-control.json.status=paused` 后，从对应 update 原地续跑。必须保持原来的 3 GPU、
+batch 12 和全部训练参数；不要设置 `RUN_NAME`，否则会创建 fork 而不是延续同一条曲线。
+
+```bash
+STEP=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["global_update"])' \
+  "$RUN/training-control.json")
+CHECKPOINT=$(printf '%s/checkpoints/step-%06d' "$RUN" "$STEP")
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-infoskill-formal-u445-batch12-resume-${STAMP}.log"
+
+nohup env \
+  GROUNDING_DATA="$GROUNDING" \
+  GPUS=0,1,2 \
+  PROFILE=formal \
+  EVAL_BATCH_SIZE=12 \
+  RESUME="$CHECKPOINT" \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  ENVIRONMENT_WORKERS=1 \
+  POLICY_MAX_TOKENS_PER_GPU=12288 \
+  BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  CUDA_MEMORY_POLL_INTERVAL_MS=1000 \
+  INFO_SKILL_CPU_THREADS=1 \
+  bash scripts/run_alfworld.sh train infoskill \
+  >"$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" >"${LOG}.pid"
+disown "$PID"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
 身份 smoke 通过后，不直接开启 300 条并行 pilot。先在同一固定 12 条上各运行一次串行和
 双 worker replay，并对完整逐步结果做 exact parity。该入口主动隐藏 GPU；串行与并行
 使用相同任务、种子、planner、150 步验证上限和 30 步持久化窗口。`worker-batch-size=6`

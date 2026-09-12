@@ -214,6 +214,11 @@ _Avoid_: validation-set tuning、simultaneous coefficient sweep、metric-free we
 pilot 与 formal 共用同一个固定 140 条 `valid_seen` manifest、确定性解码和六类分母。pilot 只在 update 0 和 25 评测；formal 在 update 0、之后每 25 个 optimizer updates 以及最终 update 445 评测。smoke、integration 与 benchmark 不执行周期评测。系统不再从 3,553 条 train 任务中派生 355 条 monitor，所有训练档位都从完整 train 清单按相同种子顺序取任务；`valid_seen` 始终无梯度且不进入训练。旧 pilot 的 train-monitor 数值仅保留为工程稳定性证据，不能与新曲线混合。
 _Avoid_: per-update evaluation、355-task train monitor、validation examples in gradients、mixed old/new curves
 
+首轮 M1 445-update 运行可按预注册的运行级例外，把所有周期评测统一设为 batch 12 以提高
+监控吞吐；这会生成明确标记为 `nonregistered_monitoring_curve` 的同 run 曲线，不能与 batch 8
+曲线逐点混合或直接用于跨方法最终比较。最终选择的 M1 checkpoint 必须再按固定 batch 8、
+140 条 manifest 重评，之后才进入 M0/raw/M1 主表。
+
 **Periodic Valid-Seen Evaluation**:
 pilot 和 formal 按上一条固定检查点，对完整 140 条 `valid_seen` 执行无梯度确定性评测（M1 `latent=mu`、策略 greedy）。评测记录六类 success、macro success、overall success、非法动作率和平均步数，但不得用于调整 loss、学习率或其他超参数。每次保留对应 checkpoint；formal 同时报告固定预算结束的 `last` 与按预注册规则选择的 `best-valid`：先最大化六类 macro success，再比较 overall success、较低非法动作率，最后选更早 checkpoint。使用同一集合跟踪趋势、选模并报告属于 validation-selected performance，必须明确披露；所有基座与对比方法采用相同频率和规则。
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -22,6 +24,7 @@ from infoskill.evaluation import (
     inherit_forked_checkpoint_selection,
     load_checkpoint_scores,
     write_checkpoint_selection,
+    write_valid_seen_learning_curve,
 )
 from infoskill.integrations.alfworld import (
     AlfworldEnvironmentFactory,
@@ -284,6 +287,12 @@ def run_policy_training(
                 "split": evaluation_config.split,
                 "task_count": evaluation_config.total_tasks,
                 "sha256": valid_seen_manifest_sha256,
+                "eval_batch_size": config.eval_batch_size,
+                "comparison_role": (
+                    "registered_batch8"
+                    if config.eval_batch_size == 8
+                    else "nonregistered_monitoring_curve"
+                ),
             }
             if plan.evaluation_kind == "valid_seen"
             else None
@@ -330,6 +339,18 @@ def run_policy_training(
         "skillrl_expected_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
         "policy_model": policy_model_identity.as_dict(),
         "verbose_runtime_logs": verbose_runtime_logs,
+        "evaluation_protocol": (
+            {
+                "eval_batch_size": config.eval_batch_size,
+                "comparison_role": (
+                    "registered_batch8"
+                    if config.eval_batch_size == 8
+                    else "nonregistered_monitoring_curve"
+                ),
+            }
+            if plan.evaluation_kind == "valid_seen"
+            else None
+        ),
     }
     if skill_provenance is not None:
         provenance["skill_conditioning"] = skill_provenance
@@ -370,6 +391,12 @@ def run_policy_training(
             destination_run=run_directory,
             max_source_step=restored.global_update,
             task_manifest_sha256=valid_seen_manifest_sha256,
+            eval_batch_size=config.eval_batch_size,
+            comparison_role=(
+                "registered_batch8"
+                if config.eval_batch_size == 8
+                else "nonregistered_monitoring_curve"
+            ),
         )
 
     from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
@@ -425,6 +452,49 @@ def run_policy_training(
     )
     logger.info("Runtime ready in %.1f seconds", time.perf_counter() - runtime_started)
     trainer: InfoSkillTrainer | None = None
+    pause_requested = False
+    final_control_status: str | None = None
+    control_path = run_directory / "training-control.json"
+    previous_signal_handlers: dict[int, object] = {}
+
+    def request_pause(signal_number: int, _frame: object) -> None:
+        nonlocal pause_requested
+        pause_requested = True
+
+    def write_training_control(status: str) -> None:
+        _write_json(
+            control_path,
+            {
+                "schema_version": 1,
+                "pid": os.getpid(),
+                "status": status,
+                "global_update": (
+                    trainer.global_update if trainer is not None else 0
+                ),
+                "checkpoint_every": plan.checkpoint_every,
+                "pause_signal": "SIGINT or SIGTERM",
+                "resume_from": (
+                    str(checkpoint_to_load)
+                    if checkpoint_to_load is not None
+                    else None
+                ),
+            },
+        )
+
+    try:
+        for pause_signal in (signal.SIGINT, signal.SIGTERM):
+            previous_signal_handlers[pause_signal] = signal.getsignal(pause_signal)
+            signal.signal(pause_signal, request_pause)
+        write_training_control("running")
+    except BaseException:
+        for pause_signal, previous_handler in previous_signal_handlers.items():
+            signal.signal(pause_signal, previous_handler)
+        runtime.close()
+        raise
+    logger.info(
+        "Training process pid=%d; SIGINT/SIGTERM requests a checkpoint-boundary pause",
+        os.getpid(),
+    )
     try:
         evaluation_conditioner = training_conditioner
         if mode is SkillMode.INFO_SKILL:
@@ -536,6 +606,7 @@ def run_policy_training(
                 update.values.get("rollout/invalid_action_rate", float("nan")),
             )
             progress.update(1)
+            write_training_control("pause_requested" if pause_requested else "running")
 
         evaluate = _evaluation_callback(
             config=config,
@@ -561,6 +632,7 @@ def run_policy_training(
             on_update=update_callback,
             on_evaluate=evaluate,
             on_checkpoint=checkpoint,
+            should_pause=lambda: pause_requested,
             evaluate_every=plan.evaluation_every,
             checkpoint_every=plan.checkpoint_every,
         )
@@ -584,7 +656,7 @@ def run_policy_training(
             progress.close()
         summary = {
             "schema_version": 1,
-            "status": "complete",
+            "status": "paused" if trainer.paused else "complete",
             "mode": mode.value,
             "profile": plan.profile.value,
             "global_update": trainer.global_update,
@@ -592,6 +664,13 @@ def run_policy_training(
             "max_updates": plan.max_updates,
         }
         _write_json(run_directory / "training_summary.json", summary)
+        final_control_status = str(summary["status"])
+        if trainer.paused:
+            logger.info(
+                "Pause completed at update=%d; resume from checkpoints/step-%06d",
+                trainer.global_update,
+                trainer.global_update,
+            )
         logger.info("Policy training segment complete: %s", json.dumps(summary))
         return 0
     except Exception as error:
@@ -619,9 +698,21 @@ def run_policy_training(
             )
         # The uncaught exception below prints the complete traceback once.
         logger.error("Policy training failed: %s", error)
+        final_control_status = "failed"
         raise
     finally:
-        runtime.close()
+        try:
+            runtime.close()
+        except BaseException:
+            final_control_status = "failed"
+            raise
+        finally:
+            for pause_signal, previous_handler in previous_signal_handlers.items():
+                signal.signal(pause_signal, previous_handler)
+            try:
+                write_training_control(final_control_status or "failed")
+            except OSError:
+                pass
 
 
 def _collector(
@@ -676,10 +767,19 @@ def _evaluation_callback(
     evaluation_config = EvaluationConfig()
     phase = "valid_seen"
     selection_path = run_directory / "checkpoint_selection.json"
+    curve_path = run_directory / "valid_seen_learning_curve.svg"
     valid_scores = load_checkpoint_scores(
         selection_path,
         expected_manifest_sha256=task_manifest_sha256_value,
     )
+    monitoring_only = config.eval_batch_size != 8
+    if valid_scores:
+        write_valid_seen_learning_curve(
+            curve_path,
+            scores=valid_scores,
+            eval_batch_size=config.eval_batch_size,
+            monitoring_only=monitoring_only,
+        )
 
     def evaluate(global_update: int) -> None:
         from tqdm.auto import tqdm
@@ -719,6 +819,12 @@ def _evaluation_callback(
             "incomplete_reasons": ";".join(summary.incomplete_reasons),
             "trace": str(trace_path),
             "task_manifest_sha256": task_manifest_sha256_value,
+            "eval_batch_size": config.eval_batch_size,
+            "comparison_role": (
+                "nonregistered_monitoring_curve"
+                if monitoring_only
+                else "registered_batch8"
+            ),
         }
         values.update(
             {
@@ -751,6 +857,18 @@ def _evaluation_callback(
             selection_path,
             scores=valid_scores,
             task_manifest_sha256=task_manifest_sha256_value,
+            eval_batch_size=config.eval_batch_size,
+            comparison_role=(
+                "nonregistered_monitoring_curve"
+                if monitoring_only
+                else "registered_batch8"
+            ),
+        )
+        write_valid_seen_learning_curve(
+            curve_path,
+            scores=valid_scores,
+            eval_batch_size=config.eval_batch_size,
+            monitoring_only=monitoring_only,
         )
         logger.info(
             "%s update=%d macro=%s overall=%s",

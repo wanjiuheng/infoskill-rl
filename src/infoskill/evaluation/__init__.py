@@ -15,6 +15,7 @@ from .selection import (
     load_checkpoint_scores,
     select_best_valid,
     write_checkpoint_selection,
+    write_valid_seen_learning_curve,
 )
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "load_checkpoint_scores",
     "select_best_valid",
     "write_checkpoint_selection",
+    "write_valid_seen_learning_curve",
     "write_checkpoint_load",
     "write_evaluation_provenance",
     "write_evaluation_timing",

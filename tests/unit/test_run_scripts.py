@@ -5,6 +5,16 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_training_executes_python_so_background_pid_receives_pause_signal(
+        self,
+    ) -> None:
+        script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'exec python -m infoskill.cli train "${TRAIN_ARGS[@]}"',
+            script,
+        )
+
     def test_eval_batch_gate_is_fixed_non_reportable_and_fail_closed(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         runner = (project_root / "scripts" / "run_infoskill_eval_batch_gate.sh").read_text(
@@ -24,6 +34,19 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("--diagnostic-task-manifest", entrypoint)
         self.assertIn("--eval-batch-size", entrypoint)
         self.assertIn("--cuda-memory-poll-interval-ms", entrypoint)
+
+    def test_training_forwards_periodic_evaluation_batch_override(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+
+        self.assertIn('if [[ -n "${EVAL_BATCH_SIZE}" ]]', train_case)
+        self.assertIn(
+            'TRAIN_ARGS+=(--eval-batch-size "${EVAL_BATCH_SIZE}")',
+            train_case,
+        )
 
     def test_grouped_infoskill_conditioning_is_eval_only_and_opt_in(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

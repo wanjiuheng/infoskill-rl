@@ -184,3 +184,19 @@ policy user message、候选技能、conditioning replay 和 soft-prefix 统计�
 当 token 或 logprob 长度漂移时，完整 logprob 比较定义为不可用，报告必须给出
 `logprob_comparison_valid=false` 与 `logprobs_close=false`，不能以零个可比较 token 的默认
 零误差宣称一致。
+
+## D022：首轮 M1 正式训练用 batch 12 生成同 run 监控曲线
+
+首轮 445-update M1 运行经实验方明确选择，在 update 0、25、50……及 445 结束点的周期
+`valid_seen` 评测中显式使用 `eval_batch_size=12`。这些点使用相同 batch 几何，适合判断该次
+训练内部的变化趋势，并在每次完整评测提交后原子刷新 `valid_seen_learning_curve.svg`；图中
+同时显示 Macro success 与 Overall success。`resolved_config.json`、`provenance.json`、每个
+评测 summary、metrics 和 `checkpoint_selection.json` 都必须把它标记为
+`nonregistered_monitoring_curve`，不得冒充 D021 的 batch-8 注册结果。
+
+该选择不修改正式 YAML 默认值，也不推翻 batch 8/12 exact parity 失败的事实。需要与 M0、
+raw control 或其他 run 做最终定量比较的关键 M1 checkpoint，仍须另行用固定 140 条、batch 8
+重评。训练进程接收 SIGINT 或 SIGTERM 时只登记暂停请求：当前 optimizer update 完成后写出
+该 update 的 portable checkpoint，跳过额外的非周期评测并安全关闭运行时；恢复必须使用同一
+run 的该 checkpoint 和完全相同配置。这样允许提前停止 445-update 运行而不产生半个 optimizer
+step，也不把硬杀进程当作正常断点。

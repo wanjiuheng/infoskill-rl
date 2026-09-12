@@ -67,6 +67,122 @@ def _tasks() -> tuple[TaskSpec, ...]:
 
 
 class InfoSkillTrainerTests(unittest.TestCase):
+    def test_pause_at_a_scheduled_boundary_keeps_its_evaluation(self) -> None:
+        evaluation_calls: list[int] = []
+        pause_requested = False
+        tasks = tuple(
+            TaskSpec(
+                task_id=f"task-{index}",
+                split="train",
+                task_type="pick_and_place_simple",
+                goal="put object in receptacle",
+            )
+            for index in range(26)
+        )
+
+        def request_pause(update, groups) -> None:
+            nonlocal pause_requested
+            del groups
+            pause_requested = update.global_update == 25
+
+        trainer = InfoSkillTrainer(
+            collector=_Collector(),  # type: ignore[arg-type]
+            runtime=_Runtime(),  # type: ignore[arg-type]
+            schedule=TaskSchedule(tasks, master_seed=0),
+            task_groups_per_update=1,
+            rollouts_per_task=2,
+            master_seed=0,
+            auxiliary_enabled=False,
+            on_update=request_pause,
+            on_evaluate=evaluation_calls.append,
+            on_checkpoint=lambda update, schedule: None,
+            should_pause=lambda: pause_requested,
+            evaluate_every=25,
+            checkpoint_every=5,
+        )
+
+        trainer.fit(max_updates=26)
+
+        self.assertEqual(evaluation_calls, [0, 25])
+        self.assertEqual(trainer.global_update, 25)
+        self.assertTrue(trainer.paused)
+
+    def test_pause_on_the_final_nonperiodic_update_keeps_final_evaluation(
+        self,
+    ) -> None:
+        evaluation_calls: list[int] = []
+        pause_requested = False
+        tasks = tuple(
+            TaskSpec(
+                task_id=f"task-{index}",
+                split="train",
+                task_type="pick_and_place_simple",
+                goal="put object in receptacle",
+            )
+            for index in range(29)
+        )
+
+        def request_pause(update, groups) -> None:
+            nonlocal pause_requested
+            del groups
+            pause_requested = update.global_update == 29
+
+        trainer = InfoSkillTrainer(
+            collector=_Collector(),  # type: ignore[arg-type]
+            runtime=_Runtime(),  # type: ignore[arg-type]
+            schedule=TaskSchedule(tasks, master_seed=0),
+            task_groups_per_update=1,
+            rollouts_per_task=2,
+            master_seed=0,
+            auxiliary_enabled=False,
+            on_update=request_pause,
+            on_evaluate=evaluation_calls.append,
+            on_checkpoint=lambda update, schedule: None,
+            should_pause=lambda: pause_requested,
+            evaluate_every=25,
+            checkpoint_every=5,
+        )
+
+        trainer.fit(max_updates=29)
+
+        self.assertEqual(evaluation_calls, [0, 25, 29])
+        self.assertFalse(trainer.paused)
+
+    def test_requested_pause_commits_the_completed_update_without_final_evaluation(
+        self,
+    ) -> None:
+        checkpoint_calls: list[int] = []
+        evaluation_calls: list[int] = []
+        pause_requested = False
+
+        def request_pause(update, groups) -> None:
+            nonlocal pause_requested
+            del update, groups
+            pause_requested = True
+
+        trainer = InfoSkillTrainer(
+            collector=_Collector(),  # type: ignore[arg-type]
+            runtime=_Runtime(),  # type: ignore[arg-type]
+            schedule=TaskSchedule(_tasks(), master_seed=0),
+            task_groups_per_update=1,
+            rollouts_per_task=2,
+            master_seed=0,
+            auxiliary_enabled=False,
+            on_update=request_pause,
+            on_checkpoint=lambda update, schedule: checkpoint_calls.append(update),
+            on_evaluate=evaluation_calls.append,
+            checkpoint_every=5,
+            evaluate_every=25,
+            should_pause=lambda: pause_requested,
+        )
+
+        trainer.fit(max_updates=4)
+
+        self.assertEqual(trainer.global_update, 1)
+        self.assertTrue(trainer.paused)
+        self.assertEqual(checkpoint_calls, [1])
+        self.assertEqual(evaluation_calls, [0])
+
     def test_one_25_update_cycle_evaluates_only_at_start_and_end(self) -> None:
         evaluation_calls: list[int] = []
         tasks = tuple(

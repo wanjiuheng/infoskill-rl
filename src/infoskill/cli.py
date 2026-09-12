@@ -317,6 +317,14 @@ def _parser() -> argparse.ArgumentParser:
             "batch_size=1 environments for rollback/diagnosis"
         ),
     )
+    train.add_argument(
+        "--eval-batch-size",
+        type=int,
+        help=(
+            "explicit batch size for periodic valid_seen monitoring; omission "
+            "preserves the YAML default"
+        ),
+    )
     train.add_argument("--run-name")
     train.add_argument("--resume")
     train.add_argument(
@@ -381,6 +389,10 @@ def _add_raw_skill_prompt_format_argument(parser: argparse.ArgumentParser) -> No
 
 def _train(config: AppConfig, args: argparse.Namespace) -> int:
     mode = SkillMode(args.mode)
+    if args.eval_batch_size is not None:
+        if args.eval_batch_size <= 0:
+            raise ValueError("eval_batch_size must be positive")
+        config = replace(config, eval_batch_size=args.eval_batch_size)
     if args.grounding_data is not None:
         config = replace(
             config,
@@ -449,6 +461,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "num_gpus": args.num_gpus,
                     "environment_workers": args.environment_workers,
                     "environment_backend": args.environment_backend,
+                    "eval_batch_size": config.eval_batch_size,
                     "persistent_rollout_session": args.persistent_rollout_session,
                     "verbose_runtime_logs": args.verbose_runtime_logs,
                     "cuda_memory_poll_interval_ms": (

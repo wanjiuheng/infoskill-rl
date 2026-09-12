@@ -53,6 +53,7 @@ class InfoSkillTrainer:
         on_update: Callable[[UpdateMetrics, tuple[TrajectoryGroup, ...]], None] | None = None,
         on_evaluate: Callable[[int], None] | None = None,
         on_checkpoint: Callable[[int, TaskSchedule], None] | None = None,
+        should_pause: Callable[[], bool] | None = None,
         evaluate_every: int = 25,
         checkpoint_every: int = 5,
     ) -> None:
@@ -66,9 +67,11 @@ class InfoSkillTrainer:
         self.on_update = on_update
         self.on_evaluate = on_evaluate
         self.on_checkpoint = on_checkpoint
+        self.should_pause = should_pause
         self.evaluate_every = evaluate_every
         self.checkpoint_every = checkpoint_every
         self.global_update = 0
+        self.paused = False
 
     def restore(self, *, global_update: int, schedule_state: TaskScheduleState) -> None:
         if global_update < 0:
@@ -77,12 +80,16 @@ class InfoSkillTrainer:
         self.global_update = global_update
 
     def fit(self, *, max_updates: int | None = None, evaluate_at_start: bool = True) -> None:
+        self.paused = False
         initial_update = self.global_update
         last_checkpoint_update: int | None = None
         if evaluate_at_start and self.on_evaluate:
             self.on_evaluate(self.global_update)
         while not self.schedule.exhausted:
             if max_updates is not None and self.global_update >= max_updates:
+                break
+            if self.should_pause is not None and self.should_pause():
+                self.paused = True
                 break
             tasks = self.schedule.next_batch(self.task_groups_per_update)
             if not tasks:
@@ -151,6 +158,22 @@ class InfoSkillTrainer:
                 last_checkpoint_update = self.global_update
             if self.on_evaluate and self.global_update % self.evaluate_every == 0:
                 self.on_evaluate(self.global_update)
+            reached_target = (
+                max_updates is not None and self.global_update >= max_updates
+            )
+            if (
+                not reached_target
+                and self.should_pause is not None
+                and self.should_pause()
+            ):
+                if (
+                    self.on_checkpoint
+                    and last_checkpoint_update != self.global_update
+                ):
+                    self.on_checkpoint(self.global_update, self.schedule)
+                    last_checkpoint_update = self.global_update
+                self.paused = True
+                break
 
         if (
             self.on_checkpoint
@@ -160,6 +183,7 @@ class InfoSkillTrainer:
             self.on_checkpoint(self.global_update, self.schedule)
         if (
             self.on_evaluate
+            and not self.paused
             and self.global_update > initial_update
             and self.global_update % self.evaluate_every != 0
         ):

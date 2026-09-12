@@ -9,10 +9,57 @@ from infoskill.evaluation import (
     EvaluationCheckpointScore,
     inherit_forked_checkpoint_selection,
     select_best_valid,
+    write_checkpoint_selection,
+    write_valid_seen_learning_curve,
 )
 
 
 class CheckpointSelectionTests(unittest.TestCase):
+    def test_selection_records_the_evaluation_comparison_protocol(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "checkpoint_selection.json"
+
+            payload = write_checkpoint_selection(
+                path,
+                scores=[EvaluationCheckpointScore(0, 0.20, 0.25, 0.10)],
+                task_manifest_sha256="registered-manifest",
+                eval_batch_size=12,
+                comparison_role="nonregistered_monitoring_curve",
+            )
+
+            self.assertEqual(payload["eval_batch_size"], 12)
+            self.assertEqual(
+                payload["comparison_role"],
+                "nonregistered_monitoring_curve",
+            )
+
+    def test_learning_curve_is_atomically_refreshed_with_monitoring_protocol(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "valid_seen_learning_curve.svg"
+            scores = [
+                EvaluationCheckpointScore(0, 0.20, 0.25, 0.10),
+                EvaluationCheckpointScore(25, 0.30, 0.35, 0.08),
+            ]
+
+            written = write_valid_seen_learning_curve(
+                path,
+                scores=scores,
+                eval_batch_size=12,
+                monitoring_only=True,
+            )
+
+            svg = path.read_text(encoding="utf-8")
+            self.assertEqual(written, path)
+            self.assertIn("<svg", svg)
+            self.assertIn("Macro success", svg)
+            self.assertIn("Overall success", svg)
+            self.assertIn("batch=12", svg)
+            self.assertIn("monitoring curve", svg)
+            self.assertIn("update 25", svg)
+            self.assertFalse(path.with_name(f".{path.name}.tmp").exists())
+
     def test_registered_ties_prefer_overall_then_invalid_then_earlier(self) -> None:
         scores = [
             EvaluationCheckpointScore(50, 0.4, 0.5, 0.1),

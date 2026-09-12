@@ -143,6 +143,18 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["policy_max_tokens_per_gpu"], 12_288)
         self.assertTrue(payload["balance_policy_tokens_across_ranks"])
 
+    def test_training_eval_batch_size_can_be_explicitly_overridden(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments() + ["--eval-batch-size", "12"]
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["eval_batch_size"], 12)
+
     def test_raw_skill_prompt_dry_run_uses_the_shared_training_interface(self) -> None:
         output = io.StringIO()
         arguments = self._arguments()

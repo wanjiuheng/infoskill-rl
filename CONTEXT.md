@@ -355,6 +355,14 @@ worker 内冻结语义编码器和 compressor 的 batch 几何，而不只是减
 batch 8，不以统计相近替代 exact parity。比较器也明确把 token 或 logprob 长度漂移标为
 `logprob_comparison_valid=false`，避免零个可对齐 token 时误报 `logprobs_close=true`。
 
+首轮 M1 445-update 正式训练按实验方要求，把同一 run 内 update 0、25、50……的周期监控
+显式设为 batch 12，并自动原子刷新 `valid_seen_learning_curve.svg`。由于 batch 8/12 未通过
+逐轨迹 exact parity，这条曲线只用于同 run 趋势观察；所有产物写明
+`nonregistered_monitoring_curve`，最终跨方法报告仍对选中的 M1 checkpoint 补 batch-8 固定
+140 条评测。训练进程另提供 checkpoint-boundary graceful pause：向
+`training-control.json` 中记录的 PID 发送 SIGINT/SIGTERM 后，完成当前 update、提交可恢复
+checkpoint 并退出；同配置且不设置新 RUN_NAME 即可在原 run 中续跑。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard
