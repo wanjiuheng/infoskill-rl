@@ -22,12 +22,13 @@ def write_evaluation_provenance(
     policy_model: Mapping[str, object] | None,
     skill_conditioning: Mapping[str, object] | None = None,
     checkpoint_provenance_sha256: str | None = None,
+    artifact_kind: str = "valid_seen_evaluation",
 ) -> dict[str, object]:
     """Write the immutable inputs that identify one evaluation run."""
 
     payload: dict[str, object] = {
         "schema_version": 1,
-        "artifact_kind": "valid_seen_evaluation",
+        "artifact_kind": artifact_kind,
         "mode": mode,
         "evaluation_runtime": dict(evaluation_runtime),
         "evaluation_manifest": dict(evaluation_manifest),

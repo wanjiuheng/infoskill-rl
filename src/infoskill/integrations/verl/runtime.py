@@ -396,6 +396,15 @@ class VerlRuntime:
             finally:
                 self._rollout_session_active = False
 
+    def rollout_memory_metrics(self) -> dict[str, float]:
+        """Return the completed rollout session's per-rank physical peak."""
+
+        if self._rollout_session_active:
+            raise RuntimeError("rollout memory requires a completed rollout session")
+        return summarize_cuda_memory_snapshots(
+            self.worker_group.infoskill_rollout_memory_snapshot()
+        )
+
     def update_policy(
         self,
         groups: tuple[TrajectoryGroup, ...],

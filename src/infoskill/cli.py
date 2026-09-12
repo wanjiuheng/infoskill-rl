@@ -103,6 +103,24 @@ def _parser() -> argparse.ArgumentParser:
             "across active tasks after exact parity validation"
         ),
     )
+    evaluate.add_argument(
+        "--diagnostic-task-manifest",
+        help=(
+            "fixed non-reportable valid_seen subset used only for controlled "
+            "performance and parity diagnostics"
+        ),
+    )
+    evaluate.add_argument(
+        "--eval-batch-size",
+        type=int,
+        help="explicit evaluation batch size; omission preserves the YAML default",
+    )
+    evaluate.add_argument(
+        "--cuda-memory-poll-interval-ms",
+        type=int,
+        default=0,
+        help="diagnostic physical CUDA memory polling interval; 0 disables polling",
+    )
     evaluate.add_argument("--verbose-runtime-logs", action="store_true")
     raw_skill_ab = subparsers.add_parser(
         "raw-skill-ab",
@@ -480,6 +498,12 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("num_gpus must be positive")
     if args.checkpoint_step < 0:
         raise ValueError("checkpoint_step must be non-negative")
+    if args.eval_batch_size is not None and args.eval_batch_size <= 0:
+        raise ValueError("eval_batch_size must be positive")
+    if args.cuda_memory_poll_interval_ms < 0:
+        raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
+    if args.diagnostic_task_manifest is not None and mode is not SkillMode.INFO_SKILL:
+        raise ValueError("the fixed pressure diagnostic is registered only for infoskill")
     if args.backend == "transformers" and args.num_gpus != 1:
         raise ValueError("the Transformers evaluation backend requires num_gpus=1")
     if mode is SkillMode.INFO_SKILL and args.backend != "verl":
@@ -534,12 +558,31 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             f"valid_seen discovery returned {len(tasks)} tasks instead of "
             f"{evaluation_config.total_tasks}"
         )
-    valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
-    if valid_seen_manifest_sha256 != evaluation_config.manifest_sha256:
+    full_valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
+    if full_valid_seen_manifest_sha256 != evaluation_config.manifest_sha256:
         raise RuntimeError(
             "valid_seen task manifest SHA256 does not match the registered "
-            f"manifest: {valid_seen_manifest_sha256}"
+            f"manifest: {full_valid_seen_manifest_sha256}"
         )
+    diagnostic_manifest = None
+    if args.diagnostic_task_manifest is not None:
+        from infoskill.diagnostics import (
+            diagnostic_denominators,
+            load_pressure_task_manifest,
+        )
+
+        tasks, diagnostic_manifest = load_pressure_task_manifest(
+            args.diagnostic_task_manifest,
+            available_tasks=tasks,
+            full_task_manifest_sha256=full_valid_seen_manifest_sha256,
+        )
+        selected_manifest_sha256 = task_manifest_sha256(tasks)
+        evaluation_config = EvaluationConfig(
+            denominators=diagnostic_denominators(tasks),
+            manifest_sha256=selected_manifest_sha256,
+        )
+    valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
+    effective_eval_batch_size = args.eval_batch_size or config.eval_batch_size
     checkpoint = (
         resolve_portable_checkpoint(args.policy_checkpoint)
         if args.policy_checkpoint is not None
@@ -652,6 +695,8 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             if mode is SkillMode.INFO_SKILL
             else False
         ),
+        "eval_batch_size": effective_eval_batch_size,
+        "cuda_memory_poll_interval_ms": args.cuda_memory_poll_interval_ms,
         "policy_checkpoint": (
             str(checkpoint.directory) if checkpoint is not None else None
         ),
@@ -662,6 +707,16 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "task_count": evaluation_config.total_tasks,
         "sha256": valid_seen_manifest_sha256,
     }
+    if diagnostic_manifest is not None:
+        evaluation_manifest.update(
+            {
+                "diagnostic_only": True,
+                "reportable_as_valid_seen": False,
+                "pressure_manifest_sha256": diagnostic_manifest["sha256"],
+                "full_task_count": 140,
+                "full_task_manifest_sha256": full_valid_seen_manifest_sha256,
+            }
+        )
     resolved["evaluation_runtime"] = evaluation_runtime
     resolved["evaluation_manifest"] = evaluation_manifest
     if skill_provenance is not None:
@@ -679,6 +734,11 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         skill_conditioning=skill_provenance,
         checkpoint_provenance_sha256=checkpoint_provenance_sha256,
+        artifact_kind=(
+            "infoskill_eval_batch_pressure_diagnostic"
+            if diagnostic_manifest is not None
+            else "valid_seen_evaluation"
+        ),
     )
     checkpoint_path = (
         str(checkpoint.directory) if checkpoint is not None else None
@@ -732,7 +792,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     master_seed=config.master_seed,
                     persistent_rollout_session=args.persistent_rollout_session,
                     verbose_runtime_logs=args.verbose_runtime_logs,
-                    cuda_memory_poll_interval_ms=0,
+                    cuda_memory_poll_interval_ms=args.cuda_memory_poll_interval_ms,
                     balance_policy_tokens_across_ranks=True,
                     enable_infoskill_modules=mode is SkillMode.INFO_SKILL,
                     semantic_model_path=(
@@ -847,7 +907,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         runner = EvaluationRunner(
             collector_factory=lambda: collector,
             config=evaluation_config,
-            task_batch_size=config.eval_batch_size,
+            task_batch_size=effective_eval_batch_size,
             master_seed=config.master_seed,
             on_progress=progress.update,
         )
@@ -858,6 +918,10 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             timing_seconds["rollout_seconds"] = (
                 time.perf_counter() - stage_started
             )
+            if runtime is not None and args.cuda_memory_poll_interval_ms > 0:
+                performance = dict(run.performance_metrics or {})
+                performance.update(runtime.rollout_memory_metrics())
+                run = replace(run, performance_metrics=performance)
         finally:
             progress.close()
     finally:
@@ -869,7 +933,13 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             )
     stage_started = time.perf_counter()
     trace_path = ZstdJsonlTraceWriter(run_directory).write_evaluation(
-        checkpoint_step=evaluation_step, run=run
+        checkpoint_step=evaluation_step,
+        run=run,
+        split=(
+            "diagnostic_valid_seen"
+            if diagnostic_manifest is not None
+            else "valid_seen"
+        ),
     )
     timing_seconds["trace_write_seconds"] = time.perf_counter() - stage_started
     timing_seconds["total_seconds"] = time.perf_counter() - evaluation_started
@@ -891,12 +961,34 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     )
     values.update(run.performance_metrics or {})
     values.update({f"success/{key}": value for key, value in summary.per_task_type_success.items()})
-    metrics.log(step=evaluation_step, phase="valid_seen", values=values)
+    metrics.log(
+        step=evaluation_step,
+        phase=(
+            "diagnostic_valid_seen"
+            if diagnostic_manifest is not None
+            else "valid_seen"
+        ),
+        values=values,
+    )
     summary_payload = _summary_payload(run)
     summary_payload["task_manifest_sha256"] = valid_seen_manifest_sha256
     summary_payload["timing_seconds"] = timing_seconds
     summary_payload["rollout_performance"] = dict(run.performance_metrics or {})
-    _write_json(run_directory / "valid_seen_summary.json", summary_payload)
+    summary_name = (
+        "diagnostic_summary.json"
+        if diagnostic_manifest is not None
+        else "valid_seen_summary.json"
+    )
+    if diagnostic_manifest is not None:
+        summary_payload.update(
+            {
+                "diagnostic_only": True,
+                "reportable_as_valid_seen": False,
+                "pressure_manifest_sha256": diagnostic_manifest["sha256"],
+                "eval_batch_size": effective_eval_batch_size,
+            }
+        )
+    _write_json(run_directory / summary_name, summary_payload)
     logger.info("Structured trace: %s", trace_path)
     logger.info(
         "Evaluation timing: setup=%.1fs runtime=%.1fs checkpoint=%.1fs "

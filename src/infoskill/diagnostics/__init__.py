@@ -1,5 +1,7 @@
 """Small, explicitly non-reportable experiment diagnostics."""
 
+from .eval_batch import diagnostic_denominators, load_pressure_task_manifest
+
 from .raw_skill_ab import (
     RAW_SKILL_AB_VARIANTS,
     SKILLRL_RL_EXACT_VARIANT,
@@ -28,4 +30,6 @@ __all__ = [
     "select_stratified_tasks",
     "summarize_probe_groups",
     "validate_unified_skill_causal_gate",
+    "diagnostic_denominators",
+    "load_pressure_task_manifest",
 ]

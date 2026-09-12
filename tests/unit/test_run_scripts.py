@@ -5,6 +5,26 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_eval_batch_gate_is_fixed_non_reportable_and_fail_closed(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        runner = (project_root / "scripts" / "run_infoskill_eval_batch_gate.sh").read_text(
+            encoding="utf-8"
+        )
+        entrypoint = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("m1_eval_batch_pressure_valid_seen.json", runner)
+        self.assertIn('BASELINE_BATCH_SIZE="${BASELINE_BATCH_SIZE:-8}"', runner)
+        self.assertIn('CANDIDATE_BATCH_SIZE="${CANDIDATE_BATCH_SIZE:-12}"', runner)
+        self.assertIn('MINIMUM_ROLLOUT_SPEEDUP="${MINIMUM_ROLLOUT_SPEEDUP:-1.10}"', runner)
+        self.assertIn('MINIMUM_PHYSICAL_FREE_GB="${MINIMUM_PHYSICAL_FREE_GB:-8.0}"', runner)
+        self.assertIn("if (( GATE_RC != 0 )); then", runner)
+        self.assertIn('RUN_FULL_EVAL_ON_PASS="${RUN_FULL_EVAL_ON_PASS:-1}"', runner)
+        self.assertIn("--diagnostic-task-manifest", entrypoint)
+        self.assertIn("--eval-batch-size", entrypoint)
+        self.assertIn("--cuda-memory-poll-interval-ms", entrypoint)
+
     def test_grouped_infoskill_conditioning_is_eval_only_and_opt_in(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

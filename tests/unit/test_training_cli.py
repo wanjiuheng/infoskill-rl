@@ -12,6 +12,38 @@ from infoskill.cli import _parser, main
 
 
 class TrainingCliTests(unittest.TestCase):
+    def test_eval_batch_diagnostic_controls_are_explicit(self) -> None:
+        default = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+            ]
+        )
+        diagnostic = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+                "--diagnostic-task-manifest",
+                "configs/m1_eval_batch_pressure_valid_seen.json",
+                "--eval-batch-size",
+                "12",
+                "--cuda-memory-poll-interval-ms",
+                "200",
+            ]
+        )
+
+        self.assertIsNone(default.diagnostic_task_manifest)
+        self.assertIsNone(default.eval_batch_size)
+        self.assertEqual(default.cuda_memory_poll_interval_ms, 0)
+        self.assertEqual(diagnostic.eval_batch_size, 12)
+        self.assertEqual(diagnostic.cuda_memory_poll_interval_ms, 200)
+
     def test_infoskill_eval_grouped_conditioning_is_explicitly_opt_in(self) -> None:
         default = _parser().parse_args(
             [

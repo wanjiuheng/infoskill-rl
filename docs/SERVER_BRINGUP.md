@@ -1715,6 +1715,45 @@ python scripts/compare_infoskill_conditioning_runs.py \
 `performance_valid=true` 和 `passed=true` 才进入下一步；否则保持默认关闭，不用于训练或正式
 评测。若通过，再用相同 checkpoint 做一次 update-2 复核后决定是否扩大到训练路径。
 
+## M1 评测 batch-size 压力门
+
+正式 `valid_seen` 仍默认使用 YAML 中的 `eval_batch_size=8`。候选 batch 12 必须先通过
+固定、不可报告为正式结果的 12 条压力集门禁。压力集来自已注册 M1 update-0 轨迹中六类
+任务各自 response token 数最高的两条，全部为 30 步轨迹；清单及来源 checksum 固定在
+`configs/m1_eval_batch_pressure_valid_seen.json`。
+
+门禁会在相同 checkpoint、GPU、技能检索、随机种子和环境配置下依次运行 batch 8 与
+batch 12，并要求：两次 checkpoint 均在所有 rank 完整加载；完整语义轨迹和 token 完全
+一致；logprob 最大误差不超过 `1e-3`；batch 12 rollout 至少快 `1.10x`；物理显存最低
+余量不少于 `8 GiB`。任一项失败都会 fail closed，不启动 140 条。全部通过时默认继续
+运行 batch 12 的完整 140 条：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-eval-batch-gate-${STAMP}.log"
+
+nohup env \
+  GPUS=0,1,2 \
+  POLICY_CHECKPOINT=/absolute/path/to/checkpoints/step-000002 \
+  GROUPED_INFOSKILL_CONDITIONING=0 \
+  RUN_FULL_EVAL_ON_PASS=1 \
+  bash scripts/run_infoskill_eval_batch_gate.sh \
+  >"$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" >"${LOG}.pid"
+disown "$PID"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+如只需运行 12 条门禁而不自动启动 140 条，显式设置
+`RUN_FULL_EVAL_ON_PASS=0`。`GROUPED_INFOSKILL_CONDITIONING` 必须保持为已经单独通过
+一致性门的值，batch-size 门本身不负责同时验证另一项优化。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

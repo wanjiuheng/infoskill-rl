@@ -339,6 +339,13 @@ worker 内冻结语义编码器和 compressor 的 batch 几何，而不只是减
 评测候选影响。修正版必须重新通过同一 140 条 exact parity 与 1.05x 性能门，首轮失败 run
 不得作为方法结果或性能依据。
 
+为缩短后续评测提速迭代，新增默认关闭的 batch-size 两阶段门。第一阶段只使用固定压力型
+12 条（六类各两条，来自已注册 M1 update-0 中各类 response token 数最高且均达到 30 步的
+轨迹），在相同 portable checkpoint 上比较 batch 8 与 batch 12，同时验证所有 rank 权重
+加载、完整轨迹/token/logprob 一致性、至少 1.10x rollout 提速及至少 8 GiB 物理显存余量。
+报告明确标记为不可作为 valid_seen 结果。只有全部通过时脚本才自动启动 batch 12 的完整
+140 条；任一门失败则 fail closed，正式 YAML 默认仍为 batch 8。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

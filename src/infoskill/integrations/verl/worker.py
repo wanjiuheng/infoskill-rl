@@ -437,6 +437,17 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         }
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def infoskill_rollout_memory_snapshot(self) -> dict[str, object]:
+        if self._infoskill_rollout_session_active:
+            raise RuntimeError("rollout memory snapshot requires a closed session")
+        if self._infoskill_rollout_memory_snapshot is None:
+            raise RuntimeError("no completed rollout memory snapshot is available")
+        return {
+            "rank": dist.get_rank(),
+            "rollout": self._infoskill_rollout_memory_snapshot,
+        }
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def compare_infoskill_portable_actor(self, directory: str) -> dict[str, object]:
         """Compare every live FSDP LoRA tensor with a portable checkpoint."""
 

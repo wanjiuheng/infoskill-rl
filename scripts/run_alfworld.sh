@@ -59,6 +59,10 @@ PERSISTENT_ROLLOUT_SESSION="${PERSISTENT_ROLLOUT_SESSION:-1}"
 # Experimental M1 eval-only fast path. Default 0 preserves the registered
 # per-task conditioning behavior until exact server parity is demonstrated.
 GROUPED_INFOSKILL_CONDITIONING="${GROUPED_INFOSKILL_CONDITIONING:-0}"
+# Eval-only controls. A task manifest marks a non-reportable fixed subset;
+# EVAL_BATCH_SIZE alone is an explicit full-evaluation candidate override.
+EVAL_TASK_MANIFEST="${EVAL_TASK_MANIFEST:-}"
+EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-}"
 # Used only by the individual backend; native_batch owns one process per slot.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
 # Validated by CPU differential, 64-trajectory A/B and two-update longevity gates.
@@ -118,6 +122,14 @@ if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS
 fi
 if [[ "${GROUPED_INFOSKILL_CONDITIONING}" != "0" && "${GROUPED_INFOSKILL_CONDITIONING}" != "1" ]]; then
   echo "GROUPED_INFOSKILL_CONDITIONING must be 0 or 1" >&2
+  exit 2
+fi
+if [[ -n "${EVAL_BATCH_SIZE}" && ! "${EVAL_BATCH_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "EVAL_BATCH_SIZE must be empty or a positive integer" >&2
+  exit 2
+fi
+if [[ -n "${EVAL_TASK_MANIFEST}" && ! -f "${EVAL_TASK_MANIFEST}" ]]; then
+  echo "EVAL_TASK_MANIFEST does not exist: ${EVAL_TASK_MANIFEST}" >&2
   exit 2
 fi
 if [[ ! "${RAW_SKILL_AB_TASKS_PER_TYPE}" =~ ^[1-9][0-9]*$ ]]; then
@@ -257,6 +269,13 @@ case "${ACTION}" in
     if [[ -n "${POLICY_CHECKPOINT}" ]]; then
       EVAL_ARGS+=(--policy-checkpoint "${POLICY_CHECKPOINT}")
     fi
+    if [[ -n "${EVAL_TASK_MANIFEST}" ]]; then
+      EVAL_ARGS+=(--diagnostic-task-manifest "${EVAL_TASK_MANIFEST}")
+    fi
+    if [[ -n "${EVAL_BATCH_SIZE}" ]]; then
+      EVAL_ARGS+=(--eval-batch-size "${EVAL_BATCH_SIZE}")
+    fi
+    EVAL_ARGS+=(--cuda-memory-poll-interval-ms "${CUDA_MEMORY_POLL_INTERVAL_MS}")
     case "${PERSISTENT_ROLLOUT_SESSION}" in
       1) EVAL_ARGS+=(--persistent-rollout-session) ;;
       0) EVAL_ARGS+=(--no-persistent-rollout-session) ;;
