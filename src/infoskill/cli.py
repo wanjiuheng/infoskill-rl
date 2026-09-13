@@ -121,6 +121,15 @@ def _parser() -> argparse.ArgumentParser:
         default=0,
         help="diagnostic physical CUDA memory polling interval; 0 disables polling",
     )
+    evaluate.add_argument(
+        "--hybrid-prefix-cuda-graph",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "experimental M1-only evaluation optimization: use persistent "
+            "hybrid-prefix embedding buffers with vLLM CUDA Graph"
+        ),
+    )
     evaluate.add_argument("--verbose-runtime-logs", action="store_true")
     raw_skill_ab = subparsers.add_parser(
         "raw-skill-ab",
@@ -600,6 +609,10 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
     if args.diagnostic_task_manifest is not None and mode is not SkillMode.INFO_SKILL:
         raise ValueError("the fixed pressure diagnostic is registered only for infoskill")
+    if args.hybrid_prefix_cuda_graph and mode is not SkillMode.INFO_SKILL:
+        raise ValueError("hybrid-prefix CUDA Graph evaluation is registered only for infoskill")
+    if args.hybrid_prefix_cuda_graph and args.backend != "verl":
+        raise ValueError("hybrid-prefix CUDA Graph evaluation requires backend=verl")
     if args.backend == "transformers" and args.num_gpus != 1:
         raise ValueError("the Transformers evaluation backend requires num_gpus=1")
     if mode is SkillMode.INFO_SKILL and args.backend != "verl":
@@ -793,6 +806,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         "eval_batch_size": effective_eval_batch_size,
         "cuda_memory_poll_interval_ms": args.cuda_memory_poll_interval_ms,
+        "hybrid_prefix_cuda_graph": args.hybrid_prefix_cuda_graph,
         "policy_checkpoint": (
             str(checkpoint.directory) if checkpoint is not None else None
         ),
@@ -884,6 +898,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
                     gpu_memory_utilization=0.45,
                     require_hybrid_prefix=mode is SkillMode.INFO_SKILL,
+                    hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
                     soft_prefix_length=5,
                     master_seed=config.master_seed,
                     persistent_rollout_session=args.persistent_rollout_session,
@@ -1041,6 +1056,10 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     timing_seconds["total_seconds"] = time.perf_counter() - evaluation_started
     write_evaluation_timing(run_directory, timing_seconds)
     summary = run.summary
+    rollout_performance = dict(run.performance_metrics or {})
+    rollout_performance["perf/hybrid_prefix_cuda_graph"] = float(
+        args.hybrid_prefix_cuda_graph
+    )
     metrics = MetricLogger(run_directory)
     values: dict[str, float | int | str | bool | None] = {
         "complete": summary.is_complete,
@@ -1055,7 +1074,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     values.update(
         {f"perf/{key}": value for key, value in timing_seconds.items()}
     )
-    values.update(run.performance_metrics or {})
+    values.update(rollout_performance)
     values.update({f"success/{key}": value for key, value in summary.per_task_type_success.items()})
     metrics.log(
         step=evaluation_step,
@@ -1069,7 +1088,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     summary_payload = _summary_payload(run)
     summary_payload["task_manifest_sha256"] = valid_seen_manifest_sha256
     summary_payload["timing_seconds"] = timing_seconds
-    summary_payload["rollout_performance"] = dict(run.performance_metrics or {})
+    summary_payload["rollout_performance"] = rollout_performance
     summary_name = (
         "diagnostic_summary.json"
         if diagnostic_manifest is not None
@@ -1097,7 +1116,6 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         timing_seconds["runtime_close_seconds"],
         timing_seconds["total_seconds"],
     )
-    rollout_performance = run.performance_metrics or {}
     logger.info(
         "Evaluation rollout breakdown: conditioning=%.1fs generation=%.1fs "
         "environment=%.1fs action-resolution=%.1fs",

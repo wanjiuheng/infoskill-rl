@@ -1892,6 +1892,19 @@ batch 12；如以后更改 vLLM、CUDA 或 kernel 实现，必须重新运行同
 概率不再具有完整一一对应关系。此时 `logprobs_close` 必须为 false；不能把
 `logprob_count=0`、`max_logprob_abs_error=0` 解释为概率一致。
 
+## M1 独立评测 CUDA Graph 候选
+
+独立 `eval infoskill` 入口支持默认关闭的 `HYBRID_PREFIX_CUDA_GRAPH=1`。该开关与训练入口
+使用同一条 hybrid-prefix vLLM CUDA Graph 实现，并写入
+`provenance.json.evaluation_runtime.hybrid_prefix_cuda_graph`、`resolved_config.json`、
+`metrics.jsonl` 和评测 summary 的 `rollout_performance`，便于确认优化路径实际生效。
+
+CUDA Graph 与更大 eval batch 都可能改变数值执行顺序，因此正式采用以相同 checkpoint、
+完整 140 条 `valid_seen` 的 Macro success（第一指标）、Overall success（第二指标）、
+rollout 耗时和物理显存余量为准，不把轨迹逐 token 完全相同当作唯一效果门。候选首次运行
+必须开启物理显存轮询，且保留至少 `8 GiB` 的每卡最低空闲显存；入口默认仍为 eager，直到
+完整评测确认效果和性能。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

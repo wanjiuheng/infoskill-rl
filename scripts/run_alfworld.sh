@@ -318,6 +318,14 @@ case "${ACTION}" in
       1) EVAL_ARGS+=(--grouped-infoskill-conditioning) ;;
       0) EVAL_ARGS+=(--no-grouped-infoskill-conditioning) ;;
     esac
+    case "${HYBRID_PREFIX_CUDA_GRAPH}" in
+      1) EVAL_ARGS+=(--hybrid-prefix-cuda-graph) ;;
+      0) EVAL_ARGS+=(--no-hybrid-prefix-cuda-graph) ;;
+      *)
+        echo "HYBRID_PREFIX_CUDA_GRAPH must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
     case "${VERBOSE_RUNTIME_LOGS}" in
       0) ;;
       1) EVAL_ARGS+=(--verbose-runtime-logs) ;;

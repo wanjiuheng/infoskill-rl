@@ -83,6 +83,16 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("--grouped-infoskill-conditioning", eval_case)
         self.assertNotIn("grouped-infoskill-conditioning", train_case)
 
+    def test_eval_forwards_hybrid_prefix_cuda_graph(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+        eval_case = script.split("  eval)\n", 1)[1].split("  raw-skill-ab|", 1)[0]
+
+        self.assertIn("--hybrid-prefix-cuda-graph", eval_case)
+        self.assertIn("--no-hybrid-prefix-cuda-graph", eval_case)
+
     def test_timeout_rescue_is_targeted_resumable_and_longer_bounded(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

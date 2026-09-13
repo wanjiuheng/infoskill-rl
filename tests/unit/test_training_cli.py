@@ -68,6 +68,30 @@ class TrainingCliTests(unittest.TestCase):
         self.assertFalse(default.grouped_infoskill_conditioning)
         self.assertTrue(optimized.grouped_infoskill_conditioning)
 
+    def test_infoskill_eval_cuda_graph_is_explicitly_opt_in(self) -> None:
+        default = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+            ]
+        )
+        optimized = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+                "--hybrid-prefix-cuda-graph",
+            ]
+        )
+
+        self.assertFalse(default.hybrid_prefix_cuda_graph)
+        self.assertTrue(optimized.hybrid_prefix_cuda_graph)
+
     def test_m1_performance_candidates_are_explicitly_opt_in(self) -> None:
         default = _parser().parse_args(self._arguments())
         optimized = _parser().parse_args(
