@@ -16,11 +16,14 @@ from pathlib import Path
 from typing import Sequence
 
 
-EXECUTION_MODES = (
+REQUIRED_EXECUTION_MODES = (
     "eager",
     "persistent-eager",
     "compile-only",
     "cuda-graph",
+)
+EXECUTION_MODES = REQUIRED_EXECUTION_MODES + (
+    "cuda-graph-eager-kernels",
 )
 
 FALLBACK_PROMPTS = (
@@ -178,7 +181,9 @@ def compare_execution_reports(
     logprob_atol: float,
 ) -> dict[str, object]:
     by_mode = {str(report["execution_mode"]): report for report in reports}
-    missing_modes = [mode for mode in EXECUTION_MODES if mode not in by_mode]
+    missing_modes = [
+        mode for mode in REQUIRED_EXECUTION_MODES if mode not in by_mode
+    ]
     if missing_modes:
         raise ValueError(f"missing execution modes: {', '.join(missing_modes)}")
 
@@ -186,14 +191,22 @@ def compare_execution_reports(
     against_eager = {
         mode: _compare_results(eager, by_mode[mode], logprob_atol=logprob_atol)
         for mode in EXECUTION_MODES[1:]
+        if mode in by_mode
     }
     within = {
         mode: _within_mode_checks(by_mode[mode], logprob_atol=logprob_atol)
         for mode in EXECUTION_MODES
+        if mode in by_mode
     }
 
     if not against_eager["persistent-eager"]["passed"]:
         classification = "persistent_input_path_divergence"
+    elif (
+        "cuda-graph-eager-kernels" in against_eager
+        and against_eager["cuda-graph-eager-kernels"]["passed"]
+        and not against_eager["compile-only"]["passed"]
+    ):
+        classification = "inductor_divergence_graph_with_eager_kernels_matches"
     elif not against_eager["compile-only"]["passed"]:
         classification = "inductor_compile_divergence"
     elif not against_eager["cuda-graph"]["passed"]:
@@ -214,7 +227,9 @@ def compare_execution_reports(
         "against_eager": against_eager,
         "within_mode_checks": within,
         "runtime_seconds": {
-            mode: by_mode[mode].get("runtime_seconds") for mode in EXECUTION_MODES
+            mode: by_mode[mode].get("runtime_seconds")
+            for mode in EXECUTION_MODES
+            if mode in by_mode
         },
         "passed": passed,
     }
@@ -296,17 +311,24 @@ def _build_runtime_cases(
     return cases
 
 
-def _enable_compile_only_mode() -> None:
-    """Keep V1 Inductor enabled while disabling only CUDA Graph capture."""
+def _override_vllm_compilation(
+    *,
+    use_cudagraph: bool | None = None,
+    use_inductor: bool | None = None,
+) -> None:
+    """Override one V1 compilation layer after vLLM applies its defaults."""
     from vllm.config import VllmConfig
 
     original = VllmConfig.__post_init__
 
-    def without_cuda_graph(self, *args, **kwargs):
+    def with_overrides(self, *args, **kwargs):
         original(self, *args, **kwargs)
-        self.compilation_config.use_cudagraph = False
+        if use_cudagraph is not None:
+            self.compilation_config.use_cudagraph = use_cudagraph
+        if use_inductor is not None:
+            self.compilation_config.use_inductor = use_inductor
 
-    VllmConfig.__post_init__ = without_cuda_graph
+    VllmConfig.__post_init__ = with_overrides
 
 
 def _sample_result(sample) -> dict[str, object]:
@@ -334,7 +356,9 @@ def run_execution_mode(args: argparse.Namespace) -> dict[str, object]:
         os.environ.pop("VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH", None)
 
     if args.execution_mode == "compile-only":
-        _enable_compile_only_mode()
+        _override_vllm_compilation(use_cudagraph=False)
+    elif args.execution_mode == "cuda-graph-eager-kernels":
+        _override_vllm_compilation(use_cudagraph=True, use_inductor=False)
 
     import torch
     from transformers import AutoConfig, AutoTokenizer
@@ -430,7 +454,10 @@ def run_execution_mode(args: argparse.Namespace) -> dict[str, object]:
             "device": torch.cuda.get_device_name(0),
             "enforce_eager": enforce_eager,
             "persistent_input_path": persistent_input,
-            "cuda_graph_requested": args.execution_mode == "cuda-graph",
+            "cuda_graph_requested": args.execution_mode
+            in {"cuda-graph", "cuda-graph-eager-kernels"},
+            "inductor_requested": args.execution_mode
+            in {"compile-only", "cuda-graph"},
         },
     }
 
@@ -474,7 +501,7 @@ def main() -> int:
     run.add_argument("--output", type=Path, required=True)
 
     compare = subparsers.add_parser("compare")
-    compare.add_argument("reports", nargs=4, type=Path)
+    compare.add_argument("reports", nargs="+", type=Path)
     compare.add_argument("--logprob-atol", type=float, default=1e-3)
     compare.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

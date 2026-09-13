@@ -83,6 +83,33 @@ class HybridPrefixExecutionDiagnosticTests(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(result["against_eager"]["cuda-graph"]["sequence_count"], 8)
 
+    def test_graph_with_eager_kernels_can_clear_inductor_as_the_cause(self) -> None:
+        eager = _report("eager")
+        persistent = _report("persistent-eager")
+        graph_eager_kernels = _report("cuda-graph-eager-kernels")
+        compile_only = _report("compile-only", token_offset=1)
+        cuda_graph = _report("cuda-graph", token_offset=1)
+
+        result = compare_execution_reports(
+            [
+                eager,
+                persistent,
+                graph_eager_kernels,
+                compile_only,
+                cuda_graph,
+            ],
+            logprob_atol=1e-3,
+        )
+
+        self.assertEqual(
+            result["classification"],
+            "inductor_divergence_graph_with_eager_kernels_matches",
+        )
+        self.assertTrue(
+            result["against_eager"]["cuda-graph-eager-kernels"]["passed"]
+        )
+        self.assertFalse(result["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
