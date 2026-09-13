@@ -386,6 +386,24 @@ def _parser() -> argparse.ArgumentParser:
         default=16_384,
         help="experimental vLLM scheduler token capacity per generation batch",
     )
+    train.add_argument(
+        "--hybrid-prefix-cuda-graph",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "experimental M1-only candidate: use persistent hybrid-prefix "
+            "embedding buffers with vLLM CUDA Graph"
+        ),
+    )
+    train.add_argument(
+        "--fuse-kl-ppo-forward",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "experimental M1-only algorithm candidate: reuse the PPO actor "
+            "forward for KL; KL then also regularizes the projector"
+        ),
+    )
     train.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -450,6 +468,14 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
     if args.skip_unused_old_logprob_entropy and mode is not SkillMode.INFO_SKILL:
         raise ValueError(
             "skip_unused_old_logprob_entropy is registered only for infoskill"
+        )
+    if args.hybrid_prefix_cuda_graph and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "hybrid_prefix_cuda_graph is registered only for infoskill"
+        )
+    if args.fuse_kl_ppo_forward and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "fuse_kl_ppo_forward is registered only for infoskill"
         )
     if (
         args.rollout_max_batched_tokens != 16_384
@@ -516,6 +542,10 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "rollout_max_batched_tokens": (
                         args.rollout_max_batched_tokens
                     ),
+                    "hybrid_prefix_cuda_graph": (
+                        args.hybrid_prefix_cuda_graph
+                    ),
+                    "fuse_kl_ppo_forward": args.fuse_kl_ppo_forward,
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "segment_end_update": args.segment_end_update,
@@ -551,6 +581,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
             args.skip_unused_old_logprob_entropy
         ),
         rollout_max_batched_tokens=args.rollout_max_batched_tokens,
+        hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
+        fuse_kl_ppo_forward=args.fuse_kl_ppo_forward,
         raw_skill_prompt_format=args.raw_skill_prompt_format,
     )
 

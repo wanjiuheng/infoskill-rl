@@ -48,6 +48,26 @@ class RunScriptTests(unittest.TestCase):
             train_case,
         )
 
+    def test_deep_m1_candidates_are_default_off_and_forwarded(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+
+        self.assertIn(
+            'HYBRID_PREFIX_CUDA_GRAPH="${HYBRID_PREFIX_CUDA_GRAPH:-0}"',
+            script,
+        )
+        self.assertIn(
+            'FUSE_KL_PPO_FORWARD="${FUSE_KL_PPO_FORWARD:-0}"',
+            script,
+        )
+        self.assertIn("--hybrid-prefix-cuda-graph", train_case)
+        self.assertIn("--no-hybrid-prefix-cuda-graph", train_case)
+        self.assertIn("--fuse-kl-ppo-forward", train_case)
+        self.assertIn("--no-fuse-kl-ppo-forward", train_case)
+
     def test_grouped_infoskill_conditioning_is_eval_only_and_opt_in(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

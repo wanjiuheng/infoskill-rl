@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import os
 import unittest
+from unittest.mock import patch
 
 from infoskill.integrations.verl.hybrid_prefix import (
     build_hybrid_vllm_inputs,
@@ -10,6 +12,7 @@ from infoskill.integrations.verl.hybrid_prefix import (
 )
 from infoskill.integrations.verl.hybrid_rollout import (
     _HybridInferenceEngine,
+    _hybrid_cuda_graph_environment,
     vllm_action_stop_settings,
 )
 
@@ -65,6 +68,18 @@ class _Engine:
 
 
 class HybridPrefixTransportTests(unittest.TestCase):
+    def test_cuda_graph_environment_is_scoped_and_restored(self) -> None:
+        variable = "VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH"
+        with patch.dict(os.environ, {variable: "existing"}, clear=False):
+            with _hybrid_cuda_graph_environment(True):
+                self.assertEqual(os.environ[variable], "1")
+            self.assertEqual(os.environ[variable], "existing")
+
+        with patch.dict(os.environ, {}, clear=True):
+            with _hybrid_cuda_graph_environment(False):
+                self.assertNotIn(variable, os.environ)
+            self.assertNotIn(variable, os.environ)
+
     def test_action_stop_uses_native_string_and_enables_detokenization(self) -> None:
         settings = vllm_action_stop_settings("</action>")
 

@@ -51,7 +51,13 @@ class VllmPatchBundleTests(unittest.TestCase):
         self.assertIn("infoskill_prefix_embeds", patch)
         self.assertIn("infoskill_prefix_mask", patch)
         self.assertIn("INFOSKILL_HYBRID_PREFIX_API = 1", patch)
-        self.assertIn("enforce_eager=True", patch)
+        self.assertIn("INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API = 1", patch)
+        self.assertIn("VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH", patch)
+        self.assertIn("self.inputs_embeds[:num_scheduled_tokens].copy_", patch)
+        self.assertIn(
+            "self.is_multimodal_model or self.infoskill_hybrid_prefix_cuda_graph",
+            patch,
+        )
 
     def test_build_validates_wheel_before_installing_it(self) -> None:
         script = (PROJECT_ROOT / "scripts" / "build_patched_vllm.sh").read_text(

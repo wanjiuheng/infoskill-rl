@@ -19,6 +19,8 @@ class ResumeRunDirectoryTests(unittest.TestCase):
             "runtime_options": {
                 "skip_unused_old_logprob_entropy": False,
                 "rollout_max_batched_tokens": 16_384,
+                "hybrid_prefix_cuda_graph": False,
+                "fuse_kl_ppo_forward": False,
                 "policy_max_tokens_per_gpu": 12_288,
             },
         }
@@ -27,6 +29,8 @@ class ResumeRunDirectoryTests(unittest.TestCase):
             "runtime_options": {
                 "skip_unused_old_logprob_entropy": True,
                 "rollout_max_batched_tokens": 32_768,
+                "hybrid_prefix_cuda_graph": True,
+                "fuse_kl_ppo_forward": True,
                 "policy_max_tokens_per_gpu": 12_288,
             },
         }

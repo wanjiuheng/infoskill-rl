@@ -2,11 +2,12 @@ diff --git a/vllm/inputs/data.py b/vllm/inputs/data.py
 index 138a8f6..760ceaa 100644
 --- a/vllm/inputs/data.py
 +++ b/vllm/inputs/data.py
-@@ -14,6 +14,9 @@ if TYPE_CHECKING:
+@@ -14,6 +14,10 @@ if TYPE_CHECKING:
      from vllm.multimodal.inputs import MultiModalInputs
  
  
 +INFOSKILL_HYBRID_PREFIX_API = 1
++INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API = 1
 +
 +
  class TextPrompt(TypedDict):
@@ -254,9 +255,26 @@ index a64cb97..695dd6a 100644
      def __post_init__(self):
          self.num_prompt_tokens = len(self.prompt_token_ids)
 diff --git a/vllm/v1/worker/gpu_model_runner.py b/vllm/v1/worker/gpu_model_runner.py
-index 70e8bd7..e034481 100644
+index 70e8bd7..5a07fc1 100644
 --- a/vllm/v1/worker/gpu_model_runner.py
 +++ b/vllm/v1/worker/gpu_model_runner.py
+@@ -2,5 +2,6 @@
+ 
+ import gc
++import os
+ import time
+ import weakref
+ from typing import TYPE_CHECKING, Optional, Union
+@@ -69,5 +70,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+         self.observability_config = vllm_config.observability_config
+ 
++        self.infoskill_hybrid_prefix_cuda_graph = (
++            os.environ.get("VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH") == "1"
++        )
++
+         from vllm.model_executor.models.utils import set_cpu_offload_max_bytes
+         set_cpu_offload_max_bytes(
+             int(self.cache_config.cpu_offload_gb * 1024**3))
 @@ -328,6 +328,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
          for new_req_data in scheduler_output.scheduled_new_reqs:
              req_id = new_req_data.req_id
@@ -314,26 +332,31 @@ index 70e8bd7..e034481 100644
      def _compute_cascade_attn_prefix_len(
          self,
          num_scheduled_tokens: np.ndarray,
-@@ -997,6 +1033,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
-             # Return empty ModelRunnerOutput if there's no work to do.
-             return EMPTY_MODEL_RUNNER_OUTPUT
- 
+@@ -1010,6 +1050,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # Eager mode.
+             num_input_tokens = num_scheduled_tokens
+         attn_metadata.num_input_tokens = num_input_tokens
 +        has_infoskill_prefix = any(
 +            self.requests[req_id].infoskill_prefix_embeds is not None
 +            for req_id in self.input_batch.req_ids
 +        )
-+        if has_infoskill_prefix and self.use_cuda_graph:
-+            raise RuntimeError(
-+                "INFO-SKILL hybrid prefix requires enforce_eager=True in vLLM 0.8.4"
-+            )
-+
+ 
          if self.is_multimodal_model:
-             # Run the multimodal encoder if any.
-             self._execute_mm_encoder(scheduler_output)
-@@ -1033,6 +1078,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+             # NOTE(woosuk): To unify token ids and soft tokens (vision
+@@ -1033,6 +1077,21 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              self.inputs_embeds[:num_scheduled_tokens].copy_(inputs_embeds)
              inputs_embeds = self.inputs_embeds[:num_input_tokens]
              input_ids = None
++        elif self.infoskill_hybrid_prefix_cuda_graph:
++            input_ids = self.input_ids[:num_scheduled_tokens]
++            inputs_embeds = self.model.get_input_embeddings(input_ids)
++            if has_infoskill_prefix:
++                self._apply_infoskill_prefix(inputs_embeds, scheduler_output)
++            # CUDA graphs require a stable input pointer.  This persistent
++            # buffer also covers padded graph tokens like the multimodal path.
++            self.inputs_embeds[:num_scheduled_tokens].copy_(inputs_embeds)
++            inputs_embeds = self.inputs_embeds[:num_input_tokens]
++            input_ids = None
 +        elif has_infoskill_prefix:
 +            input_ids = self.input_ids[:num_scheduled_tokens]
 +            inputs_embeds = self.model.get_input_embeddings(input_ids)
@@ -342,3 +365,13 @@ index 70e8bd7..e034481 100644
          else:
              # For text-only models, we use token ids as input.
              # While it is possible to use embeddings as input just like the
+@@ -1399,7 +1453,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+ 
+         with self.maybe_dummy_run_with_lora(self.lora_config,
+                                             num_scheduled_tokens):
+             model = self.model
+-            if self.is_multimodal_model:
++            if self.is_multimodal_model or self.infoskill_hybrid_prefix_cuda_graph:
+                 input_ids = None
+                 inputs_embeds = self.inputs_embeds[:num_tokens]
+             else:

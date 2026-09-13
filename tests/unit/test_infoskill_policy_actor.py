@@ -10,6 +10,30 @@ except ModuleNotFoundError:  # pragma: no cover - local docs-only environment
 
 @unittest.skipIf(torch is None, "torch is not installed")
 class InfoSkillPolicyActorTests(unittest.TestCase):
+    def test_fused_kl_loss_keeps_actor_and_projector_gradients(self) -> None:
+        from infoskill.integrations.verl.policy_actor import _infoskill_kl_loss
+
+        actor = torch.nn.Parameter(torch.tensor(0.5))
+        projector = torch.nn.Parameter(torch.tensor(0.25))
+        actor_log_prob = (actor + projector).reshape(1, 1)
+        reference_log_prob = torch.zeros((1, 1))
+
+        loss = _infoskill_kl_loss(
+            actor_log_prob=actor_log_prob,
+            reference_log_prob=reference_log_prob,
+            response_mask=torch.ones((1, 1)),
+            kl_penalty_fn=lambda **values: (
+                values["logprob"] - values["ref_logprob"]
+            ).square(),
+            aggregate_loss_fn=lambda **values: values["loss_mat"].mean(),
+            kl_loss_type="squared",
+            loss_agg_mode="token-mean",
+        )
+        loss.backward()
+
+        self.assertGreater(actor.grad.item(), 0.0)
+        self.assertGreater(projector.grad.item(), 0.0)
+
     def test_embedding_injection_preserves_projector_gradient(self) -> None:
         from infoskill.integrations.verl.policy_actor import (
             PrefixEmbeddingInjector,

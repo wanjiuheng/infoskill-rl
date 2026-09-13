@@ -378,6 +378,14 @@ logprob、LoRA/M1/optimizer/scheduler/RNG/trainer state、至少 8 GiB 物理显
 exact parity 现只用于区分等价工程优化与 behavior-changing 候选；后者不再被表述为“效果有害”，
 而是必须补相同评测协议的 macro/overall success 效果门后才能采用。
 
+下一阶段转向两个默认关闭的深层候选。`HYBRID_PREFIX_CUDA_GRAPH=1` 让 patched vLLM 使用固定
+地址的 persistent `inputs_embeds` 缓冲区捕获 hybrid-prefix CUDA Graph；它属于等价工程候选，
+必须同时通过相同 source checkpoint 的完整轨迹/logprob、最终 checkpoint、物理显存和吞吐门。
+`FUSE_KL_PPO_FORWARD=1` 则复用 PPO actor logprob，删除一次 actor KL 前向；为了只做一次
+backward，KL 会同时正则化 LoRA 与 projector，明确改变 D009 的梯度边界，属于算法候选。即使
+当前 rollout 完全相同也不得被等价门批准，必须用固定 `valid_seen` 的 Macro success 为首要、
+Overall success 为次要指标验证效果，并补多 update 稳定性后才可接回 formal。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

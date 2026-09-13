@@ -228,3 +228,20 @@ geometry 等候选改变 rollout，比较器必须标记为 behavior-changing，
 另做以 macro success 为首要指标的效果门；不能因轨迹改变直接断言效果下降，也不能把单个训练
 batch 的即时成功率当成泛化证据。轨迹长度不同的两次 update，其原始 wall-time 不构成同工作量
 吞吐比较，必须明确标记 performance comparison 无效，直到效果门提供端到端决策依据。
+
+## D024：深层吞吐候选分成等价实现与算法变更两条门
+
+M1 hybrid-prefix rollout 默认仍使用 eager vLLM。CUDA Graph 候选只在显式设置
+`HYBRID_PREFIX_CUDA_GRAPH=1` 时启用，并要求 patched runtime 的第二版能力标记。捕获和执行都
+通过 vLLM 自己的 persistent `inputs_embeds` 缓冲区传递 soft prefix，避免把每轮新分配的
+embedding 地址固化进 graph。该候选不改变训练目标，因此只有完整 rollout trace、logprob 和
+portable checkpoint 均等价，且物理显存余量与吞吐门同时通过时，才可视为可替换实现。
+
+Policy 侧默认继续分别执行 reference、detached-prefix actor KL、trainable-prefix PPO 三次前向。
+`FUSE_KL_PPO_FORWARD=1` 复用 PPO actor logprob 计算 KL，从而删除 detached-prefix actor KL
+前向；代价是 KL 梯度也进入 projector。这个差异是显式算法假设，不是数值实现细节。比较器即使
+观察到当前 update 的 rollout 完全一致，也必须输出 `algorithm_change_requested=true` 和
+`efficacy_gate_required=true`，不得以 checkpoint 不一致判定“效果变差”，也不得仅凭吞吐批准。
+候选采用条件是相同训练起点、相同预算和固定 valid-seen 协议下，按 Macro success 首排、Overall
+success 次排不劣，并在多 update 运行中无崩溃、显存越界或学习曲线退化。两个开关都保持默认
+关闭，只允许命名恢复分叉改变，原 formal run 的注册语义不被静默修改。

@@ -76,13 +76,19 @@ class TrainingCliTests(unittest.TestCase):
                 "--skip-unused-old-logprob-entropy",
                 "--rollout-max-batched-tokens",
                 "32768",
+                "--hybrid-prefix-cuda-graph",
+                "--fuse-kl-ppo-forward",
             ]
         )
 
         self.assertFalse(default.skip_unused_old_logprob_entropy)
         self.assertEqual(default.rollout_max_batched_tokens, 16_384)
+        self.assertFalse(default.hybrid_prefix_cuda_graph)
+        self.assertFalse(default.fuse_kl_ppo_forward)
         self.assertTrue(optimized.skip_unused_old_logprob_entropy)
         self.assertEqual(optimized.rollout_max_batched_tokens, 32_768)
+        self.assertTrue(optimized.hybrid_prefix_cuda_graph)
+        self.assertTrue(optimized.fuse_kl_ppo_forward)
 
     def test_training_segment_end_is_an_invocation_boundary(self) -> None:
         default = _parser().parse_args(self._arguments())

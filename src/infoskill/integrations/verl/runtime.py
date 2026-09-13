@@ -53,6 +53,7 @@ class VerlRuntimeConfig:
     action_minibatch_size: int = 256
     policy_max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU
     rollout_max_batched_tokens: int = 16_384
+    hybrid_prefix_cuda_graph: bool = False
     gpu_memory_utilization: float = 0.50
     allow_unkeyed_vllm_sampling: bool = False
     require_hybrid_prefix: bool = False
@@ -63,6 +64,7 @@ class VerlRuntimeConfig:
     cuda_memory_poll_interval_ms: int = 0
     balance_policy_tokens_across_ranks: bool = True
     skip_unused_old_logprob_entropy: bool = False
+    fuse_kl_ppo_forward: bool = False
     enable_infoskill_modules: bool = False
     semantic_model_path: str | None = None
     skill_bank_path: str | None = None
@@ -93,6 +95,18 @@ class VerlRuntimeConfig:
         if self.skip_unused_old_logprob_entropy and not self.enable_infoskill_modules:
             raise ValueError(
                 "old-logprob entropy skipping is registered only for INFO-SKILL"
+            )
+        if self.hybrid_prefix_cuda_graph and not self.enable_infoskill_modules:
+            raise ValueError(
+                "hybrid-prefix CUDA Graph is registered only for INFO-SKILL"
+            )
+        if self.hybrid_prefix_cuda_graph and not self.require_hybrid_prefix:
+            raise ValueError(
+                "hybrid-prefix CUDA Graph requires hybrid-prefix rollout"
+            )
+        if self.fuse_kl_ppo_forward and not self.enable_infoskill_modules:
+            raise ValueError(
+                "KL/PPO forward fusion is registered only for INFO-SKILL"
             )
         if (
             self.rollout_max_batched_tokens != 16_384
@@ -187,7 +201,9 @@ class VerlRuntime:
             raise ValueError("VERL runtime requires at least one GPU")
         require_vllm_084_cachetools_compatibility()
         if config.require_hybrid_prefix:
-            _require_hybrid_prefix_runtime()
+            _require_hybrid_prefix_runtime(
+                require_cuda_graph=config.hybrid_prefix_cuda_graph
+            )
         source = str(Path(config.skillrl_source).expanduser().resolve())
         if source not in sys.path:
             sys.path.insert(0, source)
@@ -561,6 +577,12 @@ class VerlRuntime:
                     self.config.enable_infoskill_modules
                     and self.config.skip_unused_old_logprob_entropy
                 ),
+                "perf/hybrid_prefix_cuda_graph": float(
+                    self.config.hybrid_prefix_cuda_graph
+                ),
+                "perf/fuse_kl_ppo_forward": float(
+                    self.config.fuse_kl_ppo_forward
+                ),
                 "perf/reference_logprob_seconds": reference_logprob_seconds,
                 "perf/actor_update_seconds": actor_update_seconds,
                 "perf/runtime_policy_update_seconds": time.perf_counter()
@@ -794,6 +816,10 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.actor.use_kl_loss = True
     actor_ref.actor.kl_loss_coef = 0.01
     actor_ref.actor.kl_loss_type = "low_var_kl"
+    with open_dict(actor_ref.actor):
+        actor_ref.actor.infoskill_fuse_kl_ppo_forward = (
+            settings.fuse_kl_ppo_forward
+        )
     actor_ref.actor.grad_clip = 1.0
     actor_ref.actor.fsdp_config.param_offload = False
     actor_ref.actor.fsdp_config.optimizer_offload = False
@@ -815,12 +841,18 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.rollout.log_prob_max_token_len_per_gpu = (
         settings.policy_max_tokens_per_gpu
     )
-    actor_ref.rollout.enforce_eager = settings.require_hybrid_prefix
+    actor_ref.rollout.enforce_eager = (
+        settings.require_hybrid_prefix
+        and not settings.hybrid_prefix_cuda_graph
+    )
     actor_ref.rollout.free_cache_engine = False
     actor_ref.rollout.enable_chunked_prefill = True
     actor_ref.rollout.seed = settings.master_seed
     with open_dict(actor_ref.rollout):
         actor_ref.rollout.infoskill_hybrid_prefix = settings.require_hybrid_prefix
+        actor_ref.rollout.infoskill_hybrid_prefix_cuda_graph = (
+            settings.hybrid_prefix_cuda_graph
+        )
         for name, value in vllm_action_stop_settings("</action>").items():
             setattr(actor_ref.rollout, name, value)
     actor_ref.ref.log_prob_micro_batch_size_per_gpu = 4
@@ -865,7 +897,7 @@ def _effective_global_minibatch_size(
     return effective
 
 
-def _require_hybrid_prefix_runtime() -> None:
+def _require_hybrid_prefix_runtime(*, require_cuda_graph: bool = False) -> None:
     try:
         from vllm import envs as vllm_envs
         from vllm.inputs.data import INFOSKILL_HYBRID_PREFIX_API
@@ -879,6 +911,21 @@ def _require_hybrid_prefix_runtime() -> None:
         )
     if not vllm_envs.VLLM_USE_V1:
         raise RuntimeError("INFO-SKILL Hybrid Prefix Input requires VLLM_USE_V1=1")
+    if require_cuda_graph:
+        try:
+            from vllm.inputs.data import (
+                INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API,
+            )
+        except (ImportError, AttributeError) as error:
+            raise RuntimeError(
+                "patched vLLM 0.8.4+infoskill2 is required for hybrid-prefix "
+                "CUDA Graph"
+            ) from error
+        if INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API != 1:
+            raise RuntimeError(
+                "unsupported INFO-SKILL hybrid-prefix CUDA Graph API: "
+                f"{INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API}"
+            )
 
 
 def _reduce_metrics(metrics: Mapping[str, object]) -> dict[str, float]:

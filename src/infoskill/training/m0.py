@@ -66,6 +66,8 @@ def run_m0_training(
     balance_policy_tokens_across_ranks: bool = True,
     skip_unused_old_logprob_entropy: bool = False,
     rollout_max_batched_tokens: int = 16_384,
+    hybrid_prefix_cuda_graph: bool = False,
+    fuse_kl_ppo_forward: bool = False,
     segment_end_update: int | None = None,
 ) -> int:
     """Backward-compatible entry point for the token-only M0 baseline."""
@@ -87,6 +89,8 @@ def run_m0_training(
         balance_policy_tokens_across_ranks=balance_policy_tokens_across_ranks,
         skip_unused_old_logprob_entropy=skip_unused_old_logprob_entropy,
         rollout_max_batched_tokens=rollout_max_batched_tokens,
+        hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+        fuse_kl_ppo_forward=fuse_kl_ppo_forward,
     )
 
 
@@ -107,6 +111,8 @@ def run_policy_training(
     balance_policy_tokens_across_ranks: bool = True,
     skip_unused_old_logprob_entropy: bool = False,
     rollout_max_batched_tokens: int = 16_384,
+    hybrid_prefix_cuda_graph: bool = False,
+    fuse_kl_ppo_forward: bool = False,
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
     segment_end_update: int | None = None,
 ) -> int:
@@ -155,6 +161,14 @@ def run_policy_training(
     if skip_unused_old_logprob_entropy and mode is not SkillMode.INFO_SKILL:
         raise ValueError(
             "skip_unused_old_logprob_entropy is registered only for infoskill"
+        )
+    if hybrid_prefix_cuda_graph and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "hybrid_prefix_cuda_graph is registered only for infoskill"
+        )
+    if fuse_kl_ppo_forward and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "fuse_kl_ppo_forward is registered only for infoskill"
         )
     if (
         rollout_max_batched_tokens != 16_384
@@ -305,6 +319,8 @@ def run_policy_training(
                 skip_unused_old_logprob_entropy
             ),
             "rollout_max_batched_tokens": rollout_max_batched_tokens,
+            "hybrid_prefix_cuda_graph": hybrid_prefix_cuda_graph,
+            "fuse_kl_ppo_forward": fuse_kl_ppo_forward,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
             "infoskill_auxiliary_micro_batch_size": (
                 8 if mode is SkillMode.INFO_SKILL else None
@@ -467,6 +483,8 @@ def run_policy_training(
             action_minibatch_size=plan.action_minibatch_size,
             policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
             rollout_max_batched_tokens=rollout_max_batched_tokens,
+            hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+            fuse_kl_ppo_forward=fuse_kl_ppo_forward,
             balance_policy_tokens_across_ranks=(
                 balance_policy_tokens_across_ranks
             ),

@@ -17,9 +17,19 @@ except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
 
 
 _CANDIDATE_OPTIONS = {
+    "fuse_kl_ppo_forward",
+    "hybrid_prefix_cuda_graph",
     "skip_unused_old_logprob_entropy",
     "rollout_max_batched_tokens",
 }
+_CANDIDATE_MODES = (
+    "combined",
+    "entropy-only",
+    "cuda-graph",
+    "fused-kl-ppo",
+    "deep-combined",
+)
+_ALGORITHM_CANDIDATE_MODES = {"fused-kl-ppo", "deep-combined"}
 
 
 def compare_runs(
@@ -33,7 +43,7 @@ def compare_runs(
     minimum_core_speedup: float = 1.05,
     minimum_physical_free_gb: float = 8.0,
 ) -> dict[str, object]:
-    if candidate_mode not in {"combined", "entropy-only"}:
+    if candidate_mode not in _CANDIDATE_MODES:
         raise ValueError(f"unsupported candidate mode: {candidate_mode}")
     baseline_resolved = _read_json(baseline / "resolved_config.json")
     candidate_resolved = _read_json(candidate / "resolved_config.json")
@@ -93,6 +103,9 @@ def compare_runs(
             is False
             and baseline_options.get("rollout_max_batched_tokens", 16_384)
             == 16_384
+            and baseline_options.get("hybrid_prefix_cuda_graph", False)
+            is False
+            and baseline_options.get("fuse_kl_ppo_forward", False) is False
         ),
         "physical_memory_sampling_enabled": (
             _positive_int(baseline_options.get("cuda_memory_poll_interval_ms")) > 0
@@ -103,7 +116,29 @@ def compare_runs(
             float(baseline_metric.get("perf/old_logprob_entropy_skipped", 0.0))
             == 0.0
             and float(candidate_metric.get("perf/old_logprob_entropy_skipped", 0.0))
-            == 1.0
+            == float(
+                candidate_mode in {"combined", "entropy-only", "deep-combined"}
+            )
+        ),
+        "runtime_reports_expected_cuda_graph_path": (
+            float(
+                baseline_metric.get("perf/hybrid_prefix_cuda_graph", 0.0)
+            )
+            == 0.0
+            and float(
+                candidate_metric.get("perf/hybrid_prefix_cuda_graph", 0.0)
+            )
+            == float(candidate_mode in {"cuda-graph", "deep-combined"})
+        ),
+        "runtime_reports_expected_kl_ppo_path": (
+            float(
+                baseline_metric.get("perf/fuse_kl_ppo_forward", 0.0)
+            )
+            == 0.0
+            and float(
+                candidate_metric.get("perf/fuse_kl_ppo_forward", 0.0)
+            )
+            == float(candidate_mode in _ALGORITHM_CANDIDATE_MODES)
         ),
     }
     control_checks.update(
@@ -178,15 +213,19 @@ def compare_runs(
     trace_exact = bool(trace_comparison["passed"])
     checkpoint_equivalent = bool(checkpoint_comparison["passed"])
     performance_comparison_valid = trace_exact
+    algorithm_change_requested = candidate_mode in _ALGORITHM_CANDIDATE_MODES
     equivalent_optimization_passed = (
         settings_valid
+        and not algorithm_change_requested
         and trace_exact
         and checkpoint_equivalent
         and performance_valid
         and physical_memory_valid
     )
     behavior_change_detected = not trace_exact
-    efficacy_gate_required = settings_valid and behavior_change_detected
+    efficacy_gate_required = settings_valid and (
+        behavior_change_detected or algorithm_change_requested
+    )
     return {
         "schema_version": 1,
         "baseline": str(baseline.resolve()),
@@ -213,6 +252,7 @@ def compare_runs(
         "candidate_physical_min_free_gb": candidate_physical_free,
         "minimum_physical_free_gb": minimum_physical_free_gb,
         "physical_memory_valid": physical_memory_valid,
+        "algorithm_change_requested": algorithm_change_requested,
         "behavior_change_detected": behavior_change_detected,
         "efficacy_gate_required": efficacy_gate_required,
         "equivalent_optimization_passed": equivalent_optimization_passed,
@@ -231,17 +271,38 @@ def _candidate_option_checks(
         baseline.get("rollout_max_batched_tokens", 16_384)
     )
     candidate_capacity = _positive_int(candidate.get("rollout_max_batched_tokens"))
+    expected_entropy = candidate_mode in {
+        "combined",
+        "entropy-only",
+        "deep-combined",
+    }
+    expected_cuda_graph = candidate_mode in {"cuda-graph", "deep-combined"}
+    expected_fused_kl_ppo = candidate_mode in _ALGORITHM_CANDIDATE_MODES
     if candidate_mode == "combined":
         capacity_matches_mode = candidate_capacity > baseline_capacity
-    elif candidate_mode == "entropy-only":
+    elif candidate_mode in {
+        "entropy-only",
+        "cuda-graph",
+        "fused-kl-ppo",
+        "deep-combined",
+    }:
         capacity_matches_mode = candidate_capacity == baseline_capacity
     else:
         raise ValueError(f"unsupported candidate mode: {candidate_mode}")
     return {
-        "candidate_entropy_skip_enabled": (
-            candidate.get("skip_unused_old_logprob_entropy") is True
+        "candidate_entropy_skip_matches_mode": (
+            candidate.get("skip_unused_old_logprob_entropy", False)
+            is expected_entropy
         ),
         "candidate_rollout_capacity_matches_mode": capacity_matches_mode,
+        "candidate_cuda_graph_matches_mode": (
+            candidate.get("hybrid_prefix_cuda_graph", False)
+            is expected_cuda_graph
+        ),
+        "candidate_fused_kl_ppo_matches_mode": (
+            candidate.get("fuse_kl_ppo_forward", False)
+            is expected_fused_kl_ppo
+        ),
     }
 
 
@@ -565,7 +626,7 @@ def main() -> int:
     parser.add_argument("candidate", type=Path)
     parser.add_argument(
         "--candidate-mode",
-        choices=("combined", "entropy-only"),
+        choices=_CANDIDATE_MODES,
         default="combined",
     )
     parser.add_argument("--logprob-tolerance", type=float, default=1e-3)

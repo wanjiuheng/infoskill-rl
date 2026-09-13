@@ -82,6 +82,10 @@ SKIP_UNUSED_OLD_LOGPROB_ENTROPY="${SKIP_UNUSED_OLD_LOGPROB_ENTROPY:-0}"
 # Default preserves the registered vLLM scheduler. Larger values require an
 # exact trace/logprob and physical-memory gate on the target server.
 ROLLOUT_MAX_BATCHED_TOKENS="${ROLLOUT_MAX_BATCHED_TOKENS:-16384}"
+# Default-off vLLM wheel candidate; requires 0.8.4+infoskill2.
+HYBRID_PREFIX_CUDA_GRAPH="${HYBRID_PREFIX_CUDA_GRAPH:-0}"
+# Default-off algorithm candidate; KL also regularizes the projector.
+FUSE_KL_PPO_FORWARD="${FUSE_KL_PPO_FORWARD:-0}"
 # Validated default. Reassigns samples among ranks while preserving each
 # global GRPO minibatch's membership; set to 0 for rollback.
 BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-1}"
@@ -132,6 +136,14 @@ if [[ "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" != "0" && "${SKIP_UNUSED_OLD_LOGPROB_
 fi
 if [[ ! "${ROLLOUT_MAX_BATCHED_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ROLLOUT_MAX_BATCHED_TOKENS must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${HYBRID_PREFIX_CUDA_GRAPH}" != "0" && "${HYBRID_PREFIX_CUDA_GRAPH}" != "1" ]]; then
+  echo "HYBRID_PREFIX_CUDA_GRAPH must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "${FUSE_KL_PPO_FORWARD}" != "0" && "${FUSE_KL_PPO_FORWARD}" != "1" ]]; then
+  echo "FUSE_KL_PPO_FORWARD must be 0 or 1" >&2
   exit 2
 fi
 if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "1" ]]; then
@@ -564,6 +576,14 @@ case "${ACTION}" in
     case "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" in
       0) TRAIN_ARGS+=(--no-skip-unused-old-logprob-entropy) ;;
       1) TRAIN_ARGS+=(--skip-unused-old-logprob-entropy) ;;
+    esac
+    case "${HYBRID_PREFIX_CUDA_GRAPH}" in
+      0) TRAIN_ARGS+=(--no-hybrid-prefix-cuda-graph) ;;
+      1) TRAIN_ARGS+=(--hybrid-prefix-cuda-graph) ;;
+    esac
+    case "${FUSE_KL_PPO_FORWARD}" in
+      0) TRAIN_ARGS+=(--no-fuse-kl-ppo-forward) ;;
+      1) TRAIN_ARGS+=(--fuse-kl-ppo-forward) ;;
     esac
     case "${PERSISTENT_ROLLOUT_SESSION}" in
       1) TRAIN_ARGS+=(--persistent-rollout-session) ;;

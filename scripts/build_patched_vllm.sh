@@ -42,12 +42,12 @@ if [[ -n "${VLLM_PRECOMPILED_WHEEL_LOCATION:-}" ]]; then
     "${BUILD_ROOT}/source" \
     "${PATCH_ROOT}/manifest.json" \
     "${WHEEL_DIR}"
-  WHEEL="${WHEEL_DIR}/vllm-0.8.4+infoskill1-${BASE_WHEEL_NAME#vllm-0.8.4-}"
+  WHEEL="${WHEEL_DIR}/vllm-0.8.4+infoskill2-${BASE_WHEEL_NAME#vllm-0.8.4-}"
 else
   echo "VLLM_PRECOMPILED_WHEEL_LOCATION is unset; vLLM CUDA extensions will compile from source."
-  export SETUPTOOLS_SCM_PRETEND_VERSION="0.8.4+infoskill1"
+  export SETUPTOOLS_SCM_PRETEND_VERSION="0.8.4+infoskill2"
   python -m pip wheel "${BUILD_ROOT}/source" --no-deps --no-build-isolation --wheel-dir "${WHEEL_DIR}"
-  WHEEL="$(find "${WHEEL_DIR}" -maxdepth 1 -type f -name 'vllm-0.8.4+infoskill1*.whl' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+  WHEEL="$(find "${WHEEL_DIR}" -maxdepth 1 -type f -name 'vllm-0.8.4+infoskill2*.whl' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
 fi
 
 if [[ -z "${WHEEL}" || ! -f "${WHEEL}" ]]; then
@@ -59,7 +59,7 @@ sha256sum "${WHEEL}" | tee "${WHEEL}.sha256"
 
 if [[ "${INSTALL_MODE}" == "--install" ]]; then
   python -m pip install --force-reinstall --no-deps "${WHEEL}"
-  python -c "import vllm; from vllm.inputs.data import INFOSKILL_HYBRID_PREFIX_API; print(vllm.__version__, INFOSKILL_HYBRID_PREFIX_API)"
+  python -c "import vllm; from vllm.inputs.data import INFOSKILL_HYBRID_PREFIX_API, INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API; print(vllm.__version__, INFOSKILL_HYBRID_PREFIX_API, INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API)"
 else
   echo "Wheel built but not installed. Re-run with third argument --install, or install the wheel explicitly."
 fi

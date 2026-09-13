@@ -51,6 +51,8 @@ class VerlRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(settings.infoskill_policy_warmup_ratio, 0.03)
         self.assertFalse(settings.skip_unused_old_logprob_entropy)
         self.assertEqual(settings.rollout_max_batched_tokens, 16_384)
+        self.assertFalse(settings.hybrid_prefix_cuda_graph)
+        self.assertFalse(settings.fuse_kl_ppo_forward)
 
         with self.assertRaisesRegex(ValueError, "maximum-length sequence"):
             VerlRuntimeConfig(
@@ -72,6 +74,25 @@ class VerlRuntimeConfigTests(unittest.TestCase):
                 model_path="/policy",
                 num_gpus=4,
                 rollout_max_batched_tokens=32_768,
+            )
+        with self.assertRaisesRegex(ValueError, "only for INFO-SKILL"):
+            VerlRuntimeConfig(
+                skillrl_source="/skillrl",
+                model_path="/policy",
+                num_gpus=4,
+                hybrid_prefix_cuda_graph=True,
+            )
+        with self.assertRaisesRegex(ValueError, "only for INFO-SKILL"):
+            VerlRuntimeConfig(
+                skillrl_source="/skillrl",
+                model_path="/policy",
+                num_gpus=4,
+                fuse_kl_ppo_forward=True,
+            )
+        with self.assertRaisesRegex(ValueError, "requires hybrid-prefix"):
+            VerlRuntimeConfig(
+                **common,
+                hybrid_prefix_cuda_graph=True,
             )
 
         with self.assertRaisesRegex(ValueError, "grounding data"):

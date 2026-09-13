@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "runtime_id": "vllm-0.8.4+infoskill-hybrid-prefix.1",
+  "runtime_id": "vllm-0.8.4+infoskill-hybrid-prefix.2",
   "upstream_repository": "https://github.com/vllm-project/vllm.git",
   "upstream_version": "0.8.4",
   "upstream_commit": "dc1b4a6f1300003ae27f033afbdff5e2683721ce",
@@ -8,7 +8,7 @@
     "0001-infoskill-hybrid-prefix.patch"
   ],
   "patch_sha256": {
-    "0001-infoskill-hybrid-prefix.patch": "e850df9755303cc6acdaba6462afbb7be47672c5b3055eff7a273b733ac23922"
+    "0001-infoskill-hybrid-prefix.patch": "da6e2f87526b58544aa4b30fc51586a1f9c94b75002486de8bc8b9cf88099b17"
   },
   "upstream_file_sha256": {
     "vllm/inputs/data.py": "2a9a7f611cb79a709636403cdc1f48b20758c8c4dc3caa295adfa943e83bc237",
@@ -23,7 +23,8 @@
   "constraints": {
     "engine": "v1",
     "prefix_caching": false,
-    "enforce_eager": true,
+    "enforce_eager_default": true,
+    "cuda_graph_opt_in": true,
     "prompt_adapter_supported": false,
     "transport_device": "cpu"
   }

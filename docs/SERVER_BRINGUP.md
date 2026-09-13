@@ -512,12 +512,19 @@ bash scripts/build_patched_vllm.sh \
 bash scripts/runtime_doctor.sh
 ```
 
-确认 doctor 识别到 `INFOSKILL_HYBRID_PREFIX_API=1` 后，再在单张 GPU 上运行双门禁：
+确认 doctor 识别到 `INFOSKILL_HYBRID_PREFIX_API=1` 和
+`INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API=1` 后，再在单张 GPU 上分别运行 eager
+基线与 CUDA Graph 候选门禁：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/hybrid_prefix_parity.py \
   --model /absolute/path/to/Qwen2.5-7B-Instruct \
   --output hybrid-prefix-parity.json
+
+CUDA_VISIBLE_DEVICES=0 python scripts/hybrid_prefix_parity.py \
+  --model /absolute/path/to/Qwen2.5-7B-Instruct \
+  --cuda-graph \
+  --output hybrid-prefix-cuda-graph-parity.json
 ```
 
 新版 parity 默认一次完成 8 个固定案例（4 个 prompt × 2 个 prefix seed），
@@ -539,7 +546,25 @@ Transformers 和 vLLM 各只加载一次。输出使用 schema v2，并包含两
 扩展，只重新打包本项目修改过的 Python 文件；若不设置
 `VLLM_PRECOMPILED_WHEEL_LOCATION`，脚本会退回完整源码编译，耗时和临时磁盘占用都明显更高。
 构建脚本在卸载当前版本前强制检查成品同时包含 `vllm/_C*.so` 与
-`INFOSKILL_HYBRID_PREFIX_API`；任一缺失都会终止，不安装残缺 wheel。
+`INFOSKILL_HYBRID_PREFIX_API` 和 `INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API`；任一
+缺失都会终止，不安装残缺 wheel。新版 wheel 标记为 `vllm==0.8.4+infoskill2`；
+旧的 `+infoskill1` wheel 应保留，用于需要时原位回滚。
+
+深层吞吐候选默认全部关闭。`HYBRID_PREFIX_CUDA_GRAPH=1` 属于等价工程候选，只有
+单卡 parity 与相同 step checkpoint 的一 update A/B 同时通过轨迹、logprob、最终权重、
+物理显存和吞吐门后才可采用。`FUSE_KL_PPO_FORWARD=1` 会让 KL 梯度进入 projector，
+属于显式算法候选；吞吐比较只能确认它更快和运行稳定，不能批准接回 formal。后者必须把
+相同训练起点、相同 update 预算得到的两个 checkpoint 都用同一固定 140 条
+`valid_seen` 协议评测，再运行：
+
+```bash
+python scripts/compare_infoskill_optimization_efficacy.py \
+  /path/to/control-evaluation-run \
+  /path/to/candidate-evaluation-run
+```
+
+效果门按 Macro success 首排，Macro 完全相同时才用 Overall success 决胜；轨迹发生
+变化本身既不是失败，也不是通过依据。
 
 若曾由旧脚本安装过约 2.5 MB、缺少 `vllm._C` 的 Python-only wheel，先恢复
 已下载的官方 wheel，再使用新脚本重建：

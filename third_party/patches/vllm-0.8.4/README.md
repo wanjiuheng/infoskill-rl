@@ -7,7 +7,7 @@ transport needed by INFO-SKILL Hybrid Prefix Input.
 The upstream checkout is treated as immutable. The build script verifies the
 commit, clean status, upstream file checksums, and patch checksum; it then
 applies the patch in a temporary directory and builds a wheel with local version
-`0.8.4+infoskill1`.
+`0.8.4+infoskill2`.
 
 The upstream checksums are calculated from the pinned commit's Git blob bytes,
 not from a platform-specific checkout. Verification is therefore stable across
@@ -46,15 +46,18 @@ rewrites wheel metadata and `RECORD`, and verifies both `vllm/_C*.so` and the
 hybrid-prefix marker before installation.
 
 The patched path is deliberately constrained to vLLM V1, CPU transport of the
-short prefix tensor, `enforce_eager=True`, disabled prefix caching, and no prompt
-adapter. Qwen LoRA remains supported because it is a model adapter rather than a
-vLLM prompt adapter.
+short prefix tensor, disabled prefix caching, and no prompt adapter. The default
+remains `enforce_eager=True`. The opt-in CUDA Graph candidate copies hybrid
+embeddings into vLLM's persistent input buffer and captures the same
+`inputs_embeds` signature used at runtime. Qwen LoRA remains supported because
+it is a model adapter rather than a vLLM prompt adapter.
 
 After installation, run the single-GPU numerical gate before any M1 training:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python scripts/hybrid_prefix_parity.py \
   --model /absolute/path/to/Qwen2.5-7B-Instruct \
+  --cuda-graph \
   --output hybrid-prefix-parity.json
 ```
 

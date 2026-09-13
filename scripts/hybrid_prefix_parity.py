@@ -366,19 +366,31 @@ def _vllm_comparisons(
     placeholder_id: int,
     dtype: str,
     gpu_memory_utilization: float,
+    cuda_graph: bool,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     os.environ["VLLM_USE_V1"] = "1"
     os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+    if cuda_graph:
+        os.environ["VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH"] = "1"
+    else:
+        os.environ.pop("VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH", None)
     from vllm import LLM, SamplingParams
-    from vllm.inputs.data import INFOSKILL_HYBRID_PREFIX_API
+    from vllm.inputs.data import (
+        INFOSKILL_HYBRID_PREFIX_API,
+        INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API,
+    )
 
     if INFOSKILL_HYBRID_PREFIX_API != 1:
         raise RuntimeError("installed vLLM does not expose INFO-SKILL Hybrid Prefix API 1")
+    if cuda_graph and INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API != 1:
+        raise RuntimeError(
+            "installed vLLM does not expose INFO-SKILL Hybrid Prefix CUDA Graph API 1"
+        )
     engine = LLM(
         model=model_path,
         trust_remote_code=True,
         dtype=dtype,
-        enforce_eager=True,
+        enforce_eager=not cuda_graph,
         enable_prefix_caching=False,
         gpu_memory_utilization=gpu_memory_utilization,
         max_model_len=512,
@@ -472,6 +484,12 @@ def main() -> int:
     parser.add_argument("--cross-max-logprob-atol", type=float, default=0.10)
     parser.add_argument("--required-token-match-rate", type=float, default=1.0)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.50)
+    parser.add_argument(
+        "--cuda-graph",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="exercise the opt-in persistent-input hybrid CUDA Graph path",
+    )
     parser.add_argument("--output", type=Path, default=Path("hybrid-prefix-parity.json"))
     args = parser.parse_args()
     output_path = _prepare_output_path(args.output)
@@ -525,6 +543,7 @@ def main() -> int:
         placeholder_id=int(placeholder_id),
         dtype=args.dtype,
         gpu_memory_utilization=args.gpu_memory_utilization,
+        cuda_graph=args.cuda_graph,
     )
     report = summarize_parity(
         transport_comparisons,
@@ -547,6 +566,7 @@ def main() -> int:
                 {case["prefix_seed"] for case in case_specs}
             ),
             "hidden_size": hidden_size,
+            "hybrid_prefix_cuda_graph": args.cuda_graph,
             "runtime": _runtime_metadata(torch),
         }
     )

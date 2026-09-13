@@ -6,11 +6,26 @@ from scripts.prepare_vllm_wheel import inspect_wheel_entries, repackage_entries
 
 
 class VllmWheelPackagingTests(unittest.TestCase):
-    def test_python_only_wheel_is_rejected_before_install(self) -> None:
+    def test_first_generation_hybrid_wheel_is_rejected(self) -> None:
         entries = {
+            "vllm/_C.abi3.so": b"compiled extension",
             "vllm/inputs/data.py": b"INFOSKILL_HYBRID_PREFIX_API = 1\n",
             "vllm-0.8.4+infoskill1.dist-info/METADATA": (
                 b"Name: vllm\nVersion: 0.8.4+infoskill1\n"
+            ),
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "CUDA Graph marker"):
+            inspect_wheel_entries(entries)
+
+    def test_python_only_wheel_is_rejected_before_install(self) -> None:
+        entries = {
+            "vllm/inputs/data.py": (
+                b"INFOSKILL_HYBRID_PREFIX_API = 1\n"
+                b"INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API = 1\n"
+            ),
+            "vllm-0.8.4+infoskill2.dist-info/METADATA": (
+                b"Name: vllm\nVersion: 0.8.4+infoskill2\n"
             ),
         }
 
@@ -31,23 +46,26 @@ class VllmWheelPackagingTests(unittest.TestCase):
             "vllm-0.8.4.dist-info/RECORD": b"old record\n",
         }
         patched = {
-            "vllm/inputs/data.py": b"INFOSKILL_HYBRID_PREFIX_API = 1\n"
+            "vllm/inputs/data.py": (
+                b"INFOSKILL_HYBRID_PREFIX_API = 1\n"
+                b"INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API = 1\n"
+            )
         }
 
-        result = repackage_entries(base, patched, "0.8.4+infoskill1")
+        result = repackage_entries(base, patched, "0.8.4+infoskill2")
 
         self.assertEqual(result["vllm/_C.abi3.so"], b"compiled extension")
         self.assertEqual(result["vllm/inputs/data.py"], patched["vllm/inputs/data.py"])
         self.assertIn(
-            "vllm-0.8.4+infoskill1.dist-info/METADATA",
+            "vllm-0.8.4+infoskill2.dist-info/METADATA",
             result,
         )
         self.assertNotIn("vllm-0.8.4.dist-info/METADATA", result)
         self.assertNotIn("vllm-0.8.4.dist-info/RECORD", result)
-        self.assertIn(b"Version: 0.8.4+infoskill1\n", result[
-            "vllm-0.8.4+infoskill1.dist-info/METADATA"
+        self.assertIn(b"Version: 0.8.4+infoskill2\n", result[
+            "vllm-0.8.4+infoskill2.dist-info/METADATA"
         ])
-        self.assertIn(b"0.8.4+infoskill1", result["vllm/_version.py"])
+        self.assertIn(b"0.8.4+infoskill2", result["vllm/_version.py"])
         inspect_wheel_entries(result)
 
 

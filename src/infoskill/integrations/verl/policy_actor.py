@@ -217,6 +217,9 @@ def build_infoskill_policy_actor_class():
             dataloader = batch.split(self.config.ppo_mini_batch_size)
             metrics: dict[str, object] = {}
             reference_logprob_seconds = 0.0
+            fuse_kl_ppo_forward = bool(
+                self.config.get("infoskill_fuse_kl_ppo_forward", False)
+            )
 
             for _epoch in range(self.config.ppo_epochs):
                 for mini_batch in dataloader:
@@ -266,6 +269,7 @@ def build_infoskill_policy_actor_class():
                         # sides so KL regularizes LoRA only (D009).  Backward
                         # immediately after this actor forward keeps the FSDP
                         # forward/backward lifecycle well formed.
+                        ref_log_prob = None
                         if self.config.use_kl_loss:
                             reference_started = time.perf_counter()
                             with (
@@ -281,34 +285,33 @@ def build_infoskill_policy_actor_class():
                             reference_logprob_seconds += (
                                 time.perf_counter() - reference_started
                             )
-                            _, kl_log_prob = self._forward_micro_batch(
-                                micro_batch,
-                                temperature=temperature,
-                                calculate_entropy=False,
-                                detach_projector_output=True,
-                            )
-                            kld = kl_penalty(
-                                logprob=kl_log_prob,
-                                ref_logprob=ref_log_prob,
-                                kl_penalty=self.config.kl_loss_type,
-                            )
-                            kl_loss = agg_loss(
-                                loss_mat=kld,
-                                loss_mask=response_mask,
-                                loss_agg_mode=self.config.loss_agg_mode,
-                            )
-                            (
-                                kl_loss
-                                * self.config.kl_loss_coef
-                                * loss_scale
-                            ).backward()
-                            append_to_dict(
-                                metrics,
-                                {
-                                    "actor/kl_loss": kl_loss.detach().item(),
-                                    "actor/kl_coef": self.config.kl_loss_coef,
-                                },
-                            )
+                            if not fuse_kl_ppo_forward:
+                                _, kl_log_prob = self._forward_micro_batch(
+                                    micro_batch,
+                                    temperature=temperature,
+                                    calculate_entropy=False,
+                                    detach_projector_output=True,
+                                )
+                                kl_loss = _infoskill_kl_loss(
+                                    actor_log_prob=kl_log_prob,
+                                    reference_log_prob=ref_log_prob,
+                                    response_mask=response_mask,
+                                    kl_penalty_fn=kl_penalty,
+                                    aggregate_loss_fn=agg_loss,
+                                    kl_loss_type=self.config.kl_loss_type,
+                                    loss_agg_mode=self.config.loss_agg_mode,
+                                )
+                                (
+                                    kl_loss
+                                    * self.config.kl_loss_coef
+                                    * loss_scale
+                                ).backward()
+                                _append_kl_metrics(
+                                    append_to_dict,
+                                    metrics,
+                                    kl_loss,
+                                    self.config.kl_loss_coef,
+                                )
 
                         calculate_entropy = self.config.entropy_coeff != 0
                         entropy, log_prob = self._forward_micro_batch(
@@ -360,6 +363,30 @@ def build_infoskill_policy_actor_class():
                                 policy_loss
                                 - entropy_loss * self.config.entropy_coeff
                             )
+                        if fuse_kl_ppo_forward and ref_log_prob is not None:
+                            # This candidate deliberately lets KL regularize both
+                            # LoRA and projector so the numerical actor logprob can
+                            # be shared with PPO.  It is an algorithm candidate,
+                            # not an equivalent implementation of D009.
+                            kl_loss = _infoskill_kl_loss(
+                                actor_log_prob=log_prob,
+                                reference_log_prob=ref_log_prob,
+                                response_mask=response_mask,
+                                kl_penalty_fn=kl_penalty,
+                                aggregate_loss_fn=agg_loss,
+                                kl_loss_type=self.config.kl_loss_type,
+                                loss_agg_mode=self.config.loss_agg_mode,
+                            )
+                            policy_loss = (
+                                policy_loss
+                                + kl_loss * self.config.kl_loss_coef
+                            )
+                            _append_kl_metrics(
+                                append_to_dict,
+                                metrics,
+                                kl_loss,
+                                self.config.kl_loss_coef,
+                            )
                         (policy_loss * loss_scale).backward()
                         append_to_dict(
                             metrics,
@@ -402,9 +429,49 @@ def build_infoskill_policy_actor_class():
             metrics["perf/reference_logprob_seconds"] = (
                 reference_logprob_seconds
             )
+            metrics["perf/kl_ppo_forward_fused"] = float(
+                fuse_kl_ppo_forward
+            )
             return metrics
 
     return InfoSkillDataParallelPPOActor
+
+
+def _infoskill_kl_loss(
+    *,
+    actor_log_prob: Tensor,
+    reference_log_prob: Tensor,
+    response_mask: Tensor,
+    kl_penalty_fn: object,
+    aggregate_loss_fn: object,
+    kl_loss_type: str,
+    loss_agg_mode: str,
+) -> Tensor:
+    kld = kl_penalty_fn(  # type: ignore[operator]
+        logprob=actor_log_prob,
+        ref_logprob=reference_log_prob,
+        kl_penalty=kl_loss_type,
+    )
+    return aggregate_loss_fn(  # type: ignore[operator]
+        loss_mat=kld,
+        loss_mask=response_mask,
+        loss_agg_mode=loss_agg_mode,
+    )
+
+
+def _append_kl_metrics(
+    append_to_dict_fn: object,
+    metrics: dict[str, object],
+    kl_loss: Tensor,
+    kl_loss_coef: float,
+) -> None:
+    append_to_dict_fn(  # type: ignore[operator]
+        metrics,
+        {
+            "actor/kl_loss": kl_loss.detach().item(),
+            "actor/kl_coef": kl_loss_coef,
+        },
+    )
 
 
 def _infoskill_forward_keys() -> list[str]:

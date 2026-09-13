@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from .hybrid_prefix import (
@@ -79,6 +82,10 @@ def hybrid_vllm_rollout_class():
                 config is not None
                 and config.get("infoskill_hybrid_prefix", False)
             )
+            enable_cuda_graph = bool(
+                require_hybrid
+                and config.get("infoskill_hybrid_prefix_cuda_graph", False)
+            )
             if require_hybrid:
                 from vllm.inputs.data import INFOSKILL_HYBRID_PREFIX_API
 
@@ -97,8 +104,9 @@ def hybrid_vllm_rollout_class():
 
             def no_prefix_cache_llm(*llm_args: Any, **llm_kwargs: Any):
                 llm_kwargs["enable_prefix_caching"] = False
-                llm_kwargs["enforce_eager"] = True
-                return original_llm(*llm_args, **llm_kwargs)
+                llm_kwargs["enforce_eager"] = not enable_cuda_graph
+                with _hybrid_cuda_graph_environment(enable_cuda_graph):
+                    return original_llm(*llm_args, **llm_kwargs)
 
             vllm_rollout_spmd.LLM = no_prefix_cache_llm
             try:
@@ -142,3 +150,19 @@ def hybrid_vllm_rollout_class():
                 self.inference_engine = engine
 
     return HybridPrefixVLLMRollout
+
+
+@contextmanager
+def _hybrid_cuda_graph_environment(enabled: bool) -> Iterator[None]:
+    variable = "VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH"
+    previous = os.environ.get(variable)
+    if enabled:
+        os.environ[variable] = "1"
+    try:
+        yield
+    finally:
+        if enabled:
+            if previous is None:
+                os.environ.pop(variable, None)
+            else:
+                os.environ[variable] = previous

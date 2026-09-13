@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Mapping
 
 
-DEFAULT_VERSION = "0.8.4+infoskill1"
+DEFAULT_VERSION = "0.8.4+infoskill2"
 HYBRID_MARKER = b"INFOSKILL_HYBRID_PREFIX_API = 1"
+CUDA_GRAPH_MARKER = b"INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH_API = 1"
 
 
 def _sha256(path: Path) -> str:
@@ -65,6 +66,10 @@ def inspect_wheel_entries(entries: Mapping[str, bytes]) -> dict[str, object]:
     data_module = entries.get("vllm/inputs/data.py")
     if data_module is None or HYBRID_MARKER not in data_module:
         raise RuntimeError("vLLM wheel is missing the INFO-SKILL hybrid-prefix marker")
+    if CUDA_GRAPH_MARKER not in data_module:
+        raise RuntimeError(
+            "vLLM wheel is missing the INFO-SKILL hybrid-prefix CUDA Graph marker"
+        )
 
     dist_info = _dist_info_dir(entries)
     metadata_path = f"{dist_info}/METADATA"
@@ -74,6 +79,7 @@ def inspect_wheel_entries(entries: Mapping[str, bytes]) -> dict[str, object]:
     return {
         "dist_info": dist_info,
         "hybrid_prefix_api": 1,
+        "hybrid_prefix_cuda_graph_api": 1,
         "native_extensions": native_extensions,
         "version": _metadata_version(entries[metadata_path]),
     }
