@@ -8,12 +8,21 @@ import json
 from pathlib import Path
 
 
+ALLOWED_EXECUTION_RUNTIME_DIFFERENCES = (
+    "hybrid_prefix_cuda_graph",
+    "hybrid_prefix_cuda_graph_custom_kernels",
+    "hybrid_prefix_cuda_graph_use_inductor",
+)
+
+
 def compare_evaluations(
     baseline: Path,
     candidate: Path,
     *,
     expected_task_count: int = 140,
     equality_tolerance: float = 1e-12,
+    allowed_runtime_differences: tuple[str, ...] = (),
+    require_same_checkpoint: bool = False,
 ) -> dict[str, object]:
     baseline_summary = _read_json(baseline / "valid_seen_summary.json")
     candidate_summary = _read_json(candidate / "valid_seen_summary.json")
@@ -40,8 +49,14 @@ def compare_evaluations(
         ),
         "same_task_types": set(baseline_per_type) == set(candidate_per_type),
         "same_evaluation_protocol": (
-            _without_checkpoint(baseline_resolved)
-            == _without_checkpoint(candidate_resolved)
+            _without_checkpoint(
+                baseline_resolved,
+                allowed_runtime_differences=allowed_runtime_differences,
+            )
+            == _without_checkpoint(
+                candidate_resolved,
+                allowed_runtime_differences=allowed_runtime_differences,
+            )
         ),
         "both_checkpoints_loaded": (
             _checkpoint_loaded(baseline_load)
@@ -51,6 +66,15 @@ def compare_evaluations(
             baseline_load.get("checkpoint_step")
             == candidate_load.get("checkpoint_step")
             and isinstance(baseline_load.get("checkpoint_step"), int)
+        ),
+        "same_checkpoint": (
+            not require_same_checkpoint
+            or (
+                baseline_load.get("checkpoint")
+                == candidate_load.get("checkpoint")
+                and isinstance(baseline_load.get("checkpoint"), str)
+                and bool(baseline_load.get("checkpoint"))
+            )
         ),
     }
     controls_valid = all(controls.values())
@@ -90,6 +114,8 @@ def compare_evaluations(
     return {
         "schema_version": 1,
         "decision_rule": "macro_success_primary_overall_success_secondary",
+        "allowed_runtime_differences": list(allowed_runtime_differences),
+        "require_same_checkpoint": require_same_checkpoint,
         "control_checks": controls,
         "controls_valid": controls_valid,
         "baseline_checkpoint": baseline_load.get("checkpoint"),
@@ -125,12 +151,18 @@ def compare_evaluations(
     }
 
 
-def _without_checkpoint(payload: dict[str, object]) -> dict[str, object]:
+def _without_checkpoint(
+    payload: dict[str, object],
+    *,
+    allowed_runtime_differences: tuple[str, ...] = (),
+) -> dict[str, object]:
     normalized = json.loads(json.dumps(payload))
     runtime = normalized.get("evaluation_runtime")
     if isinstance(runtime, dict):
         runtime.pop("checkpoint_step", None)
         runtime.pop("policy_checkpoint", None)
+        for field in allowed_runtime_differences:
+            runtime.pop(field, None)
     return normalized
 
 
@@ -183,11 +215,28 @@ def main() -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--expected-task-count", type=int, default=140)
+    parser.add_argument(
+        "--allowed-runtime-difference",
+        action="append",
+        choices=ALLOWED_EXECUTION_RUNTIME_DIFFERENCES,
+        default=[],
+        help=(
+            "evaluation_runtime field that may differ; repeat for each explicitly "
+            "controlled execution-only difference"
+        ),
+    )
+    parser.add_argument(
+        "--require-same-checkpoint",
+        action="store_true",
+        help="require both evaluations to load the exact same checkpoint path",
+    )
     args = parser.parse_args()
     report = compare_evaluations(
         args.baseline,
         args.candidate,
         expected_task_count=args.expected_task_count,
+        allowed_runtime_differences=tuple(args.allowed_runtime_difference),
+        require_same_checkpoint=args.require_same_checkpoint,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0 if report["passed"] else 1

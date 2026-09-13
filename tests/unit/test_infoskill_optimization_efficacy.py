@@ -49,6 +49,86 @@ class InfoSkillOptimizationEfficacyTests(unittest.TestCase):
         self.assertFalse(report["control_checks"]["same_evaluation_protocol"])
         self.assertFalse(report["passed"])
 
+    def test_graph_execution_fields_require_an_explicit_allowlist(self) -> None:
+        with TemporaryDirectory() as temporary:
+            baseline, candidate = self._runs(Path(temporary))
+            self._write_summary(baseline, macro=0.25, overall=0.30)
+            self._write_summary(candidate, macro=0.26, overall=0.31)
+            resolved = self._read(candidate / "resolved_config.json")
+            runtime = resolved["evaluation_runtime"]
+            assert isinstance(runtime, dict)
+            runtime["hybrid_prefix_cuda_graph"] = True
+            runtime["hybrid_prefix_cuda_graph_custom_kernels"] = True
+            runtime["hybrid_prefix_cuda_graph_use_inductor"] = False
+            self._write(candidate / "resolved_config.json", resolved)
+
+            report = compare_evaluations(baseline, candidate)
+
+        self.assertFalse(report["control_checks"]["same_evaluation_protocol"])
+        self.assertFalse(report["passed"])
+
+    def test_graph_execution_fields_can_be_explicitly_controlled(self) -> None:
+        with TemporaryDirectory() as temporary:
+            baseline, candidate = self._runs(Path(temporary))
+            self._write_summary(baseline, macro=0.25, overall=0.30)
+            self._write_summary(candidate, macro=0.26, overall=0.31)
+            resolved = self._read(candidate / "resolved_config.json")
+            runtime = resolved["evaluation_runtime"]
+            assert isinstance(runtime, dict)
+            runtime["hybrid_prefix_cuda_graph"] = True
+            runtime["hybrid_prefix_cuda_graph_custom_kernels"] = True
+            runtime["hybrid_prefix_cuda_graph_use_inductor"] = False
+            self._write(candidate / "resolved_config.json", resolved)
+            self._make_checkpoints_identical(baseline, candidate)
+
+            report = compare_evaluations(
+                baseline,
+                candidate,
+                allowed_runtime_differences=(
+                    "hybrid_prefix_cuda_graph",
+                    "hybrid_prefix_cuda_graph_custom_kernels",
+                    "hybrid_prefix_cuda_graph_use_inductor",
+                ),
+                require_same_checkpoint=True,
+            )
+
+        self.assertTrue(report["control_checks"]["same_evaluation_protocol"])
+        self.assertTrue(report["control_checks"]["same_checkpoint"])
+        self.assertTrue(report["passed"])
+
+    def test_unexpected_protocol_difference_still_fails_with_allowlist(self) -> None:
+        with TemporaryDirectory() as temporary:
+            baseline, candidate = self._runs(Path(temporary))
+            self._write_summary(baseline, macro=0.25, overall=0.30)
+            self._write_summary(candidate, macro=0.30, overall=0.35)
+            resolved = self._read(candidate / "resolved_config.json")
+            resolved["eval_batch_size"] = 12
+            self._write(candidate / "resolved_config.json", resolved)
+
+            report = compare_evaluations(
+                baseline,
+                candidate,
+                allowed_runtime_differences=("hybrid_prefix_cuda_graph",),
+            )
+
+        self.assertFalse(report["control_checks"]["same_evaluation_protocol"])
+        self.assertFalse(report["passed"])
+
+    def test_same_checkpoint_can_be_required(self) -> None:
+        with TemporaryDirectory() as temporary:
+            baseline, candidate = self._runs(Path(temporary))
+            self._write_summary(baseline, macro=0.25, overall=0.30)
+            self._write_summary(candidate, macro=0.30, overall=0.35)
+
+            report = compare_evaluations(
+                baseline,
+                candidate,
+                require_same_checkpoint=True,
+            )
+
+        self.assertFalse(report["control_checks"]["same_checkpoint"])
+        self.assertFalse(report["passed"])
+
     @classmethod
     def _runs(cls, root: Path) -> tuple[Path, Path]:
         baseline = root / "baseline"
@@ -109,6 +189,20 @@ class InfoSkillOptimizationEfficacyTests(unittest.TestCase):
                 },
             },
         )
+
+    @classmethod
+    def _make_checkpoints_identical(cls, baseline: Path, candidate: Path) -> None:
+        baseline_load = cls._read(baseline / "checkpoint-load.json")
+        candidate_load = cls._read(candidate / "checkpoint-load.json")
+        checkpoint = baseline_load["checkpoint"]
+        candidate_load["checkpoint"] = checkpoint
+        cls._write(candidate / "checkpoint-load.json", candidate_load)
+
+        candidate_resolved = cls._read(candidate / "resolved_config.json")
+        runtime = candidate_resolved["evaluation_runtime"]
+        assert isinstance(runtime, dict)
+        runtime["policy_checkpoint"] = checkpoint
+        cls._write(candidate / "resolved_config.json", candidate_resolved)
 
     @staticmethod
     def _write(path: Path, payload: object) -> None:
