@@ -24,6 +24,9 @@ REQUIRED_EXECUTION_MODES = (
 )
 EXECUTION_MODES = REQUIRED_EXECUTION_MODES + (
     "cuda-graph-eager-kernels",
+    "dynamo-eager-native-kernels",
+    "dynamo-eager-custom-kernels",
+    "cuda-graph-custom-kernels",
 )
 
 FALLBACK_PROMPTS = (
@@ -198,9 +201,43 @@ def compare_execution_reports(
         for mode in EXECUTION_MODES
         if mode in by_mode
     }
+    pairwise_modes = (
+        ("compile-only", "cuda-graph"),
+        ("dynamo-eager-native-kernels", "cuda-graph-eager-kernels"),
+        ("dynamo-eager-native-kernels", "dynamo-eager-custom-kernels"),
+        ("dynamo-eager-custom-kernels", "cuda-graph-custom-kernels"),
+    )
+    pairwise = {
+        f"{left}__vs__{right}": _compare_results(
+            by_mode[left], by_mode[right], logprob_atol=logprob_atol
+        )
+        for left, right in pairwise_modes
+        if left in by_mode and right in by_mode
+    }
+    layer_findings = {
+        "persistent_input_path_matches_eager": against_eager[
+            "persistent-eager"
+        ]["passed"],
+        "inductor_graph_matches_compile_only": pairwise.get(
+            "compile-only__vs__cuda-graph", {}
+        ).get("passed"),
+        "eager_adapter_graph_matches_no_graph": pairwise.get(
+            "dynamo-eager-native-kernels__vs__cuda-graph-eager-kernels", {}
+        ).get("passed"),
+        "custom_kernels_restore_eager_without_graph": against_eager.get(
+            "dynamo-eager-custom-kernels", {}
+        ).get("passed"),
+        "cuda_graph_custom_kernels_match_eager": against_eager.get(
+            "cuda-graph-custom-kernels", {}
+        ).get("passed"),
+    }
 
     if not against_eager["persistent-eager"]["passed"]:
         classification = "persistent_input_path_divergence"
+    elif layer_findings["cuda_graph_custom_kernels_match_eager"]:
+        classification = "cuda_graph_custom_kernels_match_eager"
+    elif layer_findings["custom_kernels_restore_eager_without_graph"]:
+        classification = "custom_kernels_restore_eager_without_graph"
     elif (
         "cuda-graph-eager-kernels" in against_eager
         and against_eager["cuda-graph-eager-kernels"]["passed"]
@@ -225,6 +262,8 @@ def compare_execution_reports(
         "logprob_atol": logprob_atol,
         "classification": classification,
         "against_eager": against_eager,
+        "pairwise": pairwise,
+        "layer_findings": layer_findings,
         "within_mode_checks": within,
         "runtime_seconds": {
             mode: by_mode[mode].get("runtime_seconds")
@@ -315,6 +354,7 @@ def _override_vllm_compilation(
     *,
     use_cudagraph: bool | None = None,
     use_inductor: bool | None = None,
+    custom_ops: Sequence[str] | None = None,
 ) -> None:
     """Override one V1 compilation layer after vLLM applies its defaults."""
     from vllm.config import VllmConfig
@@ -327,6 +367,8 @@ def _override_vllm_compilation(
             self.compilation_config.use_cudagraph = use_cudagraph
         if use_inductor is not None:
             self.compilation_config.use_inductor = use_inductor
+        if custom_ops is not None:
+            self.compilation_config.custom_ops = list(custom_ops)
 
     VllmConfig.__post_init__ = with_overrides
 
@@ -359,6 +401,24 @@ def run_execution_mode(args: argparse.Namespace) -> dict[str, object]:
         _override_vllm_compilation(use_cudagraph=False)
     elif args.execution_mode == "cuda-graph-eager-kernels":
         _override_vllm_compilation(use_cudagraph=True, use_inductor=False)
+    elif args.execution_mode == "dynamo-eager-native-kernels":
+        _override_vllm_compilation(
+            use_cudagraph=False,
+            use_inductor=False,
+            custom_ops=("none",),
+        )
+    elif args.execution_mode == "dynamo-eager-custom-kernels":
+        _override_vllm_compilation(
+            use_cudagraph=False,
+            use_inductor=False,
+            custom_ops=("all",),
+        )
+    elif args.execution_mode == "cuda-graph-custom-kernels":
+        _override_vllm_compilation(
+            use_cudagraph=True,
+            use_inductor=False,
+            custom_ops=("all",),
+        )
 
     import torch
     from transformers import AutoConfig, AutoTokenizer
@@ -455,9 +515,27 @@ def run_execution_mode(args: argparse.Namespace) -> dict[str, object]:
             "enforce_eager": enforce_eager,
             "persistent_input_path": persistent_input,
             "cuda_graph_requested": args.execution_mode
-            in {"cuda-graph", "cuda-graph-eager-kernels"},
+            in {
+                "cuda-graph",
+                "cuda-graph-eager-kernels",
+                "cuda-graph-custom-kernels",
+            },
             "inductor_requested": args.execution_mode
             in {"compile-only", "cuda-graph"},
+            "custom_kernel_policy": (
+                "all"
+                if args.execution_mode
+                in {"dynamo-eager-custom-kernels", "cuda-graph-custom-kernels"}
+                else "none"
+                if args.execution_mode
+                in {
+                    "compile-only",
+                    "cuda-graph",
+                    "cuda-graph-eager-kernels",
+                    "dynamo-eager-native-kernels",
+                }
+                else "default"
+            ),
         },
     }
 

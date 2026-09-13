@@ -110,6 +110,38 @@ class HybridPrefixExecutionDiagnosticTests(unittest.TestCase):
         )
         self.assertFalse(result["passed"])
 
+    def test_custom_kernel_modes_isolate_native_kernel_drift(self) -> None:
+        eager = _report("eager")
+        reports = [
+            eager,
+            _report("persistent-eager"),
+            _report("compile-only", token_offset=1),
+            _report("cuda-graph", token_offset=1),
+            _report("cuda-graph-eager-kernels", token_offset=2),
+            _report("dynamo-eager-native-kernels", token_offset=2),
+            _report("dynamo-eager-custom-kernels"),
+            _report("cuda-graph-custom-kernels"),
+        ]
+
+        result = compare_execution_reports(reports, logprob_atol=1e-3)
+
+        self.assertEqual(
+            result["classification"],
+            "cuda_graph_custom_kernels_match_eager",
+        )
+        self.assertTrue(
+            result["layer_findings"]["custom_kernels_restore_eager_without_graph"]
+        )
+        self.assertTrue(
+            result["layer_findings"]["cuda_graph_custom_kernels_match_eager"]
+        )
+        self.assertTrue(
+            result["pairwise"][
+                "dynamo-eager-native-kernels__vs__cuda-graph-eager-kernels"
+            ]["passed"]
+        )
+        self.assertFalse(result["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
