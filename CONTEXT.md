@@ -386,6 +386,17 @@ backward，KL 会同时正则化 LoRA 与 projector，明确改变 D009 的梯�
 当前 rollout 完全相同也不得被等价门批准，必须用固定 `valid_seen` 的 Macro success 为首要、
 Overall success 为次要指标验证效果，并补多 update 稳定性后才可接回 formal。
 
+固定真实 Qwen、真实 step-50 trace、4 个 prompt、两种 prefix、重复与反序请求的执行层诊断进一步
+定位了首版 Graph 候选的数值漂移。persistent eager 与 eager 完全一致，Inductor compile-only 与
+标准 Graph 完全一致；关闭 Inductor 但继续使用 vLLM 强制的 `custom_ops=["none"]` 后仍保留同一
+最大 logprob 偏差 `0.231836`。只把 kernel policy 恢复为 `custom_ops=["all"]` 即与 eager 达到
+16/16 序列和全部 logprob 零误差，随后加回 Graph capture 仍为零误差。因此该最小诊断中的因果
+变量是 vLLM V1 的 kernel substitution，不是 persistent prefix 或 Graph replay。正式 Graph
+路径现精确采用已验证组合：`use_inductor=False`、`custom_ops=["all"]`、Graph capture 开启；旧版
+Graph run 的 Inductor/`custom_ops=["none"]` 语义在 resume 配置中保持可区分，只能命名分叉到
+新候选。该修复
+仍须通过同一 step-50 的完整 140 条 Macro/Overall、稳定性、显存和吞吐门后才能恢复 formal。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

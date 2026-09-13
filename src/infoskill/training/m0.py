@@ -320,6 +320,12 @@ def run_policy_training(
             ),
             "rollout_max_batched_tokens": rollout_max_batched_tokens,
             "hybrid_prefix_cuda_graph": hybrid_prefix_cuda_graph,
+            "hybrid_prefix_cuda_graph_custom_kernels": (
+                hybrid_prefix_cuda_graph
+            ),
+            "hybrid_prefix_cuda_graph_use_inductor": (
+                False if hybrid_prefix_cuda_graph else None
+            ),
             "fuse_kl_ppo_forward": fuse_kl_ppo_forward,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
             "infoskill_auxiliary_micro_batch_size": (

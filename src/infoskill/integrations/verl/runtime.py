@@ -580,6 +580,10 @@ class VerlRuntime:
                 "perf/hybrid_prefix_cuda_graph": float(
                     self.config.hybrid_prefix_cuda_graph
                 ),
+                "perf/hybrid_prefix_cuda_graph_custom_kernels": float(
+                    self.config.hybrid_prefix_cuda_graph
+                ),
+                "perf/hybrid_prefix_cuda_graph_use_inductor": 0.0,
                 "perf/fuse_kl_ppo_forward": float(
                     self.config.fuse_kl_ppo_forward
                 ),

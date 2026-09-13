@@ -30,6 +30,8 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                 "skip_unused_old_logprob_entropy": True,
                 "rollout_max_batched_tokens": 32_768,
                 "hybrid_prefix_cuda_graph": True,
+                "hybrid_prefix_cuda_graph_custom_kernels": True,
+                "hybrid_prefix_cuda_graph_use_inductor": False,
                 "fuse_kl_ppo_forward": True,
                 "policy_max_tokens_per_gpu": 12_288,
             },
@@ -46,6 +48,31 @@ class ResumeRunDirectoryTests(unittest.TestCase):
             )
 
         self.assertEqual(source_gpus, 3)
+
+    def test_in_place_resume_rejects_changed_cuda_graph_kernel_policy(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {"hybrid_prefix_cuda_graph": True},
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "hybrid_prefix_cuda_graph": True,
+                "hybrid_prefix_cuda_graph_custom_kernels": True,
+                "hybrid_prefix_cuda_graph_use_inductor": False,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
 
     def test_in_place_resume_rejects_performance_candidate_change(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"

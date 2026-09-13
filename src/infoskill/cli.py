@@ -127,7 +127,8 @@ def _parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "experimental M1-only evaluation optimization: use persistent "
-            "hybrid-prefix embedding buffers with vLLM CUDA Graph"
+            "hybrid-prefix embedding buffers with vLLM CUDA Graph, its "
+            "eager adaptor, and registered custom CUDA kernels"
         ),
     )
     evaluate.add_argument("--verbose-runtime-logs", action="store_true")
@@ -401,7 +402,8 @@ def _parser() -> argparse.ArgumentParser:
         default=False,
         help=(
             "experimental M1-only candidate: use persistent hybrid-prefix "
-            "embedding buffers with vLLM CUDA Graph"
+            "embedding buffers with vLLM CUDA Graph, its eager adaptor, and "
+            "registered custom CUDA kernels"
         ),
     )
     train.add_argument(
@@ -553,6 +555,12 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     ),
                     "hybrid_prefix_cuda_graph": (
                         args.hybrid_prefix_cuda_graph
+                    ),
+                    "hybrid_prefix_cuda_graph_custom_kernels": (
+                        args.hybrid_prefix_cuda_graph
+                    ),
+                    "hybrid_prefix_cuda_graph_use_inductor": (
+                        False if args.hybrid_prefix_cuda_graph else None
                     ),
                     "fuse_kl_ppo_forward": args.fuse_kl_ppo_forward,
                     "resume": args.resume,
@@ -807,6 +815,12 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "eval_batch_size": effective_eval_batch_size,
         "cuda_memory_poll_interval_ms": args.cuda_memory_poll_interval_ms,
         "hybrid_prefix_cuda_graph": args.hybrid_prefix_cuda_graph,
+        "hybrid_prefix_cuda_graph_custom_kernels": (
+            args.hybrid_prefix_cuda_graph
+        ),
+        "hybrid_prefix_cuda_graph_use_inductor": (
+            False if args.hybrid_prefix_cuda_graph else None
+        ),
         "policy_checkpoint": (
             str(checkpoint.directory) if checkpoint is not None else None
         ),
@@ -1060,6 +1074,12 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     rollout_performance["perf/hybrid_prefix_cuda_graph"] = float(
         args.hybrid_prefix_cuda_graph
     )
+    rollout_performance[
+        "perf/hybrid_prefix_cuda_graph_custom_kernels"
+    ] = float(args.hybrid_prefix_cuda_graph)
+    rollout_performance[
+        "perf/hybrid_prefix_cuda_graph_use_inductor"
+    ] = 0.0
     metrics = MetricLogger(run_directory)
     values: dict[str, float | int | str | bool | None] = {
         "complete": summary.is_complete,

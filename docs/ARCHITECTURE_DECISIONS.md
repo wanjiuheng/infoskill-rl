@@ -237,6 +237,14 @@ M1 hybrid-prefix rollout 默认仍使用 eager vLLM。CUDA Graph 候选只在显
 embedding 地址固化进 graph。该候选不改变训练目标，因此只有完整 rollout trace、logprob 和
 portable checkpoint 均等价，且物理显存余量与吞吐门同时通过时，才可视为可替换实现。
 
+目标 A800 上的执行层差分证明，首版候选相对 eager 的概率漂移来自 vLLM V1 在 piecewise 编译
+路径中强制使用 `custom_ops=["none"]`，而不是 Graph capture：相同 compile 路径加减 Graph 的
+logprob 完全一致；`use_inductor=False` 下只恢复 `custom_ops=["all"]` 可消除全部观测误差，加回
+Graph 后仍保持零误差。故此开关的候选语义修订为固定使用 eager adaptor、注册的自定义 CUDA
+kernels 和 Graph capture。运行产物必须同时记录 `hybrid_prefix_cuda_graph_custom_kernels=true`
+与 `hybrid_prefix_cuda_graph_use_inductor=false`。历史 Graph checkpoint 缺少这些字段时按旧语义
+解释，禁止原地静默采用新语义；命名分叉仍需经过固定 140 条效果和资源门。
+
 Policy 侧默认继续分别执行 reference、detached-prefix actor KL、trainable-prefix PPO 三次前向。
 `FUSE_KL_PPO_FORWARD=1` 复用 PPO actor logprob 计算 KL，从而删除 detached-prefix actor KL
 前向；代价是 KL 梯度也进入 projector。这个差异是显式算法假设，不是数值实现细节。比较器即使

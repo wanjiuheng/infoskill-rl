@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import os
+import sys
+import types
 import unittest
 from unittest.mock import patch
 
@@ -68,12 +70,57 @@ class _Engine:
 
 
 class HybridPrefixTransportTests(unittest.TestCase):
+    def test_cuda_graph_restores_custom_kernels_after_vllm_defaults(self) -> None:
+        class FakeVllmConfig:
+            def __init__(self) -> None:
+                self.compilation_config = types.SimpleNamespace()
+                self.__post_init__()
+
+            def __post_init__(self) -> None:
+                self.compilation_config.use_cudagraph = True
+                self.compilation_config.use_inductor = True
+                self.compilation_config.custom_ops = ["none"]
+
+        config_module = types.ModuleType("vllm.config")
+        config_module.VllmConfig = FakeVllmConfig
+        vllm_module = types.ModuleType("vllm")
+        vllm_module.config = config_module
+
+        with patch.dict(
+            sys.modules,
+            {"vllm": vllm_module, "vllm.config": config_module},
+        ):
+            with _hybrid_cuda_graph_environment(True):
+                configured = FakeVllmConfig()
+                self.assertTrue(configured.compilation_config.use_cudagraph)
+                self.assertFalse(configured.compilation_config.use_inductor)
+                self.assertEqual(
+                    configured.compilation_config.custom_ops,
+                    ["all"],
+                )
+
+            restored = FakeVllmConfig()
+            self.assertTrue(restored.compilation_config.use_inductor)
+            self.assertEqual(restored.compilation_config.custom_ops, ["none"])
+
     def test_cuda_graph_environment_is_scoped_and_restored(self) -> None:
         variable = "VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH"
-        with patch.dict(os.environ, {variable: "existing"}, clear=False):
-            with _hybrid_cuda_graph_environment(True):
-                self.assertEqual(os.environ[variable], "1")
-            self.assertEqual(os.environ[variable], "existing")
+        class FakeVllmConfig:
+            def __post_init__(self) -> None:
+                pass
+
+        config_module = types.ModuleType("vllm.config")
+        config_module.VllmConfig = FakeVllmConfig
+        vllm_module = types.ModuleType("vllm")
+        vllm_module.config = config_module
+        with patch.dict(
+            sys.modules,
+            {"vllm": vllm_module, "vllm.config": config_module},
+        ):
+            with patch.dict(os.environ, {variable: "existing"}, clear=False):
+                with _hybrid_cuda_graph_environment(True):
+                    self.assertEqual(os.environ[variable], "1")
+                self.assertEqual(os.environ[variable], "existing")
 
         with patch.dict(os.environ, {}, clear=True):
             with _hybrid_cuda_graph_environment(False):

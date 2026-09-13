@@ -82,7 +82,8 @@ SKIP_UNUSED_OLD_LOGPROB_ENTROPY="${SKIP_UNUSED_OLD_LOGPROB_ENTROPY:-0}"
 # Default preserves the registered vLLM scheduler. Larger values require an
 # exact trace/logprob and physical-memory gate on the target server.
 ROLLOUT_MAX_BATCHED_TOKENS="${ROLLOUT_MAX_BATCHED_TOKENS:-16384}"
-# Default-off vLLM wheel candidate; requires 0.8.4+infoskill2.
+# Default-off vLLM wheel candidate; uses the validated eager-adaptor + custom
+# CUDA kernel graph policy and requires 0.8.4+infoskill2.
 HYBRID_PREFIX_CUDA_GRAPH="${HYBRID_PREFIX_CUDA_GRAPH:-0}"
 # Default-off algorithm candidate; KL also regularizes the projector.
 FUSE_KL_PPO_FORWARD="${FUSE_KL_PPO_FORWARD:-0}"

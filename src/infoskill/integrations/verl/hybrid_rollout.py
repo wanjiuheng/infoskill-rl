@@ -154,13 +154,42 @@ def hybrid_vllm_rollout_class():
 
 @contextmanager
 def _hybrid_cuda_graph_environment(enabled: bool) -> Iterator[None]:
+    """Scope the validated hybrid-prefix CUDA Graph execution policy.
+
+    vLLM 0.8.4 V1 forces piecewise compilation to disable its registered
+    custom CUDA kernels.  The A800 differential gate showed that this kernel
+    substitution, rather than graph replay, changes Qwen logprobs.  Keep the
+    graph but use vLLM's eager adaptor and registered kernels, matching the
+    zero-error diagnostic candidate.
+    """
     variable = "VLLM_INFOSKILL_HYBRID_PREFIX_CUDA_GRAPH"
     previous = os.environ.get(variable)
+    config_type = None
+    original_post_init = None
     if enabled:
         os.environ[variable] = "1"
+        from vllm.config import VllmConfig
+
+        config_type = VllmConfig
+        original_post_init = VllmConfig.__post_init__
+
+        def with_validated_execution_policy(
+            instance: object,
+            *args: object,
+            **kwargs: object,
+        ) -> object:
+            result = original_post_init(instance, *args, **kwargs)
+            compilation = instance.compilation_config  # type: ignore[attr-defined]
+            compilation.use_inductor = False
+            compilation.custom_ops = ["all"]
+            return result
+
+        VllmConfig.__post_init__ = with_validated_execution_policy  # type: ignore[assignment]
     try:
         yield
     finally:
+        if config_type is not None and original_post_init is not None:
+            config_type.__post_init__ = original_post_init  # type: ignore[assignment]
         if enabled:
             if previous is None:
                 os.environ.pop(variable, None)

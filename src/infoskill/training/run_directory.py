@@ -140,6 +140,19 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         normalized_options.setdefault("skip_unused_old_logprob_entropy", False)
         normalized_options.setdefault("rollout_max_batched_tokens", 16_384)
         normalized_options.setdefault("hybrid_prefix_cuda_graph", False)
+        # Historical graph runs used vLLM V1's forced Inductor/custom_ops=none
+        # policy.  Keep that identity distinct from the corrected candidate.
+        historical_graph = bool(
+            normalized_options.get("hybrid_prefix_cuda_graph", False)
+        )
+        normalized_options.setdefault(
+            "hybrid_prefix_cuda_graph_custom_kernels",
+            False,
+        )
+        normalized_options.setdefault(
+            "hybrid_prefix_cuda_graph_use_inductor",
+            True if historical_graph else None,
+        )
         normalized_options.setdefault("fuse_kl_ppo_forward", False)
         normalized["runtime_options"] = normalized_options
     return normalized
@@ -156,6 +169,8 @@ def _without_performance_candidates(
     normalized_options.pop("skip_unused_old_logprob_entropy", None)
     normalized_options.pop("rollout_max_batched_tokens", None)
     normalized_options.pop("hybrid_prefix_cuda_graph", None)
+    normalized_options.pop("hybrid_prefix_cuda_graph_custom_kernels", None)
+    normalized_options.pop("hybrid_prefix_cuda_graph_use_inductor", None)
     normalized_options.pop("fuse_kl_ppo_forward", None)
     normalized["runtime_options"] = normalized_options
     return normalized
