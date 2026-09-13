@@ -363,6 +363,16 @@ batch 8，不以统计相近替代 exact parity。比较器也明确把 token �
 `training-control.json` 中记录的 PID 发送 SIGINT/SIGTERM 后，完成当前 update、提交可恢复
 checkpoint 并退出；同配置且不设置新 RUN_NAME 即可在原 run 中续跑。
 
+update 38 现场剖面显示 M1 每轮约 `920s`，主要由 vLLM generation（约 `347s`）和 policy
+actor/update（约 `444/509s`）构成；环境、conditioning 与 auxiliary 不是主瓶颈。现增加两项
+默认关闭、仅允许命名分叉恢复改变的吞吐候选：跳过 old-logprob 路径未被消费的 entropy，及
+显式增大 rollout scheduler token 容量。另增加 `SEGMENT_END_UPDATE`，使同一 step-50 source
+可各运行一个完全相同的 step 51 control/candidate，提交 portable checkpoint 后自动暂停，
+无需竞速发送信号，也不会触发非 25 边界的 140 条评测。比较器同时门禁完整训练轨迹、rollout
+logprob、LoRA/M1/optimizer/scheduler/RNG/trainer state、至少 8 GiB 物理显存和至少 1.05x core
+提速；未通过时继续 control。整 update 预缓存 reference 的方案因会跨 optimizer minibatch
+冻结旧 projector、改变既定 KL 数学语义而被明确拒绝。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

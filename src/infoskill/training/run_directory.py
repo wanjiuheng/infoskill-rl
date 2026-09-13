@@ -39,6 +39,7 @@ def validate_resume_config(
     current: Mapping[str, object],
     *,
     allow_gpu_change: bool,
+    allow_performance_candidate_change: bool = False,
 ) -> int:
     checkpoint_path = Path(checkpoint)
     path = checkpoint_path / "resolved_config.json"
@@ -56,6 +57,13 @@ def validate_resume_config(
             current_without_gpus,
         )
     )
+    if allow_performance_candidate_change:
+        previous_without_gpus = _without_performance_candidates(
+            previous_without_gpus
+        )
+        current_without_gpus = _without_performance_candidates(
+            current_without_gpus
+        )
     matching_model_id = _matching_policy_model_id(previous, current)
     if matching_model_id is not None:
         _validate_checkpoint_policy_provenance(checkpoint_path, matching_model_id)
@@ -129,7 +137,23 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         # Missing means the historical pre-D015 default, not today's default.
         normalized_options.setdefault("policy_max_tokens_per_gpu", 16_384)
         normalized_options.setdefault("balance_policy_tokens_across_ranks", False)
+        normalized_options.setdefault("skip_unused_old_logprob_entropy", False)
+        normalized_options.setdefault("rollout_max_batched_tokens", 16_384)
         normalized["runtime_options"] = normalized_options
+    return normalized
+
+
+def _without_performance_candidates(
+    config: Mapping[str, object],
+) -> dict[str, object]:
+    normalized = dict(config)
+    runtime_options = normalized.get("runtime_options")
+    if not isinstance(runtime_options, Mapping):
+        return normalized
+    normalized_options = dict(runtime_options)
+    normalized_options.pop("skip_unused_old_logprob_entropy", None)
+    normalized_options.pop("rollout_max_batched_tokens", None)
+    normalized["runtime_options"] = normalized_options
     return normalized
 
 

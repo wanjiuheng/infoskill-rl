@@ -250,6 +250,16 @@ class RunScriptTests(unittest.TestCase):
             'POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-12288}"',
             script,
         )
+        self.assertIn(
+            'SKIP_UNUSED_OLD_LOGPROB_ENTROPY="${SKIP_UNUSED_OLD_LOGPROB_ENTROPY:-0}"',
+            script,
+        )
+        self.assertIn(
+            'ROLLOUT_MAX_BATCHED_TOKENS="${ROLLOUT_MAX_BATCHED_TOKENS:-16384}"',
+            script,
+        )
+        self.assertIn('SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"', script)
+        self.assertIn('--segment-end-update "${SEGMENT_END_UPDATE}"', script)
 
     def test_m0_pair_explicitly_clears_checkpoint_for_update_zero(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

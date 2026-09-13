@@ -200,3 +200,25 @@ raw control 或其他 run 做最终定量比较的关键 M1 checkpoint，仍须�
 该 update 的 portable checkpoint，跳过额外的非周期评测并安全关闭运行时；恢复必须使用同一
 run 的该 checkpoint 和完全相同配置。这样允许提前停止 445-update 运行而不产生半个 optimizer
 step，也不把硬杀进程当作正常断点。
+
+## D023：M1 吞吐优化必须由同 checkpoint 单 update 分叉门批准
+
+首轮 M1 formal 的实测中位耗时约为每 update `920s`：rollout 约 `407s`，policy update
+约 `509s`；其中 vLLM generation 约 `347s`，old/reference/actor 分别约
+`62/65/444s`。环境 reset/step、driver conditioning 和 auxiliary update 合计只占小部分，
+所以继续增加 CPU worker 或改 auxiliary 参数不是主要提速方向。
+
+首批候选保持默认关闭，只允许在命名分叉恢复中改变：一是 M1 old-logprob 前向不再计算 PPO
+没有消费的 entropy tensor；二是把 vLLM rollout 的 `max_num_batched_tokens` 从注册默认
+`16384` 提高为显式候选值。正式 policy 动态微批预算仍固定为 D015 的 `12288`，不借提速名义
+降低显存安全余量。曾考虑把 reference logprob 在整个 update 开头一次性预计算，但一个 update
+内包含多个 optimizer minibatch，projector 会在其间更新；缓存会让后续 minibatch 不再使用
+“当前 projector + detached prefix”的 D009 KL 定义，因此拒绝实现。
+
+采用候选前，必须从同一个 portable checkpoint 分叉 control 和 candidate，各只完成一个相同
+global update 并自动提交 checkpoint 后暂停。门禁要求：除两项候选外 resolved config 完全相同；
+任务、轨迹、token 与 rollout logprob 一致；LoRA、M1 modules、两个 optimizer、两个 scheduler、
+RNG 和 trainer state 在严格数值容差内一致；policy/rollout 物理显存均至少余 `8 GiB`；core
+至少提速 `1.05x`。任一项失败就从 control checkpoint 继续，不把 candidate 接入 formal。
+`SEGMENT_END_UPDATE` 只是单次调用边界，不改变注册的 445-update 目标、warmup 或 checkpoint
+语义；原地 resume 仍禁止静默改变候选设置。

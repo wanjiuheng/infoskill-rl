@@ -62,6 +62,7 @@ class VerlRuntimeConfig:
     verbose_runtime_logs: bool = False
     cuda_memory_poll_interval_ms: int = 0
     balance_policy_tokens_across_ranks: bool = True
+    skip_unused_old_logprob_entropy: bool = False
     enable_infoskill_modules: bool = False
     semantic_model_path: str | None = None
     skill_bank_path: str | None = None
@@ -84,6 +85,22 @@ class VerlRuntimeConfig:
     infoskill_auxiliary_max_grad_norm: float = 1.0
 
     def __post_init__(self) -> None:
+        minimum_batched_tokens = self.max_prompt_tokens + self.max_response_tokens
+        if self.rollout_max_batched_tokens < minimum_batched_tokens:
+            raise ValueError(
+                "rollout max batched tokens must cover one maximum-length sequence"
+            )
+        if self.skip_unused_old_logprob_entropy and not self.enable_infoskill_modules:
+            raise ValueError(
+                "old-logprob entropy skipping is registered only for INFO-SKILL"
+            )
+        if (
+            self.rollout_max_batched_tokens != 16_384
+            and not self.enable_infoskill_modules
+        ):
+            raise ValueError(
+                "rollout max batched token overrides are registered only for INFO-SKILL"
+            )
         if self.soft_prefix_length <= 0:
             raise ValueError("soft prefix length must be positive")
         if self.enable_infoskill_auxiliary and not self.enable_infoskill_modules:
@@ -463,7 +480,13 @@ class VerlRuntime:
         if self.config.cuda_memory_poll_interval_ms > 0:
             self.worker_group.begin_infoskill_policy_memory_measurement()
         stage_started = time.perf_counter()
-        old = self.worker_group.compute_log_prob(data)
+        if (
+            self.config.enable_infoskill_modules
+            and self.config.skip_unused_old_logprob_entropy
+        ):
+            old = self.worker_group.compute_infoskill_old_log_prob(data)
+        else:
+            old = self.worker_group.compute_log_prob(data)
         old_logprob_seconds = time.perf_counter() - stage_started
         alignment_metrics: dict[str, float] = {}
         if global_update == 0:
@@ -534,6 +557,10 @@ class VerlRuntime:
                 "perf/rollout_generation_worker_seconds": self._generation_worker_seconds,
                 "perf/training_codec_seconds": training_codec_seconds,
                 "perf/old_logprob_seconds": old_logprob_seconds,
+                "perf/old_logprob_entropy_skipped": float(
+                    self.config.enable_infoskill_modules
+                    and self.config.skip_unused_old_logprob_entropy
+                ),
                 "perf/reference_logprob_seconds": reference_logprob_seconds,
                 "perf/actor_update_seconds": actor_update_seconds,
                 "perf/runtime_policy_update_seconds": time.perf_counter()

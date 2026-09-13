@@ -17,6 +17,7 @@ CHECKPOINT_EFFECT_MAX_NEW_TOKENS="${CHECKPOINT_EFFECT_MAX_NEW_TOKENS:-64}"
 PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark | pilot | formal
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
+SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"
 GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
 # Short-lived process boundary for TextWorld/Fast Downward resource cleanup.
 GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
@@ -76,6 +77,11 @@ CUDA_MEMORY_POLL_INTERVAL_MS="${CUDA_MEMORY_POLL_INTERVAL_MS:-0}"
 # Dynamic old/ref/actor micro-batch budget. This does not alter vLLM rollout
 # scheduling. The validated cross-mode default preserves physical headroom.
 POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-12288}"
+# Default-off M1 candidate: old logprobs are consumed, entropy is not.
+SKIP_UNUSED_OLD_LOGPROB_ENTROPY="${SKIP_UNUSED_OLD_LOGPROB_ENTROPY:-0}"
+# Default preserves the registered vLLM scheduler. Larger values require an
+# exact trace/logprob and physical-memory gate on the target server.
+ROLLOUT_MAX_BATCHED_TOKENS="${ROLLOUT_MAX_BATCHED_TOKENS:-16384}"
 # Validated default. Reassigns samples among ranks while preserving each
 # global GRPO minibatch's membership; set to 0 for rollback.
 BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-1}"
@@ -114,6 +120,18 @@ if [[ ! "${CUDA_MEMORY_POLL_INTERVAL_MS}" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "${POLICY_MAX_TOKENS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
   echo "POLICY_MAX_TOKENS_PER_GPU must be a positive integer" >&2
+  exit 2
+fi
+if [[ -n "${SEGMENT_END_UPDATE}" && ! "${SEGMENT_END_UPDATE}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "SEGMENT_END_UPDATE must be empty or a positive integer" >&2
+  exit 2
+fi
+if [[ "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" != "0" && "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" != "1" ]]; then
+  echo "SKIP_UNUSED_OLD_LOGPROB_ENTROPY must be 0 or 1" >&2
+  exit 2
+fi
+if [[ ! "${ROLLOUT_MAX_BATCHED_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ROLLOUT_MAX_BATCHED_TOKENS must be a positive integer" >&2
   exit 2
 fi
 if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "1" ]]; then
@@ -516,6 +534,7 @@ case "${ACTION}" in
       --environment-backend "${ENVIRONMENT_BACKEND}"
       --cuda-memory-poll-interval-ms "${CUDA_MEMORY_POLL_INTERVAL_MS}"
       --policy-max-tokens-per-gpu "${POLICY_MAX_TOKENS_PER_GPU}"
+      --rollout-max-batched-tokens "${ROLLOUT_MAX_BATCHED_TOKENS}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
       TRAIN_ARGS+=(--max-updates "${MAX_UPDATES}")
@@ -525,6 +544,9 @@ case "${ACTION}" in
     fi
     if [[ -n "${RESUME}" ]]; then
       TRAIN_ARGS+=(--resume "${RESUME}")
+    fi
+    if [[ -n "${SEGMENT_END_UPDATE}" ]]; then
+      TRAIN_ARGS+=(--segment-end-update "${SEGMENT_END_UPDATE}")
     fi
     if [[ -n "${GROUNDING_DATA}" ]]; then
       TRAIN_ARGS+=(--grounding-data "${GROUNDING_DATA}")
@@ -538,6 +560,10 @@ case "${ACTION}" in
     case "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" in
       0) TRAIN_ARGS+=(--no-balance-policy-tokens-across-ranks) ;;
       1) TRAIN_ARGS+=(--balance-policy-tokens-across-ranks) ;;
+    esac
+    case "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" in
+      0) TRAIN_ARGS+=(--no-skip-unused-old-logprob-entropy) ;;
+      1) TRAIN_ARGS+=(--skip-unused-old-logprob-entropy) ;;
     esac
     case "${PERSISTENT_ROLLOUT_SESSION}" in
       1) TRAIN_ARGS+=(--persistent-rollout-session) ;;

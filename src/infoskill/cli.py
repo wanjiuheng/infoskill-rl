@@ -328,6 +328,14 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--run-name")
     train.add_argument("--resume")
     train.add_argument(
+        "--segment-end-update",
+        type=int,
+        help=(
+            "pause after committing this global update; this bounds one "
+            "invocation without changing the registered training target"
+        ),
+    )
+    train.add_argument(
         "--grounding-data",
         help=(
             "override paths.grounding_data for infoskill training without "
@@ -362,6 +370,21 @@ def _parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="balance token load across FSDP ranks within each GRPO minibatch",
+    )
+    train.add_argument(
+        "--skip-unused-old-logprob-entropy",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "experimental M1-only optimization: do not compute entropy in "
+            "the old-logprob pass because PPO does not consume it"
+        ),
+    )
+    train.add_argument(
+        "--rollout-max-batched-tokens",
+        type=int,
+        default=16_384,
+        help="experimental vLLM scheduler token capacity per generation batch",
     )
     train.add_argument("--dry-run", action="store_true")
     return parser
@@ -419,6 +442,22 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
             "policy_max_tokens_per_gpu must be at least max_prompt_tokens + "
             f"max_response_tokens ({minimum_token_budget})"
         )
+    if args.rollout_max_batched_tokens < minimum_token_budget:
+        raise ValueError(
+            "rollout_max_batched_tokens must be at least max_prompt_tokens + "
+            f"max_response_tokens ({minimum_token_budget})"
+        )
+    if args.skip_unused_old_logprob_entropy and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "skip_unused_old_logprob_entropy is registered only for infoskill"
+        )
+    if (
+        args.rollout_max_batched_tokens != 16_384
+        and mode is not SkillMode.INFO_SKILL
+    ):
+        raise ValueError(
+            "rollout_max_batched_tokens overrides are registered only for infoskill"
+        )
     _validate_paths(
         config,
         mode=mode,
@@ -471,8 +510,15 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "balance_policy_tokens_across_ranks": (
                         args.balance_policy_tokens_across_ranks
                     ),
+                    "skip_unused_old_logprob_entropy": (
+                        args.skip_unused_old_logprob_entropy
+                    ),
+                    "rollout_max_batched_tokens": (
+                        args.rollout_max_batched_tokens
+                    ),
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
+                    "segment_end_update": args.segment_end_update,
                     "dry_run": True,
                 },
                 ensure_ascii=False,
@@ -491,6 +537,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         num_gpus=args.num_gpus,
         run_name=args.run_name,
         resume=args.resume,
+        segment_end_update=args.segment_end_update,
         persistent_rollout_session=args.persistent_rollout_session,
         environment_workers=args.environment_workers,
         environment_backend=args.environment_backend,
@@ -500,6 +547,10 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         balance_policy_tokens_across_ranks=(
             args.balance_policy_tokens_across_ranks
         ),
+        skip_unused_old_logprob_entropy=(
+            args.skip_unused_old_logprob_entropy
+        ),
+        rollout_max_batched_tokens=args.rollout_max_batched_tokens,
         raw_skill_prompt_format=args.raw_skill_prompt_format,
     )
 

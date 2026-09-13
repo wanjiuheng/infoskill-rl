@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from scripts import compare_infoskill_training_optimization_runs as gate
+from scripts.compare_infoskill_training_optimization_runs import (
+    _checkpoint_step,
+    _compare_values,
+    _without_candidate_options,
+)
+
+
+class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
+    def test_only_registered_candidate_options_are_ignored(self) -> None:
+        baseline = {
+            "mode": "infoskill",
+            "runtime_options": {
+                "skip_unused_old_logprob_entropy": False,
+                "rollout_max_batched_tokens": 16_384,
+                "policy_max_tokens_per_gpu": 12_288,
+            },
+        }
+        candidate = {
+            "mode": "infoskill",
+            "runtime_options": {
+                "skip_unused_old_logprob_entropy": True,
+                "rollout_max_batched_tokens": 32_768,
+                "policy_max_tokens_per_gpu": 12_288,
+            },
+        }
+
+        self.assertEqual(
+            _without_candidate_options(baseline),
+            _without_candidate_options(candidate),
+        )
+        candidate["runtime_options"]["policy_max_tokens_per_gpu"] = 16_384
+        self.assertNotEqual(
+            _without_candidate_options(baseline),
+            _without_candidate_options(candidate),
+        )
+
+    def test_checkpoint_step_is_fail_closed(self) -> None:
+        self.assertEqual(_checkpoint_step("/run/checkpoints/step-000050"), 50)
+        self.assertEqual(_checkpoint_step("/run/checkpoints/latest"), -1)
+        self.assertEqual(_checkpoint_step(None), -1)
+
+    def test_tensor_comparison_accepts_only_tiny_numeric_drift(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is not installed")
+
+        left = {"weight": torch.tensor([1.0, 2.0])}
+        close = {"weight": torch.tensor([1.0, 2.0 + 1e-7])}
+        changed = {"weight": torch.tensor([1.0, 2.01])}
+        close_report = _compare_values(
+            left,
+            close,
+            path="state",
+            atol=1e-7,
+            rtol=1e-6,
+            mismatch_limit=20,
+        )
+        changed_report = _compare_values(
+            left,
+            changed,
+            path="state",
+            atol=1e-7,
+            rtol=1e-6,
+            mismatch_limit=20,
+        )
+
+        self.assertEqual(close_report["mismatches"], [])
+        self.assertNotEqual(changed_report["mismatches"], [])
+
+    def test_one_update_gate_requires_parity_memory_and_speedup(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            baseline = root / "baseline"
+            candidate = root / "candidate"
+            baseline.mkdir()
+            candidate.mkdir()
+            common_resolved = {
+                "mode": "infoskill",
+                "num_gpus": 3,
+                "runtime_options": {
+                    "cuda_memory_poll_interval_ms": 1_000,
+                    "policy_max_tokens_per_gpu": 12_288,
+                },
+            }
+            self._write_json(
+                baseline / "resolved_config.json",
+                {
+                    **common_resolved,
+                    "runtime_options": {
+                        **common_resolved["runtime_options"],
+                        "skip_unused_old_logprob_entropy": False,
+                        "rollout_max_batched_tokens": 16_384,
+                    },
+                },
+            )
+            self._write_json(
+                candidate / "resolved_config.json",
+                {
+                    **common_resolved,
+                    "runtime_options": {
+                        **common_resolved["runtime_options"],
+                        "skip_unused_old_logprob_entropy": True,
+                        "rollout_max_batched_tokens": 32_768,
+                    },
+                },
+            )
+            provenance = {
+                "resume_source_checkpoint": "/run/checkpoints/step-000050",
+                "resume_forked": True,
+                "invocation": {
+                    "segment_start_update": 50,
+                    "segment_end_update": 51,
+                },
+            }
+            for run in (baseline, candidate):
+                self._write_json(run / "provenance.json", provenance)
+                self._write_json(
+                    run / "training_summary.json",
+                    {"status": "paused", "global_update": 51},
+                )
+                checkpoint = run / "checkpoints" / "step-000051"
+                checkpoint.mkdir(parents=True)
+                self._write_json(
+                    checkpoint / "checkpoint.complete.json",
+                    {
+                        "global_update": 51,
+                        "portable": True,
+                        "emergency": False,
+                        "runtime_manifest": {
+                            "portable": True,
+                            "infoskill_modules_included": True,
+                        },
+                        "files": [
+                            "runtime/actor/adapter_model.safetensors",
+                            "runtime/actor/lora_optimizer_full.pt",
+                            "runtime/actor/lora_scheduler.pt",
+                            "runtime/actor/infoskill/infoskill_modules.pt",
+                            "runtime/actor/infoskill/infoskill_optimizers.pt",
+                            "runtime/actor/infoskill/infoskill_schedulers.pt",
+                            "runtime/actor/infoskill/infoskill_rng_state.pt",
+                            "trainer_state.json",
+                        ],
+                    },
+                )
+            self._write_metric(baseline, core=100.0, entropy_skipped=0.0)
+            self._write_metric(candidate, core=80.0, entropy_skipped=1.0)
+            parity = {"passed": True, "semantic_exact": True}
+            checkpoint = {"passed": True, "all_tensors_exact": True}
+            with (
+                patch.object(gate, "_read_training_trace", return_value=[]),
+                patch.object(gate, "compare_records", return_value=parity),
+                patch.object(gate, "_compare_checkpoints", return_value=checkpoint),
+            ):
+                report = gate.compare_runs(baseline, candidate)
+
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["safe_to_continue_candidate"])
+        self.assertEqual(report["core_speedup"], 1.25)
+
+    @staticmethod
+    def _write_json(path: Path, payload: object) -> None:
+        import json
+
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    @classmethod
+    def _write_metric(
+        cls,
+        run: Path,
+        *,
+        core: float,
+        entropy_skipped: float,
+    ) -> None:
+        cls._write_json(
+            run / "metrics.jsonl",
+            {
+                "phase": "train",
+                "step": 51,
+                "perf/core_update_seconds": core,
+                "perf/rollout_seconds": 40.0,
+                "perf/policy_update_seconds": 40.0,
+                "perf/old_logprob_seconds": 10.0,
+                "perf/old_logprob_entropy_skipped": entropy_skipped,
+                "perf/cuda/policy_physical_min_free_gb_min": 12.0,
+                "perf/cuda/rollout_physical_min_free_gb_min": 11.0,
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

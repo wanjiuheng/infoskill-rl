@@ -13,7 +13,7 @@ from safetensors.torch import load_file, save_file
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from verl.single_controller.base.decorator import Dispatch, register
 from verl.utils.device import get_torch_device
-from verl.utils.fsdp_utils import layered_summon_lora_params
+from verl.utils.fsdp_utils import fsdp_version, layered_summon_lora_params
 from verl.workers.fsdp_workers import ActorRolloutRefWorker
 
 from infoskill.fsdp_checkpoint import load_peft_adapter_under_full_fsdp_state
@@ -245,6 +245,54 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             return super().update_actor(data)
         finally:
             self.actor_lr_scheduler = scheduler
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_infoskill_old_log_prob(self, data):
+        """Recompute M1 old logprobs without the unused entropy tensor."""
+
+        if self._infoskill_worker_conditioner is None:
+            raise RuntimeError(
+                "INFO-SKILL old-logprob fast path requires M1 modules"
+            )
+        if not self._is_actor:
+            raise RuntimeError(
+                "INFO-SKILL old-logprob fast path requires an actor worker"
+            )
+        if self._is_offload_param:
+            raise RuntimeError(
+                "INFO-SKILL old-logprob fast path does not support param offload"
+            )
+        from verl import DataProto
+
+        data = data.to(get_torch_device().current_device())
+        data.meta_info["micro_batch_size"] = (
+            self.config.rollout.log_prob_micro_batch_size_per_gpu
+        )
+        data.meta_info["max_token_len"] = (
+            self.config.rollout.log_prob_max_token_len_per_gpu
+        )
+        data.meta_info["use_dynamic_bsz"] = (
+            self.config.rollout.log_prob_use_dynamic_bsz
+        )
+        data.meta_info["temperature"] = self.config.rollout.temperature
+        with self.ulysses_sharding_manager:
+            data = self.ulysses_sharding_manager.preprocess_data(data)
+            output, _ = self.actor.compute_log_prob(
+                data=data,
+                calculate_entropy=False,
+            )
+            result = DataProto.from_dict(
+                tensors={"old_log_probs": output},
+                meta_info={"temperature": self.config.rollout.temperature},
+            )
+            result = self.ulysses_sharding_manager.postprocess_data(result)
+        result = result.to("cpu")
+        if (
+            self.world_size > 1
+            and fsdp_version(self.actor.actor_module) == 1
+        ):
+            self.actor.actor_module._handle.reshard(True)
+        return result
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def condition_infoskill(self, data):

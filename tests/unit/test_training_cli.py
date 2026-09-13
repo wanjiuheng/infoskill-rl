@@ -68,6 +68,31 @@ class TrainingCliTests(unittest.TestCase):
         self.assertFalse(default.grouped_infoskill_conditioning)
         self.assertTrue(optimized.grouped_infoskill_conditioning)
 
+    def test_m1_performance_candidates_are_explicitly_opt_in(self) -> None:
+        default = _parser().parse_args(self._arguments())
+        optimized = _parser().parse_args(
+            self._arguments()
+            + [
+                "--skip-unused-old-logprob-entropy",
+                "--rollout-max-batched-tokens",
+                "32768",
+            ]
+        )
+
+        self.assertFalse(default.skip_unused_old_logprob_entropy)
+        self.assertEqual(default.rollout_max_batched_tokens, 16_384)
+        self.assertTrue(optimized.skip_unused_old_logprob_entropy)
+        self.assertEqual(optimized.rollout_max_batched_tokens, 32_768)
+
+    def test_training_segment_end_is_an_invocation_boundary(self) -> None:
+        default = _parser().parse_args(self._arguments())
+        bounded = _parser().parse_args(
+            self._arguments() + ["--segment-end-update", "51"]
+        )
+
+        self.assertIsNone(default.segment_end_update)
+        self.assertEqual(bounded.segment_end_update, 51)
+
     def test_grounding_accepts_explicit_resume_and_inactivity_timeout(self) -> None:
         arguments = _parser().parse_args(
             [

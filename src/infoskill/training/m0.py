@@ -64,6 +64,9 @@ def run_m0_training(
     cuda_memory_poll_interval_ms: int = 0,
     policy_max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
     balance_policy_tokens_across_ranks: bool = True,
+    skip_unused_old_logprob_entropy: bool = False,
+    rollout_max_batched_tokens: int = 16_384,
+    segment_end_update: int | None = None,
 ) -> int:
     """Backward-compatible entry point for the token-only M0 baseline."""
 
@@ -74,6 +77,7 @@ def run_m0_training(
         num_gpus=num_gpus,
         run_name=run_name,
         resume=resume,
+        segment_end_update=segment_end_update,
         persistent_rollout_session=persistent_rollout_session,
         environment_workers=environment_workers,
         environment_backend=environment_backend,
@@ -81,6 +85,8 @@ def run_m0_training(
         cuda_memory_poll_interval_ms=cuda_memory_poll_interval_ms,
         policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
         balance_policy_tokens_across_ranks=balance_policy_tokens_across_ranks,
+        skip_unused_old_logprob_entropy=skip_unused_old_logprob_entropy,
+        rollout_max_batched_tokens=rollout_max_batched_tokens,
     )
 
 
@@ -99,7 +105,10 @@ def run_policy_training(
     cuda_memory_poll_interval_ms: int = 0,
     policy_max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
     balance_policy_tokens_across_ranks: bool = True,
+    skip_unused_old_logprob_entropy: bool = False,
+    rollout_max_batched_tokens: int = 16_384,
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
+    segment_end_update: int | None = None,
 ) -> int:
     """Run one registered policy mode through the pinned VERL runtime."""
 
@@ -111,6 +120,8 @@ def run_policy_training(
         raise ValueError(f"unsupported policy training mode: {mode.value}")
     if mode is SkillMode.INFO_SKILL and not config.paths.grounding_data:
         raise ValueError("infoskill training requires paths.grounding_data")
+    if segment_end_update is not None and segment_end_update <= 0:
+        raise ValueError("segment_end_update must be positive")
 
     if config.paths.policy_adapter is not None:
         raise ValueError(
@@ -135,6 +146,22 @@ def run_policy_training(
         raise ValueError(
             "policy_max_tokens_per_gpu must be at least max_prompt_tokens + "
             f"max_response_tokens ({minimum_token_budget})"
+        )
+    if rollout_max_batched_tokens < minimum_token_budget:
+        raise ValueError(
+            "rollout_max_batched_tokens must be at least max_prompt_tokens + "
+            f"max_response_tokens ({minimum_token_budget})"
+        )
+    if skip_unused_old_logprob_entropy and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "skip_unused_old_logprob_entropy is registered only for infoskill"
+        )
+    if (
+        rollout_max_batched_tokens != 16_384
+        and mode is not SkillMode.INFO_SKILL
+    ):
+        raise ValueError(
+            "rollout_max_batched_tokens overrides are registered only for infoskill"
         )
 
     policy_model_identity = verify_policy_model_identity(
@@ -274,6 +301,10 @@ def run_policy_training(
             "balance_policy_tokens_across_ranks": (
                 balance_policy_tokens_across_ranks
             ),
+            "skip_unused_old_logprob_entropy": (
+                skip_unused_old_logprob_entropy
+            ),
+            "rollout_max_batched_tokens": rollout_max_batched_tokens,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
             "infoskill_auxiliary_micro_batch_size": (
                 8 if mode is SkillMode.INFO_SKILL else None
@@ -308,6 +339,7 @@ def run_policy_training(
             checkpoint_to_load,
             resolved,
             allow_gpu_change=forked_resume,
+            allow_performance_candidate_change=forked_resume,
         )
     if checkpoint_to_load is None or forked_resume:
         _write_json(run_directory / "resolved_config.json", resolved)
@@ -326,6 +358,16 @@ def run_policy_training(
         if checkpoint_to_load is not None
         else None
     )
+    initial_global_update = restored.global_update if restored is not None else 0
+    if segment_end_update is not None:
+        if segment_end_update <= initial_global_update:
+            raise ValueError(
+                "segment_end_update must be greater than the resumed global update"
+            )
+        if segment_end_update > plan.max_updates:
+            raise ValueError(
+                "segment_end_update cannot exceed the registered training target"
+            )
     if restored is not None:
         schedule.restore(restored.schedule)
 
@@ -339,6 +381,10 @@ def run_policy_training(
         "skillrl_expected_commit": "8e66726ed866a4e0a7f053586a41022798192e6c",
         "policy_model": policy_model_identity.as_dict(),
         "verbose_runtime_logs": verbose_runtime_logs,
+        "invocation": {
+            "segment_start_update": initial_global_update,
+            "segment_end_update": segment_end_update,
+        },
         "evaluation_protocol": (
             {
                 "eval_batch_size": config.eval_batch_size,
@@ -420,8 +466,12 @@ def run_policy_training(
             total_training_steps=plan.max_updates,
             action_minibatch_size=plan.action_minibatch_size,
             policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
+            rollout_max_batched_tokens=rollout_max_batched_tokens,
             balance_policy_tokens_across_ranks=(
                 balance_policy_tokens_across_ranks
+            ),
+            skip_unused_old_logprob_entropy=(
+                skip_unused_old_logprob_entropy
             ),
             gpu_memory_utilization=0.45,
             require_hybrid_prefix=mode is SkillMode.INFO_SKILL,
@@ -621,6 +671,14 @@ def run_policy_training(
             checkpoint=checkpoint,
             schedule=schedule,
         )
+
+        def should_pause() -> bool:
+            return pause_requested or (
+                segment_end_update is not None
+                and trainer is not None
+                and trainer.global_update >= segment_end_update
+            )
+
         trainer = InfoSkillTrainer(
             collector=training_collector,
             runtime=runtime,
@@ -632,7 +690,7 @@ def run_policy_training(
             on_update=update_callback,
             on_evaluate=evaluate,
             on_checkpoint=checkpoint,
-            should_pause=lambda: pause_requested,
+            should_pause=should_pause,
             evaluate_every=plan.evaluation_every,
             checkpoint_every=plan.checkpoint_every,
         )

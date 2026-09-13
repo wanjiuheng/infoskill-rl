@@ -12,6 +12,64 @@ from infoskill.training.run_directory import (
 
 
 class ResumeRunDirectoryTests(unittest.TestCase):
+    def test_fork_may_change_only_registered_performance_candidates(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "skip_unused_old_logprob_entropy": False,
+                "rollout_max_batched_tokens": 16_384,
+                "policy_max_tokens_per_gpu": 12_288,
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "skip_unused_old_logprob_entropy": True,
+                "rollout_max_batched_tokens": 32_768,
+                "policy_max_tokens_per_gpu": 12_288,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=True,
+                allow_performance_candidate_change=True,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
+    def test_in_place_resume_rejects_performance_candidate_change(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "skip_unused_old_logprob_entropy": False,
+                "rollout_max_batched_tokens": 16_384,
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "skip_unused_old_logprob_entropy": True,
+                "rollout_max_batched_tokens": 32_768,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_resume_without_name_continues_in_source_run(self) -> None:
         root = Path.cwd() / "test-output"
         checkpoint = root / "source" / "checkpoints" / "step-000001"
