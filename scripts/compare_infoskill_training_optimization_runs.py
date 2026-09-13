@@ -26,12 +26,15 @@ def compare_runs(
     baseline: Path,
     candidate: Path,
     *,
+    candidate_mode: str = "combined",
     logprob_tolerance: float = 1e-3,
     checkpoint_atol: float = 1e-7,
     checkpoint_rtol: float = 1e-6,
     minimum_core_speedup: float = 1.05,
     minimum_physical_free_gb: float = 8.0,
 ) -> dict[str, object]:
+    if candidate_mode not in {"combined", "entropy-only"}:
+        raise ValueError(f"unsupported candidate mode: {candidate_mode}")
     baseline_resolved = _read_json(baseline / "resolved_config.json")
     candidate_resolved = _read_json(candidate / "resolved_config.json")
     baseline_provenance = _read_json(baseline / "provenance.json")
@@ -91,13 +94,6 @@ def compare_runs(
             and baseline_options.get("rollout_max_batched_tokens", 16_384)
             == 16_384
         ),
-        "candidate_entropy_skip_enabled": (
-            candidate_options.get("skip_unused_old_logprob_entropy") is True
-        ),
-        "candidate_rollout_capacity_increased": (
-            _positive_int(candidate_options.get("rollout_max_batched_tokens"))
-            > _positive_int(baseline_options.get("rollout_max_batched_tokens", 16_384))
-        ),
         "physical_memory_sampling_enabled": (
             _positive_int(baseline_options.get("cuda_memory_poll_interval_ms")) > 0
             and baseline_options.get("cuda_memory_poll_interval_ms")
@@ -110,6 +106,13 @@ def compare_runs(
             == 1.0
         ),
     }
+    control_checks.update(
+        _candidate_option_checks(
+            baseline_options,
+            candidate_options,
+            candidate_mode=candidate_mode,
+        )
+    )
 
     trace_comparison = compare_records(
         _read_training_trace(baseline, baseline_update),
@@ -140,6 +143,21 @@ def compare_runs(
         baseline_performance["old_logprob_seconds"],
         candidate_performance["old_logprob_seconds"],
     )
+    normalized_speedups = {
+        name: _throughput_speedup(
+            baseline_performance[metric],
+            candidate_performance[metric],
+            baseline_performance["training_sample_count"],
+            candidate_performance["training_sample_count"],
+        )
+        for name, metric in {
+            "core": "core_seconds",
+            "rollout": "rollout_seconds",
+            "generation": "generation_seconds",
+            "policy": "policy_update_seconds",
+            "old_logprob": "old_logprob_seconds",
+        }.items()
+    }
     candidate_free_values = [
         candidate_performance["policy_physical_min_free_gb"],
         candidate_performance["rollout_physical_min_free_gb"],
@@ -157,13 +175,18 @@ def compare_runs(
         candidate_physical_free is not None
         and candidate_physical_free >= minimum_physical_free_gb
     )
-    passed = (
+    trace_exact = bool(trace_comparison["passed"])
+    checkpoint_equivalent = bool(checkpoint_comparison["passed"])
+    performance_comparison_valid = trace_exact
+    equivalent_optimization_passed = (
         settings_valid
-        and bool(trace_comparison["passed"])
-        and bool(checkpoint_comparison["passed"])
+        and trace_exact
+        and checkpoint_equivalent
         and performance_valid
         and physical_memory_valid
     )
+    behavior_change_detected = not trace_exact
+    efficacy_gate_required = settings_valid and behavior_change_detected
     return {
         "schema_version": 1,
         "baseline": str(baseline.resolve()),
@@ -171,6 +194,7 @@ def compare_runs(
         "source_checkpoint": source_checkpoint,
         "source_update": source_update,
         "target_update": baseline_update,
+        "candidate_mode": candidate_mode,
         "diagnostic_only": True,
         "control_checks": control_checks,
         "settings_valid": settings_valid,
@@ -182,13 +206,42 @@ def compare_runs(
         "rollout_speedup": rollout_speedup,
         "policy_speedup": policy_speedup,
         "old_logprob_speedup": old_logprob_speedup,
+        "training_sample_normalized_speedups": normalized_speedups,
         "minimum_core_speedup": minimum_core_speedup,
         "performance_valid": performance_valid,
+        "performance_comparison_valid": performance_comparison_valid,
         "candidate_physical_min_free_gb": candidate_physical_free,
         "minimum_physical_free_gb": minimum_physical_free_gb,
         "physical_memory_valid": physical_memory_valid,
-        "safe_to_continue_candidate": passed,
-        "passed": passed,
+        "behavior_change_detected": behavior_change_detected,
+        "efficacy_gate_required": efficacy_gate_required,
+        "equivalent_optimization_passed": equivalent_optimization_passed,
+        "safe_to_continue_candidate": equivalent_optimization_passed,
+        "passed": equivalent_optimization_passed,
+    }
+
+
+def _candidate_option_checks(
+    baseline: Mapping[str, object],
+    candidate: Mapping[str, object],
+    *,
+    candidate_mode: str,
+) -> dict[str, bool]:
+    baseline_capacity = _positive_int(
+        baseline.get("rollout_max_batched_tokens", 16_384)
+    )
+    candidate_capacity = _positive_int(candidate.get("rollout_max_batched_tokens"))
+    if candidate_mode == "combined":
+        capacity_matches_mode = candidate_capacity > baseline_capacity
+    elif candidate_mode == "entropy-only":
+        capacity_matches_mode = candidate_capacity == baseline_capacity
+    else:
+        raise ValueError(f"unsupported candidate mode: {candidate_mode}")
+    return {
+        "candidate_entropy_skip_enabled": (
+            candidate.get("skip_unused_old_logprob_entropy") is True
+        ),
+        "candidate_rollout_capacity_matches_mode": capacity_matches_mode,
     }
 
 
@@ -250,6 +303,8 @@ def _performance(metric: dict[str, object]) -> dict[str, float | None]:
         "reference_logprob_seconds": value("perf/reference_logprob_seconds"),
         "actor_update_seconds": value("perf/actor_update_seconds"),
         "auxiliary_update_seconds": value("perf/auxiliary_update_seconds"),
+        "training_sample_count": value("runtime/training_sample_count"),
+        "rollout_mean_steps": value("rollout/mean_steps"),
         "policy_physical_min_free_gb": value(
             "perf/cuda/policy_physical_min_free_gb_min"
         ),
@@ -477,6 +532,26 @@ def _speedup(baseline: float | None, candidate: float | None) -> float | None:
     return baseline / candidate
 
 
+def _throughput_speedup(
+    baseline_seconds: float | None,
+    candidate_seconds: float | None,
+    baseline_work: float | None,
+    candidate_work: float | None,
+) -> float | None:
+    if (
+        baseline_seconds is None
+        or candidate_seconds is None
+        or baseline_work is None
+        or candidate_work is None
+        or baseline_seconds <= 0.0
+        or candidate_seconds <= 0.0
+        or baseline_work <= 0.0
+        or candidate_work <= 0.0
+    ):
+        return None
+    return (candidate_work / candidate_seconds) / (baseline_work / baseline_seconds)
+
+
 def _read_json(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -488,6 +563,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
+    parser.add_argument(
+        "--candidate-mode",
+        choices=("combined", "entropy-only"),
+        default="combined",
+    )
     parser.add_argument("--logprob-tolerance", type=float, default=1e-3)
     parser.add_argument("--checkpoint-atol", type=float, default=1e-7)
     parser.add_argument("--checkpoint-rtol", type=float, default=1e-6)
@@ -497,6 +577,7 @@ def main() -> int:
     report = compare_runs(
         args.baseline,
         args.candidate,
+        candidate_mode=args.candidate_mode,
         logprob_tolerance=args.logprob_tolerance,
         checkpoint_atol=args.checkpoint_atol,
         checkpoint_rtol=args.checkpoint_rtol,

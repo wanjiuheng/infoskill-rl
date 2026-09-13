@@ -373,6 +373,11 @@ logprob、LoRA/M1/optimizer/scheduler/RNG/trainer state、至少 8 GiB 物理显
 提速；未通过时继续 control。整 update 预缓存 reference 的方案因会跨 optimizer minibatch
 冻结旧 projector、改变既定 KL 数学语义而被明确拒绝。
 
+首次 step-50 组合门中，`32768` scheduler 候选改变了 rollout：候选训练 batch 的即时成功率
+更高且平均轨迹更短，但这既不是固定验证集效果，也使原始 wall-time 失去同工作量可比性。因此
+exact parity 现只用于区分等价工程优化与 behavior-changing 候选；后者不再被表述为“效果有害”，
+而是必须补相同评测协议的 macro/overall success 效果门后才能采用。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

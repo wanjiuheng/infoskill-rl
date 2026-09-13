@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from scripts import compare_infoskill_training_optimization_runs as gate
 from scripts.compare_infoskill_training_optimization_runs import (
+    _candidate_option_checks,
     _checkpoint_step,
     _compare_values,
     _without_candidate_options,
@@ -14,6 +15,48 @@ from scripts.compare_infoskill_training_optimization_runs import (
 
 
 class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
+    def test_candidate_mode_controls_only_the_registered_scheduler_change(self) -> None:
+        baseline = {
+            "skip_unused_old_logprob_entropy": False,
+            "rollout_max_batched_tokens": 16_384,
+        }
+        entropy_only = {
+            "skip_unused_old_logprob_entropy": True,
+            "rollout_max_batched_tokens": 16_384,
+        }
+        combined = {
+            "skip_unused_old_logprob_entropy": True,
+            "rollout_max_batched_tokens": 32_768,
+        }
+
+        self.assertTrue(
+            all(
+                _candidate_option_checks(
+                    baseline,
+                    entropy_only,
+                    candidate_mode="entropy-only",
+                ).values()
+            )
+        )
+        self.assertFalse(
+            all(
+                _candidate_option_checks(
+                    baseline,
+                    combined,
+                    candidate_mode="entropy-only",
+                ).values()
+            )
+        )
+        self.assertTrue(
+            all(
+                _candidate_option_checks(
+                    baseline,
+                    combined,
+                    candidate_mode="combined",
+                ).values()
+            )
+        )
+
     def test_only_registered_candidate_options_are_ignored(self) -> None:
         baseline = {
             "mode": "infoskill",
@@ -162,9 +205,38 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
             ):
                 report = gate.compare_runs(baseline, candidate)
 
+            behavior_change = {
+                "passed": False,
+                "semantic_exact": False,
+                "semantic_mismatches": ["generation changed"],
+            }
+            changed_checkpoint = {"passed": False, "all_tensors_exact": False}
+            with (
+                patch.object(gate, "_read_training_trace", return_value=[]),
+                patch.object(
+                    gate,
+                    "compare_records",
+                    return_value=behavior_change,
+                ),
+                patch.object(
+                    gate,
+                    "_compare_checkpoints",
+                    return_value=changed_checkpoint,
+                ),
+            ):
+                changed_report = gate.compare_runs(baseline, candidate)
+
         self.assertTrue(report["passed"])
         self.assertTrue(report["safe_to_continue_candidate"])
         self.assertEqual(report["core_speedup"], 1.25)
+        self.assertEqual(
+            report["training_sample_normalized_speedups"]["core"],
+            1.25,
+        )
+        self.assertTrue(changed_report["behavior_change_detected"])
+        self.assertTrue(changed_report["efficacy_gate_required"])
+        self.assertFalse(changed_report["performance_comparison_valid"])
+        self.assertFalse(changed_report["safe_to_continue_candidate"])
 
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
@@ -190,6 +262,8 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                 "perf/policy_update_seconds": 40.0,
                 "perf/old_logprob_seconds": 10.0,
                 "perf/old_logprob_entropy_skipped": entropy_skipped,
+                "runtime/training_sample_count": 100.0,
+                "rollout/mean_steps": 20.0,
                 "perf/cuda/policy_physical_min_free_gb_min": 12.0,
                 "perf/cuda/rollout_physical_min_free_gb_min": 11.0,
             },

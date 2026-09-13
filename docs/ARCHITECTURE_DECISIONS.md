@@ -222,3 +222,9 @@ RNG 和 trainer state 在严格数值容差内一致；policy/rollout 物理显�
 至少提速 `1.05x`。任一项失败就从 control checkpoint 继续，不把 candidate 接入 formal。
 `SEGMENT_END_UPDATE` 只是单次调用边界，不改变注册的 445-update 目标、warmup 或 checkpoint
 语义；原地 resume 仍禁止静默改变候选设置。
+
+轨迹 exact parity 是“等价工程优化”的分类门，而不是效果优劣的替代指标。若 scheduler、batch
+geometry 等候选改变 rollout，比较器必须标记为 behavior-changing，并要求在相同固定评测协议下
+另做以 macro success 为首要指标的效果门；不能因轨迹改变直接断言效果下降，也不能把单个训练
+batch 的即时成功率当成泛化证据。轨迹长度不同的两次 update，其原始 wall-time 不构成同工作量
+吞吐比较，必须明确标记 performance comparison 无效，直到效果门提供端到端决策依据。
