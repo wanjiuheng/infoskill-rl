@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from html import escape
 from pathlib import Path
 from typing import Sequence
 
@@ -13,6 +14,9 @@ class EvaluationCheckpointScore:
     overall_success: float
     invalid_action_rate: float
     checkpoint: str | None = None
+    eval_batch_size: int | None = None
+    comparison_role: str | None = None
+    execution_mode: str | None = None
 
 
 def select_best_valid(scores: Sequence[EvaluationCheckpointScore]) -> EvaluationCheckpointScore:
@@ -31,14 +35,21 @@ def select_best_valid(scores: Sequence[EvaluationCheckpointScore]) -> Evaluation
 
 def checkpoint_score_payload(
     score: EvaluationCheckpointScore,
-) -> dict[str, float | int | str]:
-    return {
+) -> dict[str, float | int | str | None]:
+    payload: dict[str, float | int | str | None] = {
         "step": score.step,
         "macro_success": score.macro_success,
         "overall_success": score.overall_success,
         "invalid_action_rate": score.invalid_action_rate,
         "checkpoint": score.checkpoint or f"checkpoints/step-{score.step:06d}",
     }
+    if score.eval_batch_size is not None:
+        payload["eval_batch_size"] = score.eval_batch_size
+    if score.comparison_role is not None:
+        payload["comparison_role"] = score.comparison_role
+    if score.execution_mode is not None:
+        payload["execution_mode"] = score.execution_mode
+    return payload
 
 
 def load_checkpoint_scores(
@@ -62,6 +73,9 @@ def load_checkpoint_scores(
     if not isinstance(records, list):
         raise RuntimeError(f"invalid checkpoint selection history: {selection_path}")
     scores: list[EvaluationCheckpointScore] = []
+    default_batch_size = payload.get("eval_batch_size")
+    default_comparison_role = payload.get("comparison_role")
+    default_execution_mode = payload.get("execution_mode")
     seen_steps: set[int] = set()
     for record in records:
         if not isinstance(record, dict):
@@ -74,6 +88,22 @@ def load_checkpoint_scores(
             checkpoint=(
                 str(record["checkpoint"])
                 if record.get("checkpoint") is not None
+                else None
+            ),
+            eval_batch_size=(
+                int(record.get("eval_batch_size", default_batch_size))
+                if record.get("eval_batch_size", default_batch_size) is not None
+                else None
+            ),
+            comparison_role=(
+                str(record.get("comparison_role", default_comparison_role))
+                if record.get("comparison_role", default_comparison_role)
+                is not None
+                else None
+            ),
+            execution_mode=(
+                str(record.get("execution_mode", default_execution_mode))
+                if record.get("execution_mode", default_execution_mode) is not None
                 else None
             ),
         )
@@ -91,19 +121,36 @@ def write_checkpoint_selection(
     task_manifest_sha256: str,
     eval_batch_size: int = 8,
     comparison_role: str = "registered_batch8",
+    execution_mode: str | None = None,
 ) -> dict[str, object]:
     if not scores:
         raise ValueError("checkpoint selection requires at least one evaluation")
-    ordered = sorted(scores, key=lambda score: score.step)
+    ordered = sorted(
+        (
+            replace(
+                score,
+                eval_batch_size=(
+                    score.eval_batch_size
+                    if score.eval_batch_size is not None
+                    else eval_batch_size
+                ),
+                comparison_role=score.comparison_role or comparison_role,
+                execution_mode=score.execution_mode or execution_mode,
+            )
+            for score in scores
+        ),
+        key=lambda score: score.step,
+    )
     if len({score.step for score in ordered}) != len(ordered):
         raise RuntimeError("checkpoint selection contains duplicate evaluation steps")
     best = select_best_valid(ordered)
     payload: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "disclosure": "validation-selected performance on valid_seen",
         "task_manifest_sha256": task_manifest_sha256,
         "eval_batch_size": eval_batch_size,
         "comparison_role": comparison_role,
+        "execution_mode": execution_mode,
         "rule": [
             "max_macro_success",
             "max_overall_success",
@@ -142,22 +189,45 @@ def write_valid_seen_learning_curve(
     if len({score.step for score in ordered}) != len(ordered):
         raise RuntimeError("valid_seen learning curve contains duplicate steps")
 
-    width, height = 1_000, 600
-    left, right, top, bottom = 90, 960, 80, 500
+    width, height = max(1_000, 190 + (len(ordered) - 1) * 90), 640
+    left, right, top, bottom = 90, width - 50, 110, 535
     plot_width = right - left
     plot_height = bottom - top
-    maximum_step = max(25, ordered[-1].step)
 
-    def point(score: EvaluationCheckpointScore, value: float) -> tuple[float, float]:
-        x = left + plot_width * score.step / maximum_step
+    def point(index: int, value: float) -> tuple[float, float]:
+        x = (
+            left + plot_width * index / (len(ordered) - 1)
+            if len(ordered) > 1
+            else left + plot_width / 2
+        )
         y = bottom - plot_height * min(1.0, max(0.0, value))
         return x, y
 
-    macro_points = [point(score, score.macro_success) for score in ordered]
-    overall_points = [point(score, score.overall_success) for score in ordered]
+    macro_points = [
+        point(index, score.macro_success)
+        for index, score in enumerate(ordered)
+    ]
+    overall_points = [
+        point(index, score.overall_success)
+        for index, score in enumerate(ordered)
+    ]
 
     def coordinates(points: Sequence[tuple[float, float]]) -> str:
         return " ".join(f"{x:.2f},{y:.2f}" for x, y in points)
+
+    def protocol(
+        score: EvaluationCheckpointScore,
+    ) -> tuple[int | None, str | None]:
+        return score.eval_batch_size, score.execution_mode
+
+    def protocol_text(value: tuple[int | None, str | None]) -> str:
+        batch_size, execution_mode = value
+        batch = f"batch {batch_size}" if batch_size is not None else "batch unknown"
+        execution = {
+            "cuda_graph": "CUDA Graph",
+            "eager": "eager",
+        }.get(execution_mode, execution_mode or "execution unknown")
+        return f"{batch} / {execution}"
 
     status = "monitoring curve" if monitoring_only else "registered evaluation curve"
     lines = [
@@ -170,6 +240,10 @@ def write_valid_seen_learning_curve(
         ".macro{stroke:#2563eb;fill:none;stroke-width:3}",
         ".overall{stroke:#ea580c;fill:none;stroke-width:3}",
         ".dot-macro{fill:#2563eb}.dot-overall{fill:#ea580c}",
+        ".point-label-macro{fill:#1d4ed8;font-size:11px;font-weight:700}",
+        ".point-label-overall{fill:#c2410c;font-size:11px}",
+        ".protocol-bridge{stroke:#7c3aed;stroke-width:1.5;stroke-dasharray:6 5}",
+        ".protocol-label{fill:#6d28d9;font-size:12px;font-weight:700}",
         "</style>",
         f'<rect width="{width}" height="{height}" fill="#ffffff"/>',
         '<text x="90" y="35" font-size="24" font-weight="700">'
@@ -194,6 +268,28 @@ def write_valid_seen_learning_curve(
             f'x2="{right}" y2="{bottom}"/>',
             f'<line class="axis" x1="{left}" y1="{top}" '
             f'x2="{left}" y2="{bottom}"/>',
+        ]
+    )
+    for index in range(1, len(ordered)):
+        before = protocol(ordered[index - 1])
+        after = protocol(ordered[index])
+        if before == after or before == (None, None) or after == (None, None):
+            continue
+        bridge_x = macro_points[index - 1][0]
+        label = (
+            f"after update {ordered[index - 1].step}: "
+            f"{protocol_text(before)} → {protocol_text(after)}"
+        )
+        lines.extend(
+            [
+                f'<line class="protocol-bridge" x1="{bridge_x:.2f}" y1="{top}" '
+                f'x2="{bridge_x:.2f}" y2="{bottom}"/>',
+                f'<text class="protocol-label" x="{bridge_x + 7:.2f}" '
+                f'y="{top - 13}">{escape(label)}</text>',
+            ]
+        )
+    lines.extend(
+        [
             f'<polyline class="macro" points="{coordinates(macro_points)}"/>',
             f'<polyline class="overall" points="{coordinates(overall_points)}"/>',
         ]
@@ -203,6 +299,25 @@ def write_valid_seen_learning_curve(
     ):
         x, macro_y = macro_point
         _, overall_y = overall_point
+        labels_are_close = abs(macro_y - overall_y) < 34
+        if labels_are_close:
+            macro_label_y = min(macro_y, overall_y) - 12
+            overall_label_y = max(macro_y, overall_y) + 20
+            label_top = top + 14
+            label_bottom = bottom - 8
+            if macro_label_y < label_top:
+                shift = label_top - macro_label_y
+                macro_label_y += shift
+                overall_label_y += shift
+            if overall_label_y > label_bottom:
+                shift = overall_label_y - label_bottom
+                macro_label_y -= shift
+                overall_label_y -= shift
+        else:
+            macro_label_y = macro_y - 12
+            overall_label_y = overall_y + 20
+            macro_label_y = min(bottom - 8, max(top + 14, macro_label_y))
+            overall_label_y = min(bottom - 8, max(top + 14, overall_label_y))
         lines.extend(
             [
                 f'<circle class="dot-macro" cx="{x:.2f}" cy="{macro_y:.2f}" '
@@ -211,6 +326,12 @@ def write_valid_seen_learning_curve(
                 f'<circle class="dot-overall" cx="{x:.2f}" cy="{overall_y:.2f}" '
                 f'r="4"><title>update {score.step}: Overall success '
                 f"{score.overall_success:.2%}</title></circle>",
+                f'<text class="point-label-macro" x="{x:.2f}" '
+                f'y="{macro_label_y:.2f}" text-anchor="middle">'
+                f"M {score.macro_success:.2%}</text>",
+                f'<text class="point-label-overall" x="{x:.2f}" '
+                f'y="{overall_label_y:.2f}" text-anchor="middle">'
+                f"O {score.overall_success:.2%}</text>",
                 f'<text x="{x:.2f}" y="{bottom + 24}" text-anchor="middle" '
                 f'font-size="12">{score.step}</text>',
             ]
@@ -218,15 +339,19 @@ def write_valid_seen_learning_curve(
     latest = ordered[-1]
     lines.extend(
         [
-            '<line class="macro" x1="650" y1="35" x2="690" y2="35"/>',
-            '<text x="700" y="40" font-size="14">Macro success</text>',
-            '<line class="overall" x1="650" y1="58" x2="690" y2="58"/>',
-            '<text x="700" y="63" font-size="14">Overall success</text>',
-            f'<text x="90" y="555" font-size="15" font-weight="700">'
+            f'<line class="macro" x1="{width - 350}" y1="35" '
+            f'x2="{width - 310}" y2="35"/>',
+            f'<text x="{width - 300}" y="40" font-size="14">'
+            "Macro success</text>",
+            f'<line class="overall" x1="{width - 350}" y1="58" '
+            f'x2="{width - 310}" y2="58"/>',
+            f'<text x="{width - 300}" y="63" font-size="14">'
+            "Overall success</text>",
+            f'<text x="90" y="595" font-size="15" font-weight="700">'
             f"Latest update {latest.step}: Macro {latest.macro_success:.2%} · "
             f"Overall {latest.overall_success:.2%}</text>",
-            '<text x="525" y="590" text-anchor="middle" font-size="13">'
-            "Optimizer update</text>",
+            f'<text x="{width / 2:.2f}" y="628" text-anchor="middle" '
+            'font-size="13">Optimizer update</text>',
             "</svg>",
         ]
     )
@@ -246,6 +371,7 @@ def inherit_forked_checkpoint_selection(
     task_manifest_sha256: str,
     eval_batch_size: int = 8,
     comparison_role: str = "registered_batch8",
+    execution_mode: str | None = None,
 ) -> dict[str, object]:
     """Merge eligible source evaluations into a fork without losing provenance."""
     source_directory = Path(source_run).expanduser().resolve()
@@ -255,6 +381,7 @@ def inherit_forked_checkpoint_selection(
         raise RuntimeError(
             f"forked valid_seen resume requires source checkpoint selection: {source_path}"
         )
+    source_execution_mode = _resolved_execution_mode(source_directory)
     inherited: list[EvaluationCheckpointScore] = []
     for score in load_checkpoint_scores(
         source_path,
@@ -274,6 +401,9 @@ def inherit_forked_checkpoint_selection(
                 overall_success=score.overall_success,
                 invalid_action_rate=score.invalid_action_rate,
                 checkpoint=str(checkpoint),
+                eval_batch_size=score.eval_batch_size,
+                comparison_role=score.comparison_role,
+                execution_mode=score.execution_mode or source_execution_mode,
             )
         )
 
@@ -306,4 +436,19 @@ def inherit_forked_checkpoint_selection(
         task_manifest_sha256=task_manifest_sha256,
         eval_batch_size=eval_batch_size,
         comparison_role=comparison_role,
+        execution_mode=execution_mode,
     )
+
+
+def _resolved_execution_mode(run_directory: Path) -> str | None:
+    path = run_directory / "resolved_config.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    runtime_options = payload.get("runtime_options")
+    if not isinstance(runtime_options, dict):
+        return None
+    enabled = runtime_options.get("hybrid_prefix_cuda_graph")
+    if enabled is None:
+        return None
+    return "cuda_graph" if bool(enabled) else "eager"

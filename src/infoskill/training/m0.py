@@ -37,6 +37,7 @@ from infoskill.persistence import (
     CheckpointManager,
     MetricLogger,
     TrainerCheckpointState,
+    TrainingTaskOutcomeWriter,
     ZstdJsonlTraceWriter,
 )
 from infoskill.persistence.model_identity import verify_policy_model_identity
@@ -357,6 +358,9 @@ def run_policy_training(
                     if config.eval_batch_size == 8
                     else "nonregistered_monitoring_curve"
                 ),
+                "execution_mode": (
+                    "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
+                ),
             }
             if plan.evaluation_kind == "valid_seen"
             else None
@@ -435,6 +439,9 @@ def run_policy_training(
                     if config.eval_batch_size == 8
                     else "nonregistered_monitoring_curve"
                 ),
+                "execution_mode": (
+                    "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
+                ),
             }
             if plan.evaluation_kind == "valid_seen"
             else None
@@ -484,6 +491,9 @@ def run_policy_training(
                 "registered_batch8"
                 if config.eval_batch_size == 8
                 else "nonregistered_monitoring_curve"
+            ),
+            execution_mode=(
+                "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
             ),
         )
 
@@ -639,9 +649,14 @@ def run_policy_training(
 
         traces = ZstdJsonlTraceWriter(run_directory)
         metrics = MetricLogger(run_directory)
+        initial_update = restored.global_update if restored is not None else 0
+        task_outcomes = TrainingTaskOutcomeWriter(
+            run_directory,
+            expected_rollouts_per_task=plan.rollouts_per_task,
+            committed_through_update=initial_update,
+        )
         from tqdm.auto import tqdm
 
-        initial_update = restored.global_update if restored is not None else 0
         progress = tqdm(
             total=plan.max_updates,
             initial=initial_update,
@@ -686,12 +701,23 @@ def run_policy_training(
                 groups=groups,
                 advantages=advantages,
             )
+            outcome_counts = task_outcomes.write_training_update(
+                global_update=update.global_update,
+                groups=groups,
+                trace_path=trace_path,
+            )
             values: dict[str, float | int | str | bool | None] = dict(
                 update.values
             )
             values["schedule/cursor"] = schedule.cursor
             values["schedule/total"] = schedule.total
             values["trace"] = str(trace_path)
+            values.update(
+                {
+                    f"task_outcomes/{key}": value
+                    for key, value in outcome_counts.items()
+                }
+            )
             metrics.log(step=update.global_update, phase="train", values=values)
             logger.info(
                 "update=%d/%d success=%.4f reward=%.4f invalid=%.4f",
@@ -718,6 +744,7 @@ def run_policy_training(
             checkpoint_manager=checkpoints,
             keep_best_valid=checkpoint_keep_best_valid,
             schedule=schedule,
+            hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
         )
 
         def should_pause() -> bool:
@@ -865,6 +892,7 @@ def _evaluation_callback(
     checkpoint_manager: CheckpointManager,
     keep_best_valid: bool,
     schedule: TaskSchedule,
+    hybrid_prefix_cuda_graph: bool,
 ):
     if plan.evaluation_kind == "none":
         return None
@@ -887,6 +915,7 @@ def _evaluation_callback(
             scores=valid_scores,
         )
     monitoring_only = config.eval_batch_size != 8
+    execution_mode = "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
     if valid_scores:
         write_valid_seen_learning_curve(
             curve_path,
@@ -939,6 +968,7 @@ def _evaluation_callback(
                 if monitoring_only
                 else "registered_batch8"
             ),
+            "execution_mode": execution_mode,
         }
         values.update(
             {
@@ -965,6 +995,13 @@ def _evaluation_callback(
                 overall_success=summary.overall_success,
                 invalid_action_rate=summary.invalid_action_rate,
                 checkpoint=f"checkpoints/step-{global_update:06d}",
+                eval_batch_size=config.eval_batch_size,
+                comparison_role=(
+                    "nonregistered_monitoring_curve"
+                    if monitoring_only
+                    else "registered_batch8"
+                ),
+                execution_mode=execution_mode,
             )
         )
         write_checkpoint_selection(
@@ -977,6 +1014,7 @@ def _evaluation_callback(
                 if monitoring_only
                 else "registered_batch8"
             ),
+            execution_mode=execution_mode,
         )
         if keep_best_valid:
             _sync_best_valid_checkpoint(

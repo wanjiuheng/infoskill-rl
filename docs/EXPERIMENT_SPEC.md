@@ -120,6 +120,10 @@ _Avoid_: training on padding sentinel、mean-only gate、post-update validation�
 
 **Structured Trajectory Trace**:
 每个正式 update 的全部 8 个任务组×G=8、共 64 条训练轨迹都按 update/rank 分片写入压缩 `.jsonl.zst`；每次 `valid_seen` 则完整保存 140 条轨迹。记录 canonical state、模型原始响应、finish reason、token 数、解析/执行动作、`admissible_commands`、环境原始 observation/reward/done/won、合法性/格式、检索技能 ID/分数/版本、轨迹 reward/advantage 与必要训练统计。运行目录另存 resolved config、来源 manifest、console/JSONL/CSV/TensorBoard 指标和六类汇总；外部 W&B 默认关闭。
+
+**Training Task Outcome Index**:
+每个训练 update 另以原子 JSONL 索引记录全部任务组的紧凑结果，不复制 Structured Trajectory Trace。正式 `G=8` 时按二值 `won` 分类：`hard_failed=0/8`、`partial=1--7/8`、`mastered=8/8`；轨迹数不等于计划值时标为 `incomplete`，不得混入模型错题。索引保存任务 ID/类别/目标/环境路径、成功失败数、失败 rollout ID 及每条 rollout 的成功、回报、步数、非法动作数和终止状态，并指向对应完整压缩 trace。重复写同一 update 必须覆盖而非追加；恢复较早 checkpoint 时，高于恢复 update 的旧索引及其完整 trace 一并移动到 `stale-after-resume-*` 隔离目录而不删除，归档索引改为指向归档 trace。该记录只服务审计和未来单独命名的错题重训分叉，不反馈当前 formal 的抽样或 loss。
+_Avoid_: failed-trajectory duplication、reward-defined correctness、online hard-example resampling
 _Avoid_: one-group-only routine trace、single monolithic log、external-logger-only evidence
 
 **Tensor Persistence Policy**:

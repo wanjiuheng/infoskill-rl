@@ -312,3 +312,21 @@ checkpoint 仍至少重复评测两次，并按 Macro success 首排、Overall s
 resume 若与原 resolved config 不同则 fail-fast。按当前约 551 MiB/checkpoint 估算，完成态最坏
 约 4.3 GiB（最近 5 + 独立最佳 + 永久 update 0 + 最终），另需预留一个原子写入中的临时
 checkpoint；这些集合若重合则实际占用更少。
+
+## D028：训练错题采用旁路全量索引，曲线逐点披露结果与协议
+
+每个训练 update 在完整 `.jsonl.zst` 轨迹之外生成一个紧凑、原子、可覆盖的任务结果索引。
+索引包含全部任务组而非只保存失败题，以免将来无法区分遗漏与成功；但只保存任务元数据和每条
+rollout 的小型结果摘要，并以相对路径引用现有完整 trace，不重复保存 prompt、token、状态或
+环境 observation。正确性只由终局 `won` 定义：正式 G=8 下 0/8 为 `hard_failed`、1--7/8 为
+`partial`、8/8 为 `mastered`；数量异常单列 `incomplete`。该数据不在当前 formal 中改变任务
+顺序、采样概率、reward 或 optimizer。写入采用临时文件 `flush/fsync` 后替换并同步目录；从较早
+checkpoint 原地恢复时，把更高 update 的旧索引及对应压缩 trace 一并移入
+`stale-after-resume-*` 目录而不删除，并改写归档索引的 trace 引用，避免陈旧错题污染汇总或
+在重跑同一 update 后错误指向新轨迹。未来若做错题重训必须另开命名实验分叉。
+
+`valid_seen_learning_curve.svg` 在每个 checkpoint 点旁同时显示 Macro 与 Overall 百分比，按点数
+动态扩宽并在两条文字靠近时自动错位。checkpoint selection 的每条评测记录携带自己的 batch 和
+执行模式；命名分叉继承旧点时保留源协议，而不是套用目标 run 的全局设置。连续点协议变化时图中
+明确画出分界，例如 step 50 之后从 batch 12/eager 切换到 batch 64/CUDA Graph。图仍由原生 SVG
+生成，不新增 matplotlib 等运行依赖。

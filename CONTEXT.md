@@ -422,6 +422,17 @@ batch 64 第二轮单独对比偏高的 batch 12 第二轮时严格门返回失�
 `fsync` delete-intent/deleted 到 `checkpoints/retention-audit.jsonl`，源 step-50 及其他 run
 不在清理范围。
 
+正式训练现为每个 update 额外写入 `task-outcomes/train-update-NNNNNN.jsonl`，并原子刷新
+`task-outcomes-summary.json`。索引覆盖全部任务组，但只保存任务信息、8 条 rollout 的紧凑结果
+和完整 trace 的引用；按 `won` 分为 0/8 `hard_failed`、1--7/8 `partial`、8/8 `mastered`，数量
+异常单列 `incomplete`。恢复较早 checkpoint 时，更高 update 的旧索引会被可恢复地隔离到
+`stale-after-resume-*`，对应完整 trace 也同步归档并保持引用有效，不进入汇总。它不参与当前采样或 loss，未来错题重训只能作为独立命名
+分叉。
+
+`valid_seen_learning_curve.svg` 现在为每一个点直接标注 Macro/Overall 百分比，并随点数动态扩宽。
+每条 checkpoint evaluation 自带 batch 与 eager/CUDA Graph 协议；从源 run 继承时保留旧协议，
+并在 step 50 后 batch 12/eager → batch 64/CUDA Graph 的位置画出明确分界。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

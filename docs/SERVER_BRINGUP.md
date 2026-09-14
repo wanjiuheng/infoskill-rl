@@ -266,6 +266,22 @@ echo "LOG=$LOG"
 tail -f "$LOG"
 ```
 
+训练开始后无需额外开关，run 目录会为每个完成的 update 原子写入紧凑任务结果索引。它不会复制
+完整轨迹，`hard_failed` 表示该任务组 8 条 rollout 全部失败，`partial` 表示部分成功，
+`mastered` 表示全部成功；轨迹数量异常则为 `incomplete`。可随时只读查看：
+
+```bash
+RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
+  -name '*-m1-infoskill-formal-s50-cudagraph-b64-retained' | sort | tail -n 1)
+cat "$RUN/task-outcomes-summary.json"
+tail -n 8 "$RUN/task-outcomes/train-update-000051.jsonl"
+ls -lh "$RUN/valid_seen_learning_curve.svg"
+```
+
+学习曲线会在每个点旁显示 `M`（Macro）与 `O`（Overall）百分比；点数增多时画布自动扩宽，
+从源 run 继承的 batch 12/eager 点与后续 batch 64/CUDA Graph 点之间会标出 step-50 协议分界。
+图仍是原生 SVG，不需要安装绘图库。
+
 ## M1 445-update：batch-12 周期监控、实时曲线和安全暂停
 
 下面的正式训练只启动一个 run。它不会额外先跑独立 update-0；训练器自身在 update 0、25、

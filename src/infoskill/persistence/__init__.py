@@ -7,6 +7,7 @@ from .checkpoint import (
     TrainerCheckpointState,
     resolve_portable_checkpoint,
 )
+from .task_outcomes import TrainingTaskOutcomeWriter
 from .traces import MetricLogger, ZstdJsonlTraceWriter
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "MetricLogger",
     "PortableCheckpoint",
     "TrainerCheckpointState",
+    "TrainingTaskOutcomeWriter",
     "ZstdJsonlTraceWriter",
     "resolve_portable_checkpoint",
 ]
