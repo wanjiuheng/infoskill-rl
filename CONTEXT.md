@@ -407,6 +407,14 @@ step 50 命名分叉，显式采用 `HYBRID_PREFIX_CUDA_GRAPH=1`，但不同时�
 fused KL/PPO、entropy skip 或更大 scheduler token budget。日常曲线可单次 Graph 评测，关键
 checkpoint 使用两次 Graph 汇总，降低独立 runtime 数值扰动经 greedy 多步轨迹放大的噪声。
 
+进一步在同一 step-50 checkpoint、固定 140 条和修正 CUDA Graph 上完成 batch 12/64 各两次
+独立完整评测。batch 12 两轮平均为 37/140、Macro 0.253524、Overall 0.264286、总耗时约
+1606.8 秒；batch 64 两轮平均为 38/140、Macro 0.258275、Overall 0.271429、总耗时约
+837.1 秒，约 1.92x 更快，最低物理显存余量约 29.36 GiB，且无 forced termination。虽然
+batch 64 第二轮单独对比偏高的 batch 12 第二轮时严格门返回失败，但按预先声明的两轮平均
+效果规则通过。后续 M1 命名分叉的周期评测采用 `EVAL_BATCH_SIZE=64`；step 50 作为 batch 12
+到 batch 64 的协议桥，曲线和报告必须标记该边界。训练 batch、rollout batch 与训练算法不变。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

@@ -275,3 +275,23 @@ Inductor policy 三个 runtime 字段不同。独立 eager 为 37/140，Macro/Ov
 日常学习曲线允许每个评测点运行一次 Graph；关键 checkpoint 与最终报告至少运行两次 Graph 并
 汇总 Macro/Overall。单次结果仍完整保留，但小于独立 runtime 波动尺度的差异不得被解释为确定性
 模型提升或退化。eager 保留为审计基线，不再承担每个周期点的常规监控。
+
+## D026：M1 CUDA Graph 周期评测采用 batch 64，并在 step 50 建立协议桥
+
+2026-09-14 在 D025 的修正 CUDA Graph 路径上，使用同一 step-50 checkpoint、同一固定 140 条
+`valid_seen`、同一三卡拓扑和相同 200 ms 显存采样间隔，对 batch 12 与 batch 64 各完成两次
+独立完整评测。batch 12 两轮平均为 37/140、Macro 0.253524、Overall 0.264286、总耗时约
+1606.8 秒；batch 64 两轮平均为 38/140、Macro 0.258275、Overall 0.271429、总耗时约
+837.1 秒。batch 64 相对两轮 batch 12 平均没有效果退化，反而高 1 个成功任务，Macro/Overall
+分别高约 0.48/0.71 个百分点，并取得约 1.92x 端到端提速。其两轮最低物理显存余量均约
+29.36 GiB，forced termination 为 0。
+
+单轮严格比较器把第二轮 batch 64（40/140）与偏高的第二轮 batch 12（44/140）比较时返回
+`passed=false`；该结果必须保留，但它不是预先声明的重复实验汇总规则。按“两轮平均 Macro
+下降不超过 2 个百分点且 Overall 平均少不超过 2 个成功任务”的采用条件，batch 64 通过。
+
+因此从 step 50 之后的 M1 命名分叉开始，周期评测显式采用修正 CUDA Graph 与
+`eval_batch_size=64`。step 50 已同时具有 batch 12 和 batch 64 的重复结果，作为评测协议切换
+桥点；step 0/25/50 的 batch-12 曲线与后续 batch-64 曲线不得无标记地视为完全同协议序列。
+训练算法、训练 batch、rollout batch 和 checkpoint 内容不因该评测 batch 变更而改变。最终关键
+checkpoint 仍至少重复评测两次，并按 Macro success 首排、Overall success 次排汇总。
