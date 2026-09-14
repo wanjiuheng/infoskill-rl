@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Mapping, Protocol, Sequence
 
-from infoskill.episode import TrajectoryCollector, TrajectoryGroup
+from infoskill.episode import Trajectory, TrajectoryCollector, TrajectoryGroup
 from infoskill.learning import build_group_advantage_signals, summarize_grpo_signals
 
 from .schedule import TaskSchedule
@@ -193,13 +193,29 @@ class InfoSkillTrainer:
 def _rollout_metrics(groups: Sequence[TrajectoryGroup]) -> dict[str, float]:
     trajectories = [trajectory for group in groups for trajectory in group.trajectories]
     steps = [step for trajectory in trajectories for step in trajectory.steps]
+    successful = [trajectory for trajectory in trajectories if trajectory.won]
+    failed = [trajectory for trajectory in trajectories if not trajectory.won]
+
+    def mean_steps(items: Sequence[Trajectory]) -> float:
+        if not items:
+            return 0.0
+        return sum(len(item.steps) for item in items) / len(items)
+
     return {
         "rollout/tasks": float(len(groups)),
         "rollout/trajectories": float(len(trajectories)),
+        "rollout/successful_trajectories": float(len(successful)),
+        "rollout/failed_trajectories": float(len(failed)),
         "rollout/success_rate": sum(trajectory.won for trajectory in trajectories) / len(trajectories),
         "rollout/mean_reward": sum(trajectory.reward for trajectory in trajectories) / len(trajectories),
         "rollout/invalid_action_rate": (
             sum(not step.action.is_executable for step in steps) / len(steps) if steps else 0.0
         ),
-        "rollout/mean_steps": sum(len(trajectory.steps) for trajectory in trajectories) / len(trajectories),
+        "rollout/mean_steps": mean_steps(trajectories),
+        "rollout/mean_steps_successful": mean_steps(successful),
+        "rollout/mean_steps_failed": mean_steps(failed),
+        "rollout/horizon_exhaustion_rate": (
+            sum(trajectory.horizon_exhausted for trajectory in trajectories)
+            / len(trajectories)
+        ),
     }

@@ -44,12 +44,43 @@ from infoskill.persistence.model_identity import verify_policy_model_identity
 from infoskill.rollout import GenerationParameters, PromptLengthError
 
 from .plan import TrainingPlan, TrainingProfile
+from .rollout_curve import (
+    load_training_rollout_step_scores,
+    write_training_rollout_steps_curve,
+)
 from .run_directory import resolve_training_run_directory, validate_resume_config
 from .schedule import TaskSchedule
 from .trainer import InfoSkillTrainer, UpdateMetrics
 
 
 EXPECTED_TRAIN_TASKS = 3_553
+
+
+def _refresh_training_rollout_steps_curve(
+    path: Path,
+    *,
+    metric_paths: Sequence[Path],
+    max_step: int,
+    logger: logging.Logger,
+) -> bool:
+    """Refresh the optional monitor without making training depend on it."""
+
+    try:
+        scores = load_training_rollout_step_scores(
+            metric_paths,
+            max_step=max_step,
+        )
+        if not scores:
+            return False
+        write_training_rollout_steps_curve(path, scores=scores)
+        return True
+    except Exception:
+        logger.warning(
+            "Unable to refresh training rollout step curve: %s",
+            path,
+            exc_info=True,
+        )
+        return False
 
 
 def run_m0_training(
@@ -650,6 +681,19 @@ def run_policy_training(
         traces = ZstdJsonlTraceWriter(run_directory)
         metrics = MetricLogger(run_directory)
         initial_update = restored.global_update if restored is not None else 0
+        training_metric_paths: tuple[Path, ...] = (metrics.jsonl_path,)
+        if forked_resume and checkpoint_to_load is not None:
+            source_metrics = checkpoint_to_load.parent.parent / "metrics.jsonl"
+            training_metric_paths = (source_metrics, metrics.jsonl_path)
+        training_curve_path = (
+            run_directory / "training_rollout_steps_curve.svg"
+        )
+        _refresh_training_rollout_steps_curve(
+            training_curve_path,
+            metric_paths=training_metric_paths,
+            max_step=initial_update,
+            logger=logger,
+        )
         task_outcomes = TrainingTaskOutcomeWriter(
             run_directory,
             expected_rollouts_per_task=plan.rollouts_per_task,
@@ -719,6 +763,12 @@ def run_policy_training(
                 }
             )
             metrics.log(step=update.global_update, phase="train", values=values)
+            _refresh_training_rollout_steps_curve(
+                training_curve_path,
+                metric_paths=training_metric_paths,
+                max_step=update.global_update,
+                logger=logger,
+            )
             logger.info(
                 "update=%d/%d success=%.4f reward=%.4f invalid=%.4f",
                 update.global_update,

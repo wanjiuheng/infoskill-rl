@@ -330,3 +330,12 @@ checkpoint 原地恢复时，把更高 update 的旧索引及对应压缩 trace 
 执行模式；命名分叉继承旧点时保留源协议，而不是套用目标 run 的全局设置。连续点协议变化时图中
 明确画出分界，例如 step 50 之后从 batch 12/eager 切换到 batch 64/CUDA Graph。图仍由原生 SVG
 生成，不新增 matplotlib 等运行依赖。
+
+训练步数趋势同样以旁路指标实现：`metrics.jsonl` 是唯一事实来源，每个 train update 记录全部、
+成功、失败 rollout 的数量与平均环境步数，以及 horizon exhaustion rate；随后原子重建
+`training_rollout_steps_curve.svg`。命名分叉依次读取源 run 和当前 run 的 metrics，重复 step 以
+当前 run 最后一个完整 train 记录为准，并忽略恢复点之后的陈旧数据。历史记录缺少分组字段时只画
+存在的总体均值，不把零值伪装成“没有成功轨迹的平均步数”。该监控不参与采样、reward、loss、
+checkpoint selection；由于每个 update 的 train 任务组成不同，它不能替代固定 valid_seen 曲线。
+曲线作为旁路监控必须故障隔离：解析或写入异常只记录带堆栈 warning，不能越过训练回调阻止
+checkpoint 提交。

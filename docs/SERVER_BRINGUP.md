@@ -276,11 +276,17 @@ RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
 cat "$RUN/task-outcomes-summary.json"
 tail -n 8 "$RUN/task-outcomes/train-update-000051.jsonl"
 ls -lh "$RUN/valid_seen_learning_curve.svg"
+ls -lh "$RUN/training_rollout_steps_curve.svg"
 ```
 
 学习曲线会在每个点旁显示 `M`（Macro）与 `O`（Overall）百分比；点数增多时画布自动扩宽，
 从源 run 继承的 batch 12/eager 点与后续 batch 64/CUDA Graph 点之间会标出 step-50 协议分界。
 图仍是原生 SVG，不需要安装绘图库。
+
+训练步数图从每个完成的 update 开始实时存在，不必等待 25-update 周期评测。上半图显示全部、
+成功、失败 rollout 的平均环境步数，下半图显示 horizon exhaustion rate。step-50 分叉会继承
+源 run 的 update 1--50 总体均值；成功/失败拆分和触顶率从采用本版本后的第一个 update 开始。
+train 任务会随 update 改变，因此它用于诊断行为趋势，不替代固定 `valid_seen` 效果曲线。
 
 ## M1 445-update：batch-12 周期监控、实时曲线和安全暂停
 
@@ -337,6 +343,7 @@ RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
 cat "$RUN/training-control.json"
 cat "$RUN/checkpoint_selection.json"
 ls -lh "$RUN/valid_seen_learning_curve.svg"
+ls -lh "$RUN/training_rollout_steps_curve.svg"
 ```
 
 需要暂停时不要 `kill -9`。读取 run 自己登记的 Python PID 并发送一次 SIGINT；信号到达后会

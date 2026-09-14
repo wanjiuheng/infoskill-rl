@@ -2,6 +2,11 @@
 
 from .schedule import TaskSchedule, TaskScheduleState
 from .plan import TrainingPlan, TrainingProfile, resolve_training_plan
+from .rollout_curve import (
+    TrainingRolloutStepScore,
+    load_training_rollout_step_scores,
+    write_training_rollout_steps_curve,
+)
 from .trainer import InfoSkillTrainer, TrainingRuntime, UpdateMetrics
 
 try:
@@ -18,7 +23,10 @@ __all__ = [
     "TaskScheduleState",
     "TrainingPlan",
     "TrainingProfile",
+    "TrainingRolloutStepScore",
     "TrainingRuntime",
     "UpdateMetrics",
+    "load_training_rollout_step_scores",
     "resolve_training_plan",
+    "write_training_rollout_steps_curve",
 ]

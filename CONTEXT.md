@@ -433,6 +433,13 @@ batch 64 第二轮单独对比偏高的 batch 12 第二轮时严格门返回失�
 每条 checkpoint evaluation 自带 batch 与 eager/CUDA Graph 协议；从源 run 继承时保留旧协议，
 并在 step 50 后 batch 12/eager → batch 64/CUDA Graph 的位置画出明确分界。
 
+训练期间还会在每个完成的 update 后原子刷新 `training_rollout_steps_curve.svg`。上半图分别显示
+全部、成功和失败 rollout 的平均环境步数，下半图显示达到 rollout horizon 的比例；每个点带
+update/value 提示。命名分叉会从源 `metrics.jsonl` 接续历史曲线，但旧指标只有
+`rollout/mean_steps` 时不虚构成功/失败拆分。该图只用于训练行为诊断，因为不同 update 的任务
+组成会变化；固定 140 条 `valid_seen` 的 Macro/Overall 曲线仍是效果判断依据。
+图表读取或原子写入失败只记录 warning，不得阻断后续训练或 checkpoint 提交。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

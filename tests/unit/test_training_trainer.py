@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 from infoskill.episode import TaskSpec, Trajectory, TrajectoryGroup
 from infoskill.training import InfoSkillTrainer, TaskSchedule
@@ -302,6 +303,52 @@ class InfoSkillTrainerTests(unittest.TestCase):
         ):
             self.assertIn(key, captured[0])
             self.assertGreaterEqual(captured[0][key], 0.0)
+
+    def test_update_reports_success_aware_rollout_step_metrics(self) -> None:
+        task = TaskSpec("task", "train", "kind", "goal")
+
+        def steps(count: int) -> tuple[object, ...]:
+            return tuple(
+                SimpleNamespace(
+                    action=SimpleNamespace(is_executable=True),
+                )
+                for _ in range(count)
+            )
+
+        group = TrajectoryGroup(
+            task=task,
+            trajectories=(
+                Trajectory(task, 0, steps(2), True, True, False, 0, 1.0),
+                Trajectory(task, 1, steps(4), False, False, True, 0, 0.0),
+                Trajectory(task, 2, steps(1), False, True, False, 0, 0.0),
+            ),
+        )
+
+        class _FixedCollector:
+            def collect_task_groups(self, *args, **kwargs):
+                return (group,)
+
+        captured = []
+        trainer = InfoSkillTrainer(
+            collector=_FixedCollector(),  # type: ignore[arg-type]
+            runtime=_Runtime(),  # type: ignore[arg-type]
+            schedule=TaskSchedule((task,), master_seed=0),
+            task_groups_per_update=1,
+            rollouts_per_task=3,
+            master_seed=0,
+            auxiliary_enabled=False,
+            on_update=lambda update, groups: captured.append(update.values),
+        )
+
+        trainer.fit(max_updates=1, evaluate_at_start=False)
+
+        metrics = captured[0]
+        self.assertEqual(metrics["rollout/successful_trajectories"], 1.0)
+        self.assertEqual(metrics["rollout/failed_trajectories"], 2.0)
+        self.assertAlmostEqual(metrics["rollout/mean_steps"], 7 / 3)
+        self.assertEqual(metrics["rollout/mean_steps_successful"], 2.0)
+        self.assertEqual(metrics["rollout/mean_steps_failed"], 2.5)
+        self.assertAlmostEqual(metrics["rollout/horizon_exhaustion_rate"], 1 / 3)
 
     def test_auxiliary_receives_success_only_target(self) -> None:
         task = TaskSpec("task", "train", "kind", "goal")

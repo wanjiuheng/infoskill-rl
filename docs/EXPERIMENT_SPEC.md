@@ -307,6 +307,10 @@ _Avoid_: PPO critic semantics、token-count-weighted reasoning、public ppo nami
 M0/M1 正式强化学习共同使用 ALFWorld `train` 中全部 3,553 个可运行 TextWorld 游戏，按游戏等概率进行带种子的 shuffle/sampling，并记录抽样顺序以支持成对比较。223 条轨迹只定义固定技能库的来源，不限制 RL 任务范围；`valid_seen` 的 140 条游戏只用于正式评测，绝不进入训练或 grounding 数据生成。按六类任务均衡重采样只作为显式消融，不属于默认主实验。
 _Avoid_: skill-source-only RL subset、validation training、silent task balancing
 
+**Training Rollout Step Monitor**:
+每个完成的 train update 必须在 `metrics.jsonl` 记录全部、成功、失败 rollout 的数量与平均环境步数，以及达到 rollout horizon 的比例，并原子刷新 `training_rollout_steps_curve.svg`。没有成功或失败样本的分组均值在图中视为缺失而不是零；命名 resume fork 接续源 run 中不晚于恢复 checkpoint 的历史 train 指标。该曲线是随任务组成变化的诊断量，只用于观察效率、失败长轨迹和触顶趋势；效果主判断仍使用固定 140 条 `valid_seen` 的 Macro success，其次 Overall success。监控解析或落盘失败必须降级为 warning，不能中止训练或阻止 checkpoint 提交。
+_Avoid_: step-length reward shaping、missing partition as zero、training curve as validation efficacy
+
 **Step-Relative Optimization**:
 按环境步骤构造相对优势的 GiGPO/step-relative 变体，只作为后续可选实验与消融项，不属于 M0/M1 默认算法。
 _Avoid_: default GRPO semantics、silent replacement of episodic advantage
