@@ -295,6 +295,10 @@ Inductor policy 三个 runtime 字段不同。独立 eager 为 37/140，Macro/Ov
 桥点；step 0/25/50 的 batch-12 曲线与后续 batch-64 曲线不得无标记地视为完全同协议序列。
 训练算法、训练 batch、rollout batch 和 checkpoint 内容不因该评测 batch 变更而改变。最终关键
 checkpoint 仍至少重复评测两次，并按 Macro success 首排、Overall success 次排汇总。
+`evaluation_manifest.execution_mode` 是同一评测性能协议的派生身份字段。旧 step-50 checkpoint
+创建时尚无该字段，因此只有显式命名且开启 performance-candidate 兼容的 fork 可以增加或更改它；
+无名字的原地 resume 仍要求该字段完全一致。这样允许已批准的 eager → CUDA Graph 协议桥，又不
+放宽模型、数据、训练算法或原地恢复门。
 
 ## D027：长时正式分叉采用最近 5 个、当前最佳和最终 checkpoint 的有界保留
 

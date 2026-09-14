@@ -49,6 +49,68 @@ class ResumeRunDirectoryTests(unittest.TestCase):
 
         self.assertEqual(source_gpus, 3)
 
+    def test_named_fork_may_add_cuda_graph_evaluation_execution_mode(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "evaluation_manifest": {
+                "split": "valid_seen",
+                "task_count": 140,
+                "sha256": "same",
+                "eval_batch_size": 12,
+                "comparison_role": "nonregistered_monitoring_curve",
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "evaluation_manifest": {
+                "split": "valid_seen",
+                "task_count": 140,
+                "sha256": "same",
+                "eval_batch_size": 64,
+                "comparison_role": "nonregistered_monitoring_curve",
+                "execution_mode": "cuda_graph",
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=True,
+                allow_performance_candidate_change=True,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
+    def test_in_place_resume_rejects_changed_evaluation_execution_mode(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "evaluation_manifest": {
+                "split": "valid_seen",
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "evaluation_manifest": {
+                "split": "valid_seen",
+                "execution_mode": "cuda_graph",
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_in_place_resume_rejects_changed_monitoring_eval_batch_size(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
         previous = {

@@ -414,6 +414,9 @@ checkpoint 使用两次 Graph 汇总，降低独立 runtime 数值扰动经 gree
 batch 64 第二轮单独对比偏高的 batch 12 第二轮时严格门返回失败，但按预先声明的两轮平均
 效果规则通过。后续 M1 命名分叉的周期评测采用 `EVAL_BATCH_SIZE=64`；step 50 作为 batch 12
 到 batch 64 的协议桥，曲线和报告必须标记该边界。训练 batch、rollout batch 与训练算法不变。
+旧 step-50 resolved config 尚未记录后来新增的 `evaluation_manifest.execution_mode`；命名性能
+分叉现在把该字段与 eval batch/CUDA Graph 开关一并视为允许变化，但无名字的原地 resume 仍严格
+拒绝执行模式变化。
 
 后续从 step 50 新建的 M1 formal 分叉采用有界 checkpoint 策略：最近 5 个、当前
 `best-valid` 和最终 checkpoint，重合项只保存一份。该策略必须以

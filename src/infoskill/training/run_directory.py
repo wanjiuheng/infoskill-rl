@@ -174,6 +174,7 @@ def _without_performance_candidates(
         normalized_manifest = dict(evaluation_manifest)
         normalized_manifest.pop("eval_batch_size", None)
         normalized_manifest.pop("comparison_role", None)
+        normalized_manifest.pop("execution_mode", None)
         normalized["evaluation_manifest"] = normalized_manifest
     runtime_options = normalized.get("runtime_options")
     if not isinstance(runtime_options, Mapping):
