@@ -49,6 +49,39 @@ class InfoSkillOptimizationEfficacyTests(unittest.TestCase):
         self.assertFalse(report["control_checks"]["same_evaluation_protocol"])
         self.assertFalse(report["passed"])
 
+    def test_eval_batch_size_difference_can_be_explicitly_controlled(self) -> None:
+        with TemporaryDirectory() as temporary:
+            baseline, candidate = self._runs(Path(temporary))
+            self._write_summary(baseline, macro=0.25, overall=0.30)
+            self._write_summary(candidate, macro=0.26, overall=0.31)
+            resolved = self._read(candidate / "resolved_config.json")
+            resolved["eval_batch_size"] = 64
+            resolved["app_config"] = {"eval_batch_size": 64}
+            resolved["evaluation_manifest"] = {"eval_batch_size": 64}
+            runtime = resolved["evaluation_runtime"]
+            assert isinstance(runtime, dict)
+            runtime["eval_batch_size"] = 64
+            self._write(candidate / "resolved_config.json", resolved)
+            baseline_resolved = self._read(baseline / "resolved_config.json")
+            baseline_resolved["app_config"] = {"eval_batch_size": 8}
+            baseline_resolved["evaluation_manifest"] = {"eval_batch_size": 8}
+            baseline_runtime = baseline_resolved["evaluation_runtime"]
+            assert isinstance(baseline_runtime, dict)
+            baseline_runtime["eval_batch_size"] = 8
+            self._write(baseline / "resolved_config.json", baseline_resolved)
+            self._make_checkpoints_identical(baseline, candidate)
+
+            report = compare_evaluations(
+                baseline,
+                candidate,
+                allow_eval_batch_size_difference=True,
+                require_same_checkpoint=True,
+            )
+
+        self.assertTrue(report["control_checks"]["same_evaluation_protocol"])
+        self.assertTrue(report["allow_eval_batch_size_difference"])
+        self.assertTrue(report["passed"])
+
     def test_graph_execution_fields_require_an_explicit_allowlist(self) -> None:
         with TemporaryDirectory() as temporary:
             baseline, candidate = self._runs(Path(temporary))

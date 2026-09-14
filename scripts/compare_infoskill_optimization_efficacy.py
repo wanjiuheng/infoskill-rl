@@ -22,6 +22,7 @@ def compare_evaluations(
     expected_task_count: int = 140,
     equality_tolerance: float = 1e-12,
     allowed_runtime_differences: tuple[str, ...] = (),
+    allow_eval_batch_size_difference: bool = False,
     require_same_checkpoint: bool = False,
 ) -> dict[str, object]:
     baseline_summary = _read_json(baseline / "valid_seen_summary.json")
@@ -52,10 +53,16 @@ def compare_evaluations(
             _without_checkpoint(
                 baseline_resolved,
                 allowed_runtime_differences=allowed_runtime_differences,
+                allow_eval_batch_size_difference=(
+                    allow_eval_batch_size_difference
+                ),
             )
             == _without_checkpoint(
                 candidate_resolved,
                 allowed_runtime_differences=allowed_runtime_differences,
+                allow_eval_batch_size_difference=(
+                    allow_eval_batch_size_difference
+                ),
             )
         ),
         "both_checkpoints_loaded": (
@@ -115,6 +122,7 @@ def compare_evaluations(
         "schema_version": 1,
         "decision_rule": "macro_success_primary_overall_success_secondary",
         "allowed_runtime_differences": list(allowed_runtime_differences),
+        "allow_eval_batch_size_difference": allow_eval_batch_size_difference,
         "require_same_checkpoint": require_same_checkpoint,
         "control_checks": controls,
         "controls_valid": controls_valid,
@@ -155,12 +163,23 @@ def _without_checkpoint(
     payload: dict[str, object],
     *,
     allowed_runtime_differences: tuple[str, ...] = (),
+    allow_eval_batch_size_difference: bool = False,
 ) -> dict[str, object]:
     normalized = json.loads(json.dumps(payload))
+    if allow_eval_batch_size_difference:
+        normalized.pop("eval_batch_size", None)
+        app_config = normalized.get("app_config")
+        if isinstance(app_config, dict):
+            app_config.pop("eval_batch_size", None)
+        evaluation_manifest = normalized.get("evaluation_manifest")
+        if isinstance(evaluation_manifest, dict):
+            evaluation_manifest.pop("eval_batch_size", None)
     runtime = normalized.get("evaluation_runtime")
     if isinstance(runtime, dict):
         runtime.pop("checkpoint_step", None)
         runtime.pop("policy_checkpoint", None)
+        if allow_eval_batch_size_difference:
+            runtime.pop("eval_batch_size", None)
         for field in allowed_runtime_differences:
             runtime.pop(field, None)
     return normalized
@@ -226,6 +245,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--allow-eval-batch-size-difference",
+        action="store_true",
+        help=(
+            "allow only the recorded evaluation batch size to differ while "
+            "keeping every other evaluation protocol field identical"
+        ),
+    )
+    parser.add_argument(
         "--require-same-checkpoint",
         action="store_true",
         help="require both evaluations to load the exact same checkpoint path",
@@ -236,6 +263,9 @@ def main() -> int:
         args.candidate,
         expected_task_count=args.expected_task_count,
         allowed_runtime_differences=tuple(args.allowed_runtime_difference),
+        allow_eval_batch_size_difference=(
+            args.allow_eval_batch_size_difference
+        ),
         require_same_checkpoint=args.require_same_checkpoint,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
