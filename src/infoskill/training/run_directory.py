@@ -154,6 +154,8 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
             True if historical_graph else None,
         )
         normalized_options.setdefault("fuse_kl_ppo_forward", False)
+        normalized_options.setdefault("checkpoint_keep_recent", 2)
+        normalized_options.setdefault("checkpoint_keep_best_valid", False)
         normalized["runtime_options"] = normalized_options
     return normalized
 
@@ -162,6 +164,17 @@ def _without_performance_candidates(
     config: Mapping[str, object],
 ) -> dict[str, object]:
     normalized = dict(config)
+    app_config = normalized.get("app_config")
+    if isinstance(app_config, Mapping):
+        normalized_app = dict(app_config)
+        normalized_app.pop("eval_batch_size", None)
+        normalized["app_config"] = normalized_app
+    evaluation_manifest = normalized.get("evaluation_manifest")
+    if isinstance(evaluation_manifest, Mapping):
+        normalized_manifest = dict(evaluation_manifest)
+        normalized_manifest.pop("eval_batch_size", None)
+        normalized_manifest.pop("comparison_role", None)
+        normalized["evaluation_manifest"] = normalized_manifest
     runtime_options = normalized.get("runtime_options")
     if not isinstance(runtime_options, Mapping):
         return normalized
@@ -172,6 +185,10 @@ def _without_performance_candidates(
     normalized_options.pop("hybrid_prefix_cuda_graph_custom_kernels", None)
     normalized_options.pop("hybrid_prefix_cuda_graph_use_inductor", None)
     normalized_options.pop("fuse_kl_ppo_forward", None)
+    # A named fork owns a new checkpoint directory, so its local retention
+    # policy may change without mutating the source run. In-place resume may not.
+    normalized_options.pop("checkpoint_keep_recent", None)
+    normalized_options.pop("checkpoint_keep_best_valid", None)
     normalized["runtime_options"] = normalized_options
     return normalized
 

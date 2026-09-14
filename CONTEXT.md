@@ -415,6 +415,13 @@ batch 64 第二轮单独对比偏高的 batch 12 第二轮时严格门返回失�
 效果规则通过。后续 M1 命名分叉的周期评测采用 `EVAL_BATCH_SIZE=64`；step 50 作为 batch 12
 到 batch 64 的协议桥，曲线和报告必须标记该边界。训练 batch、rollout batch 与训练算法不变。
 
+后续从 step 50 新建的 M1 formal 分叉采用有界 checkpoint 策略：最近 5 个、当前
+`best-valid` 和最终 checkpoint，重合项只保存一份。该策略必须以
+`CHECKPOINT_KEEP_RECENT=5`、`CHECKPOINT_KEEP_BEST_VALID=1` 显式开启；旧 run 默认和原地恢复
+继续沿用原规则。轮换只删除当前新 run 内已完整提交的标准 checkpoint，并在删除前后分别
+`fsync` delete-intent/deleted 到 `checkpoints/retention-audit.jsonl`，源 step-50 及其他 run
+不在清理范围。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

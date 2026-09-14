@@ -127,7 +127,7 @@ _Avoid_: one-group-only routine trace、single monolithic log、external-logger-
 _Avoid_: routine full-vocabulary logits、silent trace loss、mid-update recovery dependency
 
 **Checkpoint Retention and Resume**:
-每 5 个完成的 optimizer update 原子保存一次完整恢复 checkpoint，并只轮换保留最近 2 个；它包含 LoRA、INFO-SKILL 模块、两个优化器与调度器、随机状态、task sampler 顺序与游标、已消费任务标识、update 计数和 resolved config，但不复制冻结的 Qwen 基座或语义编码器权重。update 0、每 25 个 update 和最终 update 445 另永久保留轻量评测 checkpoint，只含可移植 LoRA/INFO-SKILL 权重、配置、来源 manifest 和指标；`best-valid` 与 `last` 用 manifest 引用已有 checkpoint，不重复复制权重。默认恢复粒度是已完整提交的 update 边界：进程在 update 中途失败时丢弃不完整轨迹，从最近完整恢复点确定性重做，因此通常最多重算 4 个已完成但尚未形成恢复 checkpoint 的 update；轻量评测 checkpoint 可用于评测或分支初始化，但不承诺恢复原优化器轨迹。磁盘低于 10GB 时在安全边界写入不参与轮换的紧急完整 checkpoint 后停止。
+每 5 个完成的 optimizer update 原子保存一次完整恢复 checkpoint；它包含 LoRA、INFO-SKILL 模块、两个优化器与调度器、随机状态、task sampler 顺序与游标、已消费任务标识、update 计数和 resolved config，但不复制冻结的 Qwen 基座或语义编码器权重。历史默认保留最近 2 个，并永久保留 update 0、每 25 个 update 和最终 update。空间受限的长时正式运行必须显式设置 `checkpoint_keep_recent=5` 与 `checkpoint_keep_best_valid=true`：此时每 25 update 的普通评测 checkpoint 不再全部永久保留，保留集合改为最近 5 个、当前 `best-valid` 和最终 checkpoint；三者重合时只保留一份。`best-valid` 仍按 Macro success、Overall success、非法动作率和更早 update 的注册顺序选择，不复制权重。每次自动删除仅允许作用于当前 run 的 `checkpoints/step-NNNNNN` 已提交直接子目录，并追加 `retention-audit.jsonl`；命名分叉不得删除源 checkpoint。默认恢复粒度是已完整提交的 update 边界：进程在 update 中途失败时丢弃不完整轨迹，从最近完整恢复点确定性重做，因此通常最多重算 4 个已完成但尚未形成恢复 checkpoint 的 update。磁盘低于 10GB 时在安全边界写入不参与轮换的紧急完整 checkpoint 后停止。
 _Avoid_: base-weight duplication、evaluation-only resume、partial-update commit、best-checkpoint copy
 
 **Authoritative Portable Resume Format**:

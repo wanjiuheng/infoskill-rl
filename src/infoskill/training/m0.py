@@ -23,6 +23,7 @@ from infoskill.evaluation import (
     EvaluationRunner,
     inherit_forked_checkpoint_selection,
     load_checkpoint_scores,
+    select_best_valid,
     write_checkpoint_selection,
     write_valid_seen_learning_curve,
 )
@@ -68,6 +69,8 @@ def run_m0_training(
     rollout_max_batched_tokens: int = 16_384,
     hybrid_prefix_cuda_graph: bool = False,
     fuse_kl_ppo_forward: bool = False,
+    checkpoint_keep_recent: int = 2,
+    checkpoint_keep_best_valid: bool = False,
     segment_end_update: int | None = None,
 ) -> int:
     """Backward-compatible entry point for the token-only M0 baseline."""
@@ -91,6 +94,8 @@ def run_m0_training(
         rollout_max_batched_tokens=rollout_max_batched_tokens,
         hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
         fuse_kl_ppo_forward=fuse_kl_ppo_forward,
+        checkpoint_keep_recent=checkpoint_keep_recent,
+        checkpoint_keep_best_valid=checkpoint_keep_best_valid,
     )
 
 
@@ -114,6 +119,8 @@ def run_policy_training(
     hybrid_prefix_cuda_graph: bool = False,
     fuse_kl_ppo_forward: bool = False,
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
+    checkpoint_keep_recent: int = 2,
+    checkpoint_keep_best_valid: bool = False,
     segment_end_update: int | None = None,
 ) -> int:
     """Run one registered policy mode through the pinned VERL runtime."""
@@ -128,6 +135,8 @@ def run_policy_training(
         raise ValueError("infoskill training requires paths.grounding_data")
     if segment_end_update is not None and segment_end_update <= 0:
         raise ValueError("segment_end_update must be positive")
+    if checkpoint_keep_recent <= 0:
+        raise ValueError("checkpoint_keep_recent must be positive")
 
     if config.paths.policy_adapter is not None:
         raise ValueError(
@@ -327,6 +336,8 @@ def run_policy_training(
                 False if hybrid_prefix_cuda_graph else None
             ),
             "fuse_kl_ppo_forward": fuse_kl_ppo_forward,
+            "checkpoint_keep_recent": checkpoint_keep_recent,
+            "checkpoint_keep_best_valid": checkpoint_keep_best_valid,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
             "infoskill_auxiliary_micro_batch_size": (
                 8 if mode is SkillMode.INFO_SKILL else None
@@ -373,7 +384,7 @@ def run_policy_training(
     )
     checkpoints = CheckpointManager(
         run_directory / "checkpoints",
-        keep_recent=2,
+        keep_recent=checkpoint_keep_recent,
     )
     restored = (
         checkpoints.load_trainer_state(checkpoint_to_load)
@@ -406,6 +417,15 @@ def run_policy_training(
         "invocation": {
             "segment_start_update": initial_global_update,
             "segment_end_update": segment_end_update,
+        },
+        "checkpoint_retention": {
+            "schema_version": 1,
+            "keep_recent": checkpoint_keep_recent,
+            "keep_best_valid": checkpoint_keep_best_valid,
+            "preserve_every_evaluation_milestone": (
+                not checkpoint_keep_best_valid
+            ),
+            "always_preserve_final": True,
         },
         "evaluation_protocol": (
             {
@@ -641,9 +661,11 @@ def run_policy_training(
                 resolved_config=resolved,
                 provenance=provenance,
                 permanent=(
-                    update == 0
-                    or update == plan.max_updates
-                    or update % 25 == 0
+                    _checkpoint_is_permanent(
+                        update=update,
+                        max_updates=plan.max_updates,
+                        keep_best_valid=checkpoint_keep_best_valid,
+                    )
                 ),
             )
             logger.info("Committed checkpoint: %s", path)
@@ -693,6 +715,8 @@ def run_policy_training(
             metrics=metrics,
             logger=logger,
             checkpoint=checkpoint,
+            checkpoint_manager=checkpoints,
+            keep_best_valid=checkpoint_keep_best_valid,
             schedule=schedule,
         )
 
@@ -838,6 +862,8 @@ def _evaluation_callback(
     metrics: MetricLogger,
     logger: logging.Logger,
     checkpoint,
+    checkpoint_manager: CheckpointManager,
+    keep_best_valid: bool,
     schedule: TaskSchedule,
 ):
     if plan.evaluation_kind == "none":
@@ -854,6 +880,12 @@ def _evaluation_callback(
         selection_path,
         expected_manifest_sha256=task_manifest_sha256_value,
     )
+    if keep_best_valid:
+        _sync_best_valid_checkpoint(
+            checkpoint_manager=checkpoint_manager,
+            run_directory=run_directory,
+            scores=valid_scores,
+        )
     monitoring_only = config.eval_batch_size != 8
     if valid_scores:
         write_valid_seen_learning_curve(
@@ -946,6 +978,12 @@ def _evaluation_callback(
                 else "registered_batch8"
             ),
         )
+        if keep_best_valid:
+            _sync_best_valid_checkpoint(
+                checkpoint_manager=checkpoint_manager,
+                run_directory=run_directory,
+                scores=valid_scores,
+            )
         write_valid_seen_learning_curve(
             curve_path,
             scores=valid_scores,
@@ -963,6 +1001,53 @@ def _evaluation_callback(
             checkpoint(0, schedule)
 
     return evaluate
+
+
+def _checkpoint_is_permanent(
+    *,
+    update: int,
+    max_updates: int,
+    keep_best_valid: bool,
+) -> bool:
+    return (
+        update == 0
+        or update == max_updates
+        or (not keep_best_valid and update % 25 == 0)
+    )
+
+
+def _sync_best_valid_checkpoint(
+    *,
+    checkpoint_manager: CheckpointManager,
+    run_directory: Path,
+    scores: Sequence[EvaluationCheckpointScore],
+) -> None:
+    if not scores:
+        checkpoint_manager.set_best_checkpoint(None)
+        return
+    best = select_best_valid(scores)
+    checkpoint_path = Path(
+        best.checkpoint or f"checkpoints/step-{best.step:06d}"
+    )
+    if not checkpoint_path.is_absolute():
+        checkpoint_path = (run_directory / checkpoint_path).resolve()
+    else:
+        checkpoint_path = checkpoint_path.resolve()
+    if checkpoint_path.parent != checkpoint_manager.root:
+        # Forked selection history may point at the immutable source run. The
+        # destination manager must never delete or relabel source checkpoints.
+        checkpoint_manager.set_best_checkpoint(None)
+        return
+    if not checkpoint_path.is_dir():
+        if best.step == 0:
+            # Fresh update-0 evaluation is written before its permanent
+            # checkpoint. There is no retention gap because step 0 is permanent.
+            checkpoint_manager.set_best_checkpoint(None)
+            return
+        raise RuntimeError(
+            f"best valid checkpoint is missing from the active run: {checkpoint_path}"
+        )
+    checkpoint_manager.set_best_checkpoint(checkpoint_path)
 
 
 def _require_finite_metrics(values: Mapping[str, float]) -> None:

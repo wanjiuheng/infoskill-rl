@@ -12,6 +12,116 @@ from infoskill.training.run_directory import (
 
 
 class ResumeRunDirectoryTests(unittest.TestCase):
+    def test_named_fork_may_change_monitoring_eval_batch_size(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "app_config": {"eval_batch_size": 12},
+            "evaluation_manifest": {
+                "split": "valid_seen",
+                "task_count": 140,
+                "task_manifest_sha256": "same",
+                "eval_batch_size": 12,
+                "comparison_role": "monitoring_only",
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "app_config": {"eval_batch_size": 64},
+            "evaluation_manifest": {
+                "split": "valid_seen",
+                "task_count": 140,
+                "task_manifest_sha256": "same",
+                "eval_batch_size": 64,
+                "comparison_role": "monitoring_only",
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=True,
+                allow_performance_candidate_change=True,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
+    def test_in_place_resume_rejects_changed_monitoring_eval_batch_size(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "app_config": {"eval_batch_size": 12},
+        }
+        current = {
+            "num_gpus": 3,
+            "app_config": {"eval_batch_size": 64},
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
+    def test_named_fork_may_adopt_bounded_checkpoint_retention(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {"persistent_rollout_session": True},
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "persistent_rollout_session": True,
+                "checkpoint_keep_recent": 5,
+                "checkpoint_keep_best_valid": True,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=True,
+                allow_performance_candidate_change=True,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
+    def test_in_place_resume_rejects_changed_checkpoint_retention(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {"persistent_rollout_session": True},
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "persistent_rollout_session": True,
+                "checkpoint_keep_recent": 5,
+                "checkpoint_keep_best_valid": True,
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_fork_may_change_only_registered_performance_candidates(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
         previous = {

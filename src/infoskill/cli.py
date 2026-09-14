@@ -346,6 +346,21 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--checkpoint-keep-recent",
+        type=int,
+        default=2,
+        help="number of recent non-final checkpoints retained in the active run",
+    )
+    train.add_argument(
+        "--checkpoint-keep-best-valid",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "protect the current best valid_seen checkpoint instead of preserving "
+            "every periodic evaluation milestone"
+        ),
+    )
+    train.add_argument(
         "--grounding-data",
         help=(
             "override paths.grounding_data for infoskill training without "
@@ -465,6 +480,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         )
     if args.cuda_memory_poll_interval_ms < 0:
         raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
+    if args.checkpoint_keep_recent <= 0:
+        raise ValueError("checkpoint_keep_recent must be positive")
     minimum_token_budget = config.max_prompt_tokens + config.max_response_tokens
     if args.policy_max_tokens_per_gpu < minimum_token_budget:
         raise ValueError(
@@ -566,6 +583,10 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "segment_end_update": args.segment_end_update,
+                    "checkpoint_keep_recent": args.checkpoint_keep_recent,
+                    "checkpoint_keep_best_valid": (
+                        args.checkpoint_keep_best_valid
+                    ),
                     "dry_run": True,
                 },
                 ensure_ascii=False,
@@ -601,6 +622,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
         fuse_kl_ppo_forward=args.fuse_kl_ppo_forward,
         raw_skill_prompt_format=args.raw_skill_prompt_format,
+        checkpoint_keep_recent=args.checkpoint_keep_recent,
+        checkpoint_keep_best_valid=args.checkpoint_keep_best_valid,
     )
 
 

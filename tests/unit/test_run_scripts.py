@@ -5,6 +5,26 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_step50_formal_fork_recipe_is_complete(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        bringup = (project_root / "docs" / "SERVER_BRINGUP.md").read_text(
+            encoding="utf-8"
+        )
+        marker = "## M1 step-50 正式分叉：CUDA Graph、batch 64 和有界 checkpoint"
+        self.assertIn(marker, bringup)
+        recipe = bringup.split(marker, 1)[1].split("\n## ", 1)[0]
+
+        self.assertIn("checkpoints/step-000050", recipe)
+        self.assertIn('RESUME="$SOURCE"', recipe)
+        self.assertIn("EVAL_BATCH_SIZE=64", recipe)
+        self.assertIn("HYBRID_PREFIX_CUDA_GRAPH=1", recipe)
+        self.assertIn("CHECKPOINT_KEEP_RECENT=5", recipe)
+        self.assertIn("CHECKPOINT_KEEP_BEST_VALID=1", recipe)
+        self.assertIn(
+            "RUN_NAME=m1-infoskill-formal-s50-cudagraph-b64-retained",
+            recipe,
+        )
+
     def test_training_executes_python_so_background_pid_receives_pause_signal(
         self,
     ) -> None:
@@ -47,6 +67,27 @@ class RunScriptTests(unittest.TestCase):
             'TRAIN_ARGS+=(--eval-batch-size "${EVAL_BATCH_SIZE}")',
             train_case,
         )
+
+    def test_training_forwards_checkpoint_retention_policy(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+
+        self.assertIn(
+            'CHECKPOINT_KEEP_RECENT="${CHECKPOINT_KEEP_RECENT:-2}"',
+            script,
+        )
+        self.assertIn(
+            'CHECKPOINT_KEEP_BEST_VALID="${CHECKPOINT_KEEP_BEST_VALID:-0}"',
+            script,
+        )
+        self.assertIn(
+            '--checkpoint-keep-recent "${CHECKPOINT_KEEP_RECENT}"',
+            train_case,
+        )
+        self.assertIn("--checkpoint-keep-best-valid", train_case)
 
     def test_deep_m1_candidates_are_default_off_and_forwarded(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

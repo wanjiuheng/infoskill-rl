@@ -195,6 +195,77 @@ echo "ARCHIVE=$ARCHIVE"
 ls -lh "$ARCHIVE"
 ```
 
+## M1 step-50 正式分叉：CUDA Graph、batch 64 和有界 checkpoint
+
+这是从已暂停的 step 50 建立新命名分叉的当前推荐命令。它保留源 run 不变，仅在新 run 中启用
+已经通过重复效果门的修正 CUDA Graph、batch-64 周期评测，以及“最近 5 个 + 当前
+best-valid + 最终 checkpoint”的有界保留。命名分叉允许改变这些已登记的性能/存储设置；同一
+run 原地 resume 仍会拒绝配置变化。
+
+风险：命令会长期独占 3 张 GPU；新 run 的轮换器会自动删除它自己目录中超出保留集合的已提交
+checkpoint，但绝不会删除 `SOURCE` 所在的旧 run。一般从 update 0 开始的 run 最坏保留 8 份
+（最近 5 + 独立 best + update 0 + final）；当前从 step 50 分叉不会复制 update 0，最坏为 7 份。
+按 551 MiB/份约 3.8 GiB，并需额外预留一次临时提交空间。下面在磁盘不足 15 GiB 或锁定 Python
+缺少 `sentence-transformers` 时会拒绝启动。
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+git pull origin main
+
+PYTHON=/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python
+SOURCE="$PWD/runs/20260912T215748Z-m1-infoskill-formal-u445-batch12-monitor/checkpoints/step-000050"
+GROUNDING="$PWD/runs/20260912T153809Z-m1-grounding-formal-rescued-finalized"
+
+"$PYTHON" -c 'import sentence_transformers; print(sentence_transformers.__version__)'
+[[ -f "$SOURCE/checkpoint.complete.json" ]] || {
+  echo "step-50 checkpoint 不完整，拒绝启动"
+  exit 1
+}
+FREE_BYTES=$(df -B1 --output=avail /root/autodl-tmp | tail -n 1 | tr -d ' ')
+if (( FREE_BYTES < 15 * 1024 * 1024 * 1024 )); then
+  echo "可用磁盘不足 15 GiB，拒绝启动"
+  df -h /root/autodl-tmp
+  exit 1
+fi
+nvidia-smi --query-gpu=index,memory.total,memory.used,memory.free \
+  --format=csv,noheader,nounits
+
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-infoskill-formal-s50-cudagraph-b64-retained-${STAMP}.log"
+
+nohup env \
+  PATH="$(dirname "$PYTHON"):$PATH" \
+  GROUNDING_DATA="$GROUNDING" \
+  GPUS=0,1,2 \
+  PROFILE=formal \
+  RESUME="$SOURCE" \
+  EVAL_BATCH_SIZE=64 \
+  HYBRID_PREFIX_CUDA_GRAPH=1 \
+  SKIP_UNUSED_OLD_LOGPROB_ENTROPY=0 \
+  ROLLOUT_MAX_BATCHED_TOKENS=16384 \
+  FUSE_KL_PPO_FORWARD=0 \
+  PERSISTENT_ROLLOUT_SESSION=1 \
+  ENVIRONMENT_BACKEND=native_batch \
+  ENVIRONMENT_WORKERS=1 \
+  POLICY_MAX_TOKENS_PER_GPU=12288 \
+  BALANCE_POLICY_TOKENS_ACROSS_RANKS=1 \
+  CUDA_MEMORY_POLL_INTERVAL_MS=1000 \
+  CHECKPOINT_KEEP_RECENT=5 \
+  CHECKPOINT_KEEP_BEST_VALID=1 \
+  INFO_SKILL_CPU_THREADS=1 \
+  RUN_NAME=m1-infoskill-formal-s50-cudagraph-b64-retained \
+  bash scripts/run_alfworld.sh train infoskill \
+  >"$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" >"${LOG}.pid"
+disown "$PID"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
 ## M1 445-update：batch-12 周期监控、实时曲线和安全暂停
 
 下面的正式训练只启动一个 run。它不会额外先跑独立 update-0；训练器自身在 update 0、25、

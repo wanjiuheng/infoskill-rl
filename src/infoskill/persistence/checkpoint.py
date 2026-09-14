@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Protocol
 
@@ -96,10 +98,27 @@ class CheckpointManager:
             raise ValueError("keep_recent must be positive")
         if minimum_free_bytes < 0:
             raise ValueError("minimum_free_bytes cannot be negative")
-        self.root = Path(root)
+        self.root = Path(root).expanduser().resolve()
         self.keep_recent = keep_recent
         self.minimum_free_bytes = minimum_free_bytes
+        self._best_checkpoint: Path | None = None
         self.root.mkdir(parents=True, exist_ok=True)
+
+    def set_best_checkpoint(self, path: str | Path | None) -> None:
+        """Protect one committed checkpoint in this manager's own directory."""
+
+        if path is None:
+            self._best_checkpoint = None
+            self._rotate_recent()
+            return
+        checkpoint = Path(path).expanduser().resolve()
+        if checkpoint.parent != self.root:
+            raise ValueError(
+                "best checkpoint must be a direct child of the managed checkpoint root"
+            )
+        self.validate(checkpoint)
+        self._best_checkpoint = checkpoint
+        self._rotate_recent()
 
     def save(
         self,
@@ -142,7 +161,7 @@ class CheckpointManager:
         }
         _write_json(temporary / "checkpoint.complete.json", completion)
         os.replace(temporary, destination)
-        if not (permanent or emergency):
+        if not emergency:
             self._rotate_recent()
         if emergency:
             raise RuntimeError(
@@ -171,16 +190,85 @@ class CheckpointManager:
         )
 
     def _rotate_recent(self) -> None:
-        recent = []
+        recent: list[tuple[int, Path]] = []
         for directory in self.root.glob("step-[0-9]*"):
+            resolved = directory.resolve()
+            if resolved.parent != self.root:
+                raise RuntimeError(
+                    f"refusing to rotate a checkpoint outside the managed root: {directory}"
+                )
             completion = directory / "checkpoint.complete.json"
             if not completion.is_file():
                 continue
             payload = json.loads(completion.read_text(encoding="utf-8"))
             if not payload.get("permanent", False):
                 recent.append((int(payload["global_update"]), directory))
-        for _, directory in sorted(recent)[: -self.keep_recent]:
+        recent.sort(key=lambda item: item[0])
+        retained = {
+            directory.resolve()
+            for _, directory in recent[-self.keep_recent :]
+        }
+        if self._best_checkpoint is not None:
+            if self._best_checkpoint.is_dir():
+                retained.add(self._best_checkpoint)
+            else:
+                self._best_checkpoint = None
+        for update, directory in recent:
+            if directory.resolve() in retained:
+                continue
+            self._validate_rotation_target(directory)
+            self._append_retention_audit(
+                event="checkpoint_delete_intent",
+                checkpoint=directory.name,
+                global_update=update,
+            )
             shutil.rmtree(directory)
+            self._append_retention_audit(
+                event="checkpoint_deleted",
+                checkpoint=directory.name,
+                global_update=update,
+            )
+
+    def _validate_rotation_target(self, directory: Path) -> None:
+        resolved = directory.resolve()
+        if resolved.parent != self.root:
+            raise RuntimeError(
+                f"refusing to delete a checkpoint outside the managed root: {directory}"
+            )
+        if re.fullmatch(r"step-[0-9]{6}", directory.name) is None:
+            raise RuntimeError(
+                f"refusing to delete an unsafe checkpoint path: {directory}"
+            )
+        self.validate(directory)
+
+    def _append_retention_audit(
+        self,
+        *,
+        event: str,
+        checkpoint: str,
+        global_update: int,
+    ) -> None:
+        payload = {
+            "schema_version": 1,
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+            "checkpoint": checkpoint,
+            "global_update": global_update,
+            "reason": "outside_recent_and_best",
+            "keep_recent": self.keep_recent,
+            "best_checkpoint": (
+                self._best_checkpoint.name
+                if self._best_checkpoint is not None
+                else None
+            ),
+        }
+        audit_path = self.root / "retention-audit.jsonl"
+        with audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+            )
+            handle.flush()
+            os.fsync(handle.fileno())
 
 
 def _write_json(path: Path, payload: object) -> None:

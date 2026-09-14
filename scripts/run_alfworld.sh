@@ -18,6 +18,10 @@ PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark 
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
 SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"
+# Legacy default is recent 2 plus every evaluation milestone. Set 5/1 for the
+# bounded formal policy: recent 5 + current best valid_seen + final checkpoint.
+CHECKPOINT_KEEP_RECENT="${CHECKPOINT_KEEP_RECENT:-2}"
+CHECKPOINT_KEEP_BEST_VALID="${CHECKPOINT_KEEP_BEST_VALID:-0}"
 GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
 # Short-lived process boundary for TextWorld/Fast Downward resource cleanup.
 GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
@@ -129,6 +133,14 @@ if [[ ! "${POLICY_MAX_TOKENS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ -n "${SEGMENT_END_UPDATE}" && ! "${SEGMENT_END_UPDATE}" =~ ^[1-9][0-9]*$ ]]; then
   echo "SEGMENT_END_UPDATE must be empty or a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${CHECKPOINT_KEEP_RECENT}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CHECKPOINT_KEEP_RECENT must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${CHECKPOINT_KEEP_BEST_VALID}" != "0" && "${CHECKPOINT_KEEP_BEST_VALID}" != "1" ]]; then
+  echo "CHECKPOINT_KEEP_BEST_VALID must be 0 or 1" >&2
   exit 2
 fi
 if [[ "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" != "0" && "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" != "1" ]]; then
@@ -556,6 +568,7 @@ case "${ACTION}" in
       --cuda-memory-poll-interval-ms "${CUDA_MEMORY_POLL_INTERVAL_MS}"
       --policy-max-tokens-per-gpu "${POLICY_MAX_TOKENS_PER_GPU}"
       --rollout-max-batched-tokens "${ROLLOUT_MAX_BATCHED_TOKENS}"
+      --checkpoint-keep-recent "${CHECKPOINT_KEEP_RECENT}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
       TRAIN_ARGS+=(--max-updates "${MAX_UPDATES}")
@@ -593,6 +606,10 @@ case "${ACTION}" in
     case "${FUSE_KL_PPO_FORWARD}" in
       0) TRAIN_ARGS+=(--no-fuse-kl-ppo-forward) ;;
       1) TRAIN_ARGS+=(--fuse-kl-ppo-forward) ;;
+    esac
+    case "${CHECKPOINT_KEEP_BEST_VALID}" in
+      0) TRAIN_ARGS+=(--no-checkpoint-keep-best-valid) ;;
+      1) TRAIN_ARGS+=(--checkpoint-keep-best-valid) ;;
     esac
     case "${PERSISTENT_ROLLOUT_SESSION}" in
       1) TRAIN_ARGS+=(--persistent-rollout-session) ;;

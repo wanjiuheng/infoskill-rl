@@ -295,3 +295,20 @@ Inductor policy 三个 runtime 字段不同。独立 eager 为 37/140，Macro/Ov
 桥点；step 0/25/50 的 batch-12 曲线与后续 batch-64 曲线不得无标记地视为完全同协议序列。
 训练算法、训练 batch、rollout batch 和 checkpoint 内容不因该评测 batch 变更而改变。最终关键
 checkpoint 仍至少重复评测两次，并按 Macro success 首排、Overall success 次排汇总。
+
+## D027：长时正式分叉采用最近 5 个、当前最佳和最终 checkpoint 的有界保留
+
+从 step 50 启动的新 M1 formal 命名分叉显式采用 `CHECKPOINT_KEEP_RECENT=5` 与
+`CHECKPOINT_KEEP_BEST_VALID=1`。历史默认仍是最近 2 个加每 25 update 永久 checkpoint，保证
+旧 run 原地恢复语义不变；新策略只作用于新 run 自己的 checkpoint 目录，不修改作为恢复起点的
+源 step 50。启用后，普通周期 checkpoint 的保留集合是最近 5 个与当前 `best-valid` 的并集，
+最终 checkpoint 另作永久项；重合路径不复制。当前最佳沿用固定 `valid_seen` 的 Macro success
+首排、Overall success 次排、非法动作率更低再次排、较早 update 最后优先的规则。
+
+自动清理只在新 checkpoint 完成原子提交后进行，只接受当前 checkpoint 根目录的
+`step-NNNNNN` 已提交直接子目录；先把 delete-intent 追加并 `fsync` 到
+`retention-audit.jsonl`，删除完成后再追加并 `fsync` deleted 事件。外部或源 run 路径
+不能登记为本地受保护 checkpoint，更不能被轮换器删除。命名分叉可以显式更改保留策略；原地
+resume 若与原 resolved config 不同则 fail-fast。按当前约 551 MiB/checkpoint 估算，完成态最坏
+约 4.3 GiB（最近 5 + 独立最佳 + 永久 update 0 + 最终），另需预留一个原子写入中的临时
+checkpoint；这些集合若重合则实际占用更少。

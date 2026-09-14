@@ -123,6 +123,46 @@ class TrainingCliTests(unittest.TestCase):
         self.assertIsNone(default.segment_end_update)
         self.assertEqual(bounded.segment_end_update, 51)
 
+    def test_checkpoint_best_valid_retention_is_explicitly_opt_in(self) -> None:
+        default = _parser().parse_args(self._arguments())
+        bounded = _parser().parse_args(
+            self._arguments()
+            + [
+                "--checkpoint-keep-recent",
+                "5",
+                "--checkpoint-keep-best-valid",
+            ]
+        )
+
+        self.assertEqual(default.checkpoint_keep_recent, 2)
+        self.assertFalse(default.checkpoint_keep_best_valid)
+        self.assertEqual(bounded.checkpoint_keep_recent, 5)
+        self.assertTrue(bounded.checkpoint_keep_best_valid)
+
+        output = io.StringIO()
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(
+                    self._arguments()
+                    + [
+                        "--checkpoint-keep-recent",
+                        "5",
+                        "--checkpoint-keep-best-valid",
+                    ]
+                )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["checkpoint_keep_recent"], 5)
+        self.assertTrue(payload["checkpoint_keep_best_valid"])
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "checkpoint_keep_recent"):
+                main(
+                    self._arguments()
+                    + ["--checkpoint-keep-recent", "0"]
+                )
+
     def test_grounding_accepts_explicit_resume_and_inactivity_timeout(self) -> None:
         arguments = _parser().parse_args(
             [
