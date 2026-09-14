@@ -253,3 +253,25 @@ Policy 侧默认继续分别执行 reference、detached-prefix actor KL、traina
 候选采用条件是相同训练起点、相同预算和固定 valid-seen 协议下，按 Macro success 首排、Overall
 success 次排不劣，并在多 update 运行中无崩溃、显存越界或学习曲线退化。两个开关都保持默认
 关闭，只允许命名恢复分叉改变，原 formal run 的注册语义不被静默修改。
+
+## D025：修正后的 CUDA Graph 由重复效果门批准用于 M1 命名分叉
+
+2026-09-14 使用同一 step-50 portable checkpoint、同一固定 140 条 `valid_seen` manifest、
+同一 batch 12 监控协议比较独立 eager 与修正后的 CUDA Graph。比较器要求两边完整、加载同一
+checkpoint 路径和 step，并只允许 `hybrid_prefix_cuda_graph`、custom-kernel policy 与
+Inductor policy 三个 runtime 字段不同。独立 eager 为 37/140，Macro/Overall 分别为
+0.261341/0.264286；Graph 的两次独立运行分别为 30/140 和 44/140，后者为
+0.294658/0.314286 并通过效果门。两次 Graph 合计 74/280，平均 Overall 0.264286，与 eager
+一致；平均 Macro 0.253524，比单次 eager 低 0.007817。首轮低值因此不能解释为稳定的 Graph
+负效应，而应视为独立 runtime 的微小浮点差异经 greedy action 和多步环境交互放大的运行间波动。
+
+性能收益在两次 Graph 中稳定：完整评测约 26--27 分钟，而 eager 约 62.6 分钟；第二次 Graph
+相对 eager 的 rollout、generation 和总耗时分别约 2.70x、3.20x 和 2.38x，最低物理显存余量
+约 29.36 GiB。批准的执行组合固定为 Graph capture、`use_inductor=false`、
+`custom_ops=["all"]` 和 batch 12。全局默认继续为 eager；只有显式命名分叉可采用该候选，确保
+历史 run 仍可复现和回退。M1 从 step 50 恢复时只启用这一项已经通过成功率门的优化，不同时启用
+尚未完成固定验证集效果门的 fused KL/PPO、entropy skip 或 scheduler token-budget 候选。
+
+日常学习曲线允许每个评测点运行一次 Graph；关键 checkpoint 与最终报告至少运行两次 Graph 并
+汇总 Macro/Overall。单次结果仍完整保留，但小于独立 runtime 波动尺度的差异不得被解释为确定性
+模型提升或退化。eager 保留为审计基线，不再承担每个周期点的常规监控。

@@ -397,6 +397,16 @@ Graph run 的 Inductor/`custom_ops=["none"]` 语义在 resume 配置中保持可
 新候选。该修复
 仍须通过同一 step-50 的完整 140 条 Macro/Overall、稳定性、显存和吞吐门后才能恢复 formal。
 
+同一 step-50、同一 140 条 `valid_seen`、batch 12 的 checkpoint-aware 效果门现已完成。
+独立 eager 为 37/140（Macro 0.2613、Overall 0.2643、总耗时约 62.6 分钟）；修正后的
+CUDA Graph 两次独立运行分别为 30/140 和 44/140，合计 Overall 恰为 74/280 = 0.2643，
+第二次相对 eager 的 Macro/Overall 分别高 3.33/5.00 个百分点，并通过同 checkpoint、任务
+manifest、评测协议和加载状态门。Graph 总耗时稳定在约 26--27 分钟，约 2.3x，最低物理
+显存余量约 29.36 GiB。由此不再把首轮 30/140 解释为稳定的 Graph 效果损害；M1 可从
+step 50 命名分叉，显式采用 `HYBRID_PREFIX_CUDA_GRAPH=1`，但不同时混入尚未通过成功率门的
+fused KL/PPO、entropy skip 或更大 scheduler token budget。日常曲线可单次 Graph 评测，关键
+checkpoint 使用两次 Graph 汇总，降低独立 runtime 数值扰动经 greedy 多步轨迹放大的噪声。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard
