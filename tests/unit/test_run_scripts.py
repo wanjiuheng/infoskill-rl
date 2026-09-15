@@ -104,10 +104,18 @@ class RunScriptTests(unittest.TestCase):
             'FUSE_KL_PPO_FORWARD="${FUSE_KL_PPO_FORWARD:-0}"',
             script,
         )
+        self.assertIn(
+            'POLICY_GRADIENT_CLIP_MODE="${POLICY_GRADIENT_CLIP_MODE:-joint}"',
+            script,
+        )
         self.assertIn("--hybrid-prefix-cuda-graph", train_case)
         self.assertIn("--no-hybrid-prefix-cuda-graph", train_case)
         self.assertIn("--fuse-kl-ppo-forward", train_case)
         self.assertIn("--no-fuse-kl-ppo-forward", train_case)
+        self.assertIn(
+            '--policy-gradient-clip-mode "${POLICY_GRADIENT_CLIP_MODE}"',
+            train_case,
+        )
 
     def test_grouped_infoskill_conditioning_is_eval_only_and_opt_in(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

@@ -91,6 +91,9 @@ ROLLOUT_MAX_BATCHED_TOKENS="${ROLLOUT_MAX_BATCHED_TOKENS:-16384}"
 HYBRID_PREFIX_CUDA_GRAPH="${HYBRID_PREFIX_CUDA_GRAPH:-0}"
 # Default-off algorithm candidate; KL also regularizes the projector.
 FUSE_KL_PPO_FORWARD="${FUSE_KL_PPO_FORWARD:-0}"
+# Registered M1 default is one global norm.  "separate" is a named-fork-only
+# algorithm candidate for diagnosing projector-dominated clipping.
+POLICY_GRADIENT_CLIP_MODE="${POLICY_GRADIENT_CLIP_MODE:-joint}" # joint | separate
 # Validated default. Reassigns samples among ranks while preserving each
 # global GRPO minibatch's membership; set to 0 for rollback.
 BALANCE_POLICY_TOKENS_ACROSS_RANKS="${BALANCE_POLICY_TOKENS_ACROSS_RANKS:-1}"
@@ -157,6 +160,10 @@ if [[ "${HYBRID_PREFIX_CUDA_GRAPH}" != "0" && "${HYBRID_PREFIX_CUDA_GRAPH}" != "
 fi
 if [[ "${FUSE_KL_PPO_FORWARD}" != "0" && "${FUSE_KL_PPO_FORWARD}" != "1" ]]; then
   echo "FUSE_KL_PPO_FORWARD must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "${POLICY_GRADIENT_CLIP_MODE}" != "joint" && "${POLICY_GRADIENT_CLIP_MODE}" != "separate" ]]; then
+  echo "POLICY_GRADIENT_CLIP_MODE must be joint or separate" >&2
   exit 2
 fi
 if [[ "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "0" && "${BALANCE_POLICY_TOKENS_ACROSS_RANKS}" != "1" ]]; then
@@ -569,6 +576,7 @@ case "${ACTION}" in
       --policy-max-tokens-per-gpu "${POLICY_MAX_TOKENS_PER_GPU}"
       --rollout-max-batched-tokens "${ROLLOUT_MAX_BATCHED_TOKENS}"
       --checkpoint-keep-recent "${CHECKPOINT_KEEP_RECENT}"
+      --policy-gradient-clip-mode "${POLICY_GRADIENT_CLIP_MODE}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
       TRAIN_ARGS+=(--max-updates "${MAX_UPDATES}")

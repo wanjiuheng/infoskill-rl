@@ -21,6 +21,7 @@ _CANDIDATE_OPTIONS = {
     "hybrid_prefix_cuda_graph",
     "skip_unused_old_logprob_entropy",
     "rollout_max_batched_tokens",
+    "policy_gradient_clip_mode",
 }
 _CANDIDATE_MODES = (
     "combined",
@@ -28,8 +29,14 @@ _CANDIDATE_MODES = (
     "cuda-graph",
     "fused-kl-ppo",
     "deep-combined",
+    "separate-grad-clip",
 )
-_ALGORITHM_CANDIDATE_MODES = {"fused-kl-ppo", "deep-combined"}
+_ALGORITHM_CANDIDATE_MODES = {
+    "fused-kl-ppo",
+    "deep-combined",
+    "separate-grad-clip",
+}
+_FUSED_KL_PPO_MODES = {"fused-kl-ppo", "deep-combined"}
 
 
 def compare_runs(
@@ -106,6 +113,8 @@ def compare_runs(
             and baseline_options.get("hybrid_prefix_cuda_graph", False)
             is False
             and baseline_options.get("fuse_kl_ppo_forward", False) is False
+            and baseline_options.get("policy_gradient_clip_mode", "joint")
+            == "joint"
         ),
         "physical_memory_sampling_enabled": (
             _positive_int(baseline_options.get("cuda_memory_poll_interval_ms")) > 0
@@ -138,7 +147,17 @@ def compare_runs(
             and float(
                 candidate_metric.get("perf/fuse_kl_ppo_forward", 0.0)
             )
-            == float(candidate_mode in _ALGORITHM_CANDIDATE_MODES)
+            == float(candidate_mode in _FUSED_KL_PPO_MODES)
+        ),
+        "runtime_reports_expected_gradient_clip_path": (
+            float(
+                baseline_metric.get("policy/separate_gradient_clipping", 0.0)
+            )
+            == 0.0
+            and float(
+                candidate_metric.get("policy/separate_gradient_clipping", 0.0)
+            )
+            == float(candidate_mode == "separate-grad-clip")
         ),
     }
     control_checks.update(
@@ -277,7 +296,10 @@ def _candidate_option_checks(
         "deep-combined",
     }
     expected_cuda_graph = candidate_mode in {"cuda-graph", "deep-combined"}
-    expected_fused_kl_ppo = candidate_mode in _ALGORITHM_CANDIDATE_MODES
+    expected_fused_kl_ppo = candidate_mode in _FUSED_KL_PPO_MODES
+    expected_gradient_clip_mode = (
+        "separate" if candidate_mode == "separate-grad-clip" else "joint"
+    )
     if candidate_mode == "combined":
         capacity_matches_mode = candidate_capacity > baseline_capacity
     elif candidate_mode in {
@@ -285,6 +307,7 @@ def _candidate_option_checks(
         "cuda-graph",
         "fused-kl-ppo",
         "deep-combined",
+        "separate-grad-clip",
     }:
         capacity_matches_mode = candidate_capacity == baseline_capacity
     else:
@@ -302,6 +325,10 @@ def _candidate_option_checks(
         "candidate_fused_kl_ppo_matches_mode": (
             candidate.get("fuse_kl_ppo_forward", False)
             is expected_fused_kl_ppo
+        ),
+        "candidate_gradient_clip_mode_matches_mode": (
+            candidate.get("policy_gradient_clip_mode", "joint")
+            == expected_gradient_clip_mode
         ),
     }
 

@@ -73,6 +73,7 @@ class VerlRuntimeConfig:
     infoskill_projector_learning_rate: float = 1e-4
     infoskill_projector_weight_decay: float = 0.01
     infoskill_policy_warmup_ratio: float = 0.03
+    infoskill_policy_gradient_clip_mode: Literal["joint", "separate"] = "joint"
     enable_infoskill_auxiliary: bool = False
     grounding_data_path: str | None = None
     infoskill_history_length: int = 2
@@ -141,6 +142,10 @@ class VerlRuntimeConfig:
             raise ValueError("INFO-SKILL projector weight decay must be non-negative")
         if not 0 <= self.infoskill_policy_warmup_ratio <= 1:
             raise ValueError("INFO-SKILL policy warmup ratio must be in [0, 1]")
+        if self.infoskill_policy_gradient_clip_mode not in {"joint", "separate"}:
+            raise ValueError(
+                "INFO-SKILL policy gradient clip mode must be joint or separate"
+            )
         if not self.enable_infoskill_auxiliary:
             return
         if not self.grounding_data_path or not self.grounding_data_path.strip():
@@ -767,6 +772,9 @@ def _actor_config(settings: VerlRuntimeConfig):
         actor_ref.model.infoskill_total_policy_steps = settings.total_training_steps
         actor_ref.model.infoskill_projector_learning_rate = (
             settings.infoskill_projector_learning_rate
+        )
+        actor_ref.model.infoskill_policy_gradient_clip_mode = (
+            settings.infoskill_policy_gradient_clip_mode
         )
         actor_ref.model.infoskill_projector_weight_decay = (
             settings.infoskill_projector_weight_decay

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
+from typing import Literal
 
 import torch
 from torch import Tensor, nn
 
 
 class PolicyUpdateCoordinator:
-    """Apply one finite-gated, jointly clipped LoRA/projector policy step."""
+    """Apply one finite-gated, atomically stepped LoRA/projector policy update."""
 
     def __init__(
         self,
@@ -20,9 +21,12 @@ class PolicyUpdateCoordinator:
         actor_scheduler: object | None = None,
         projector_scheduler: object | None = None,
         max_grad_norm: float = 1.0,
+        gradient_clip_mode: Literal["joint", "separate"] = "joint",
     ) -> None:
         if max_grad_norm <= 0:
             raise ValueError("max_grad_norm must be positive")
+        if gradient_clip_mode not in {"joint", "separate"}:
+            raise ValueError("gradient_clip_mode must be joint or separate")
         self.actor_parameters = _unique_trainable(actor_parameters)
         self.projector_parameters = _unique_trainable(projector_parameters)
         if not self.actor_parameters or not self.projector_parameters:
@@ -40,6 +44,7 @@ class PolicyUpdateCoordinator:
         self.actor_scheduler = actor_scheduler
         self.projector_scheduler = projector_scheduler
         self.max_grad_norm = float(max_grad_norm)
+        self.gradient_clip_mode = gradient_clip_mode
 
     def zero_grad(self) -> None:
         self.actor_optimizer.zero_grad(set_to_none=True)
@@ -69,15 +74,37 @@ class PolicyUpdateCoordinator:
                 "policy/projector_grad_norm_before_clip": float(projector_norm.item()),
                 "policy/combined_grad_norm_before_clip": float(combined.item()),
                 "policy/clip_coefficient": 0.0,
+                "policy/joint_clip_coefficient": 0.0,
+                "policy/actor_clip_coefficient": 0.0,
+                "policy/projector_clip_coefficient": 0.0,
+                "policy/actor_grad_norm_after_clip": 0.0,
+                "policy/projector_grad_norm_after_clip": 0.0,
+                "policy/projector_to_actor_grad_norm_ratio": float("nan"),
+                "policy/separate_gradient_clipping": float(
+                    self.gradient_clip_mode == "separate"
+                ),
                 "policy/optimizer_step_applied": 0.0,
                 "policy/optimizer_skip_nonfinite": 1.0,
             }
 
+        actor_norm_value = float(actor_norm.item())
+        projector_norm_value = float(projector_norm.item())
         norm_value = float(combined.item())
-        coefficient = min(1.0, self.max_grad_norm / (norm_value + 1e-6))
-        if coefficient < 1.0:
-            _scale_gradients(self.actor_parameters, coefficient)
-            _scale_gradients(self.projector_parameters, coefficient)
+        joint_coefficient = _clip_coefficient(norm_value, self.max_grad_norm)
+        if self.gradient_clip_mode == "separate":
+            actor_coefficient = _clip_coefficient(
+                actor_norm_value, self.max_grad_norm
+            )
+            projector_coefficient = _clip_coefficient(
+                projector_norm_value, self.max_grad_norm
+            )
+        else:
+            actor_coefficient = joint_coefficient
+            projector_coefficient = joint_coefficient
+        if actor_coefficient < 1.0:
+            _scale_gradients(self.actor_parameters, actor_coefficient)
+        if projector_coefficient < 1.0:
+            _scale_gradients(self.projector_parameters, projector_coefficient)
         self.actor_optimizer.step()
         self.projector_optimizer.step()
         _step_scheduler(self.actor_scheduler)
@@ -87,7 +114,28 @@ class PolicyUpdateCoordinator:
             "policy/actor_grad_norm_before_clip": float(actor_norm.item()),
             "policy/projector_grad_norm_before_clip": float(projector_norm.item()),
             "policy/combined_grad_norm_before_clip": norm_value,
-            "policy/clip_coefficient": coefficient,
+            # Preserve the historical scalar as the most restrictive actual
+            # coefficient while exposing the two policy domains explicitly.
+            "policy/clip_coefficient": min(
+                actor_coefficient, projector_coefficient
+            ),
+            "policy/joint_clip_coefficient": joint_coefficient,
+            "policy/actor_clip_coefficient": actor_coefficient,
+            "policy/projector_clip_coefficient": projector_coefficient,
+            "policy/actor_grad_norm_after_clip": (
+                actor_norm_value * actor_coefficient
+            ),
+            "policy/projector_grad_norm_after_clip": (
+                projector_norm_value * projector_coefficient
+            ),
+            "policy/projector_to_actor_grad_norm_ratio": (
+                projector_norm_value / actor_norm_value
+                if actor_norm_value > 0
+                else float("inf")
+            ),
+            "policy/separate_gradient_clipping": float(
+                self.gradient_clip_mode == "separate"
+            ),
             "policy/optimizer_step_applied": 1.0,
             "policy/optimizer_skip_nonfinite": 0.0,
         }
@@ -137,6 +185,10 @@ def _scale_gradients(parameters: tuple[nn.Parameter, ...], coefficient: float) -
     for parameter in parameters:
         if parameter.grad is not None:
             parameter.grad.mul_(coefficient)
+
+
+def _clip_coefficient(norm: float, maximum: float) -> float:
+    return min(1.0, maximum / (norm + 1e-6))
 
 
 def _step_scheduler(scheduler: object | None) -> None:

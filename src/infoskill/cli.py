@@ -430,6 +430,15 @@ def _parser() -> argparse.ArgumentParser:
             "forward for KL; KL then also regularizes the projector"
         ),
     )
+    train.add_argument(
+        "--policy-gradient-clip-mode",
+        choices=("joint", "separate"),
+        default="joint",
+        help=(
+            "M1 policy-gradient clipping domain; joint is the registered "
+            "default and separate is an explicit plateau-diagnosis candidate"
+        ),
+    )
     train.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -506,6 +515,13 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
             "fuse_kl_ppo_forward is registered only for infoskill"
         )
     if (
+        args.policy_gradient_clip_mode != "joint"
+        and mode is not SkillMode.INFO_SKILL
+    ):
+        raise ValueError(
+            "separate policy gradient clipping is registered only for infoskill"
+        )
+    if (
         args.rollout_max_batched_tokens != 16_384
         and mode is not SkillMode.INFO_SKILL
     ):
@@ -580,6 +596,9 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                         False if args.hybrid_prefix_cuda_graph else None
                     ),
                     "fuse_kl_ppo_forward": args.fuse_kl_ppo_forward,
+                    "policy_gradient_clip_mode": (
+                        args.policy_gradient_clip_mode
+                    ),
                     "resume": args.resume,
                     "resume_forked": bool(args.resume and args.run_name),
                     "segment_end_update": args.segment_end_update,
@@ -621,6 +640,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         rollout_max_batched_tokens=args.rollout_max_batched_tokens,
         hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
         fuse_kl_ppo_forward=args.fuse_kl_ppo_forward,
+        policy_gradient_clip_mode=args.policy_gradient_clip_mode,
         raw_skill_prompt_format=args.raw_skill_prompt_format,
         checkpoint_keep_recent=args.checkpoint_keep_recent,
         checkpoint_keep_best_valid=args.checkpoint_keep_best_valid,

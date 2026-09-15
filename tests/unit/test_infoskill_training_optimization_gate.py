@@ -40,6 +40,13 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
             "hybrid_prefix_cuda_graph": False,
             "fuse_kl_ppo_forward": True,
         }
+        separate_grad_clip = {
+            "skip_unused_old_logprob_entropy": False,
+            "rollout_max_batched_tokens": 16_384,
+            "hybrid_prefix_cuda_graph": False,
+            "fuse_kl_ppo_forward": False,
+            "policy_gradient_clip_mode": "separate",
+        }
 
         self.assertTrue(
             all(
@@ -47,6 +54,15 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                     baseline,
                     entropy_only,
                     candidate_mode="entropy-only",
+                ).values()
+            )
+        )
+        self.assertTrue(
+            all(
+                _candidate_option_checks(
+                    baseline,
+                    separate_grad_clip,
+                    candidate_mode="separate-grad-clip",
                 ).values()
             )
         )
@@ -95,6 +111,7 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                 "rollout_max_batched_tokens": 16_384,
                 "hybrid_prefix_cuda_graph": False,
                 "fuse_kl_ppo_forward": False,
+                "policy_gradient_clip_mode": "joint",
                 "policy_max_tokens_per_gpu": 12_288,
             },
         }
@@ -105,6 +122,7 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                 "rollout_max_batched_tokens": 32_768,
                 "hybrid_prefix_cuda_graph": True,
                 "fuse_kl_ppo_forward": True,
+                "policy_gradient_clip_mode": "separate",
                 "policy_max_tokens_per_gpu": 12_288,
             },
         }
@@ -294,6 +312,41 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                     candidate_mode="fused-kl-ppo",
                 )
 
+            self._write_json(
+                candidate / "resolved_config.json",
+                {
+                    **common_resolved,
+                    "runtime_options": {
+                        **common_resolved["runtime_options"],
+                        "skip_unused_old_logprob_entropy": False,
+                        "rollout_max_batched_tokens": 16_384,
+                        "hybrid_prefix_cuda_graph": False,
+                        "fuse_kl_ppo_forward": False,
+                        "policy_gradient_clip_mode": "separate",
+                    },
+                },
+            )
+            self._write_metric(
+                candidate,
+                core=70.0,
+                entropy_skipped=0.0,
+                separate_grad_clip=1.0,
+            )
+            with (
+                patch.object(gate, "_read_training_trace", return_value=[]),
+                patch.object(gate, "compare_records", return_value=parity),
+                patch.object(
+                    gate,
+                    "_compare_checkpoints",
+                    return_value=changed_checkpoint,
+                ),
+            ):
+                separate_clip_report = gate.compare_runs(
+                    baseline,
+                    candidate,
+                    candidate_mode="separate-grad-clip",
+                )
+
         self.assertTrue(report["passed"])
         self.assertTrue(report["safe_to_continue_candidate"])
         self.assertEqual(report["core_speedup"], 1.25)
@@ -310,6 +363,10 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
         self.assertTrue(algorithm_report["performance_comparison_valid"])
         self.assertFalse(algorithm_report["equivalent_optimization_passed"])
         self.assertFalse(algorithm_report["safe_to_continue_candidate"])
+        self.assertTrue(separate_clip_report["settings_valid"])
+        self.assertTrue(separate_clip_report["algorithm_change_requested"])
+        self.assertTrue(separate_clip_report["efficacy_gate_required"])
+        self.assertFalse(separate_clip_report["safe_to_continue_candidate"])
 
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
@@ -326,6 +383,7 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
         entropy_skipped: float,
         cuda_graph: float = 0.0,
         fused_kl_ppo: float = 0.0,
+        separate_grad_clip: float = 0.0,
     ) -> None:
         cls._write_json(
             run / "metrics.jsonl",
@@ -339,6 +397,7 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                 "perf/old_logprob_entropy_skipped": entropy_skipped,
                 "perf/hybrid_prefix_cuda_graph": cuda_graph,
                 "perf/fuse_kl_ppo_forward": fused_kl_ppo,
+                "policy/separate_gradient_clipping": separate_grad_clip,
                 "runtime/training_sample_count": 100.0,
                 "rollout/mean_steps": 20.0,
                 "perf/cuda/policy_physical_min_free_gb_min": 12.0,

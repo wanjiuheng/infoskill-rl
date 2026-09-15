@@ -3,7 +3,7 @@ from __future__ import annotations
 import itertools
 import time
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Literal, cast
 
 import torch
 from torch import Tensor, nn
@@ -110,6 +110,14 @@ def build_infoskill_policy_actor_class():
                 actor_optimizer=actor_optimizer,
                 projector_optimizer=projector_optimizer,
                 max_grad_norm=float(self.config.grad_clip),
+                gradient_clip_mode=cast(
+                    Literal["joint", "separate"],
+                    str(
+                        self.config.get(
+                            "infoskill_policy_gradient_clip_mode", "joint"
+                        )
+                    ),
+                ),
             )
             self.infoskill_actor_scheduler = actor_scheduler
             self.infoskill_projector_scheduler = projector_scheduler

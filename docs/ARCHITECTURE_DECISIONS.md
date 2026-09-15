@@ -343,3 +343,28 @@ checkpoint 原地恢复时，把更高 update 的旧索引及对应压缩 trace 
 checkpoint selection；由于每个 update 的 train 任务组成不同，它不能替代固定 valid_seen 曲线。
 曲线作为旁路监控必须故障隔离：解析或写入异常只记录带堆栈 warning，不能越过训练回调阻止
 checkpoint 提交。
+
+## D029：M1 平台期先用独立梯度裁剪做单变量因果诊断
+
+截至 formal update 190，训练记录连续、optimizer 每步执行且没有 NaN/Inf；固定 valid-seen 的
+batch-64/CUDA-Graph Macro success 在 update 75/100/125/150/175 分别约为
+`0.276/0.279/0.283/0.299/0.279`。这说明 M1 并非从未学习，而是在早期提升后进入高噪声平台期。
+训练组信号同时暴露两个限制：约 58% 的任务组只有非法动作 shaping 差异而没有成功/失败差异；
+`pick_two_obj_and_place` 约 95% 的组没有 Task-Success Fidelity Target。后期 projector policy
+gradient norm 又经常远大于 LoRA actor norm，在现有合并范数裁剪下，两边会乘同一个很小系数。
+这些相关性不足以直接证明因果，因此不得原地修改 formal run。
+
+新增 `POLICY_GRADIENT_CLIP_MODE=separate` 作为默认关闭的命名分叉候选。它保留同一个 backward、
+有限值门、两个 optimizer 的原子 step 和 scheduler 计数，只把 `max_grad_norm=1.0` 分别应用于
+LoRA actor 与 soft-prefix projector，并记录 joint/actor/projector 三个候选系数、裁剪前后范数和
+projector/actor 比值。历史及正式默认仍为 `joint`；无名字的原地 resume 禁止改变该字段，只有
+显式命名 fork 可变更。
+
+诊断从同一已提交 checkpoint 启动 joint control 与 separate candidate。第一阶段各运行一个完全
+相同的 update，要求来源、任务、rollout trace、old logprob、显存安全和新指标均有效；checkpoint
+不同是算法候选的预期结果，只触发效果门而不算工程失败。第二阶段在门禁通过后各运行 5 个 update，
+用相同 batch-64、修正 CUDA Graph、固定 140 条 valid-seen 评测。Macro success 首排、Overall
+success 次排：候选 Macro 至少高 3 个百分点且 Overall 不下降才可继续；差值在正负 3 个百分点内
+先重复关键 checkpoint，候选更差则回退 joint。只有裁剪 A/B 不能改善平台时，才依次测试
+success-only/mask-shaping-only 的 reward 信号候选、partial-group curriculum 与两物体任务专项采样；
+这些变量不得和梯度裁剪同时首次启用。

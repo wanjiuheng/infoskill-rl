@@ -101,6 +101,7 @@ def run_m0_training(
     rollout_max_batched_tokens: int = 16_384,
     hybrid_prefix_cuda_graph: bool = False,
     fuse_kl_ppo_forward: bool = False,
+    policy_gradient_clip_mode: Literal["joint", "separate"] = "joint",
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
     segment_end_update: int | None = None,
@@ -126,6 +127,7 @@ def run_m0_training(
         rollout_max_batched_tokens=rollout_max_batched_tokens,
         hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
         fuse_kl_ppo_forward=fuse_kl_ppo_forward,
+        policy_gradient_clip_mode=policy_gradient_clip_mode,
         checkpoint_keep_recent=checkpoint_keep_recent,
         checkpoint_keep_best_valid=checkpoint_keep_best_valid,
     )
@@ -150,6 +152,7 @@ def run_policy_training(
     rollout_max_batched_tokens: int = 16_384,
     hybrid_prefix_cuda_graph: bool = False,
     fuse_kl_ppo_forward: bool = False,
+    policy_gradient_clip_mode: Literal["joint", "separate"] = "joint",
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
@@ -210,6 +213,13 @@ def run_policy_training(
     if fuse_kl_ppo_forward and mode is not SkillMode.INFO_SKILL:
         raise ValueError(
             "fuse_kl_ppo_forward is registered only for infoskill"
+        )
+    if (
+        policy_gradient_clip_mode != "joint"
+        and mode is not SkillMode.INFO_SKILL
+    ):
+        raise ValueError(
+            "separate policy gradient clipping is registered only for infoskill"
         )
     if (
         rollout_max_batched_tokens != 16_384
@@ -368,6 +378,7 @@ def run_policy_training(
                 False if hybrid_prefix_cuda_graph else None
             ),
             "fuse_kl_ppo_forward": fuse_kl_ppo_forward,
+            "policy_gradient_clip_mode": policy_gradient_clip_mode,
             "checkpoint_keep_recent": checkpoint_keep_recent,
             "checkpoint_keep_best_valid": checkpoint_keep_best_valid,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
@@ -552,6 +563,7 @@ def run_policy_training(
             rollout_max_batched_tokens=rollout_max_batched_tokens,
             hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
             fuse_kl_ppo_forward=fuse_kl_ppo_forward,
+            infoskill_policy_gradient_clip_mode=policy_gradient_clip_mode,
             balance_policy_tokens_across_ranks=(
                 balance_policy_tokens_across_ranks
             ),

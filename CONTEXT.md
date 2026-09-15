@@ -443,6 +443,15 @@ update/value 提示。命名分叉会从源 `metrics.jsonl` 接续历史曲线�
 组成会变化；固定 140 条 `valid_seen` 的 Macro/Overall 曲线仍是效果判断依据。
 图表读取或原子写入失败只记录 warning，不得阻断后续训练或 checkpoint 提交。
 
+M1 formal 的 update 75--175 固定 batch-64/CUDA-Graph Macro success 只在约
+0.276--0.299 间波动；截至 update 190 训练连续、optimizer 正常、无 NaN/Inf，所以当前问题定义为
+“早期提升后的学习平台”，不是训练失效。约 58% task groups 只有 shaping 信号，双物体任务约
+95% 没有成功差异；同时后期 projector policy gradient 常显著大于 LoRA actor gradient。当前新增
+默认关闭的 `POLICY_GRADIENT_CLIP_MODE=separate` 命名分叉候选，用同一 checkpoint 的 joint A/B
+验证共同裁剪是否压制 actor。它保持共享 finite gate 与两个 optimizer 原子 step，只分开裁剪域并
+增加可观测指标。未经固定 140 条 Macro/Overall 效果门，不得用于继续 formal 或与 reward/curriculum
+改动混跑。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

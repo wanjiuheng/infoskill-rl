@@ -39,9 +39,64 @@ class PolicyUpdateCoordinatorTests(unittest.TestCase):
         self.assertAlmostEqual(projector.item(), 19.2, delta=1e-6)
         self.assertAlmostEqual(metrics["policy/combined_grad_norm_before_clip"], 5.0)
         self.assertAlmostEqual(metrics["policy/clip_coefficient"], 0.2, places=6)
+        self.assertAlmostEqual(
+            metrics["policy/actor_clip_coefficient"], 0.2, places=6
+        )
+        self.assertAlmostEqual(
+            metrics["policy/projector_clip_coefficient"], 0.2, places=6
+        )
+        self.assertEqual(metrics["policy/separate_gradient_clipping"], 0.0)
         self.assertEqual(metrics["policy/optimizer_step_applied"], 1.0)
         self.assertEqual(actor_scheduler.last_epoch, 1)
         self.assertEqual(projector_scheduler.last_epoch, 1)
+
+    def test_separate_mode_clips_each_policy_domain_without_partial_step(self) -> None:
+        from infoskill.learning import PolicyUpdateCoordinator
+
+        actor = torch.nn.Parameter(torch.tensor([10.0]))
+        projector = torch.nn.Parameter(torch.tensor([20.0]))
+        actor.grad = torch.tensor([0.25])
+        projector.grad = torch.tensor([4.0])
+        actor_optimizer = torch.optim.SGD([actor], lr=1.0)
+        projector_optimizer = torch.optim.SGD([projector], lr=1.0)
+        coordinator = PolicyUpdateCoordinator(
+            actor_parameters=(actor,),
+            projector_parameters=(projector,),
+            actor_optimizer=actor_optimizer,
+            projector_optimizer=projector_optimizer,
+            max_grad_norm=1.0,
+            gradient_clip_mode="separate",
+        )
+
+        metrics = coordinator.step(actor_global_grad_norm=torch.tensor(0.25))
+
+        self.assertAlmostEqual(actor.item(), 9.75, places=6)
+        self.assertAlmostEqual(projector.item(), 19.0, places=5)
+        self.assertEqual(metrics["policy/actor_clip_coefficient"], 1.0)
+        self.assertAlmostEqual(
+            metrics["policy/projector_clip_coefficient"], 0.25, places=5
+        )
+        self.assertAlmostEqual(
+            metrics["policy/joint_clip_coefficient"],
+            1.0 / ((0.25**2 + 4.0**2) ** 0.5 + 1e-6),
+            places=6,
+        )
+        self.assertEqual(metrics["policy/separate_gradient_clipping"], 1.0)
+        self.assertEqual(metrics["policy/optimizer_step_applied"], 1.0)
+
+    def test_rejects_unknown_gradient_clip_mode(self) -> None:
+        from infoskill.learning import PolicyUpdateCoordinator
+
+        actor = torch.nn.Parameter(torch.tensor([1.0]))
+        projector = torch.nn.Parameter(torch.tensor([1.0]))
+        with self.assertRaisesRegex(ValueError, "gradient_clip_mode"):
+            PolicyUpdateCoordinator(
+                actor_parameters=(actor,),
+                projector_parameters=(projector,),
+                actor_optimizer=torch.optim.SGD([actor], lr=1.0),
+                projector_optimizer=torch.optim.SGD([projector], lr=1.0),
+                gradient_clip_mode="unknown",  # type: ignore[arg-type]
+            )
 
     def test_nonfinite_side_skips_both_optimizers_and_schedulers(self) -> None:
         from infoskill.learning import PolicyUpdateCoordinator

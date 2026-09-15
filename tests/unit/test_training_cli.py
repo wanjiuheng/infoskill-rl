@@ -114,6 +114,16 @@ class TrainingCliTests(unittest.TestCase):
         self.assertTrue(optimized.hybrid_prefix_cuda_graph)
         self.assertTrue(optimized.fuse_kl_ppo_forward)
 
+    def test_m1_policy_gradient_clip_candidate_is_explicitly_opt_in(self) -> None:
+        default = _parser().parse_args(self._arguments())
+        candidate = _parser().parse_args(
+            self._arguments()
+            + ["--policy-gradient-clip-mode", "separate"]
+        )
+
+        self.assertEqual(default.policy_gradient_clip_mode, "joint")
+        self.assertEqual(candidate.policy_gradient_clip_mode, "separate")
+
     def test_training_segment_end_is_an_invocation_boundary(self) -> None:
         default = _parser().parse_args(self._arguments())
         bounded = _parser().parse_args(
@@ -324,6 +334,36 @@ class TrainingCliTests(unittest.TestCase):
         self.assertTrue(payload["infoskill_auxiliary_enabled"])
         self.assertEqual(payload["infoskill_latent_mode"], "sample")
         self.assertEqual(payload["infoskill_soft_prefix_length"], 5)
+        self.assertEqual(payload["policy_gradient_clip_mode"], "joint")
+
+    def test_infoskill_separate_policy_gradient_clip_is_reported(self) -> None:
+        output = io.StringIO()
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "infoskill"
+        arguments.extend(
+            [
+                "--grounding-data",
+                "/runs/formal-grounding",
+                "--policy-gradient-clip-mode",
+                "separate",
+            ]
+        )
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["policy_gradient_clip_mode"], "separate")
+
+    def test_non_infoskill_rejects_separate_policy_gradient_clip(self) -> None:
+        with patch("pathlib.Path.exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "only for infoskill"):
+                main(
+                    self._arguments()
+                    + ["--policy-gradient-clip-mode", "separate"]
+                )
 
     def test_infoskill_training_requires_grounding_data(self) -> None:
         arguments = self._arguments()
