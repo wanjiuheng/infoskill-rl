@@ -452,6 +452,13 @@ M1 formal 的 update 75--175 固定 batch-64/CUDA-Graph Macro success 只在约
 增加可观测指标。未经固定 140 条 Macro/Overall 效果门，不得用于继续 formal 或与 reward/curriculum
 改动混跑。
 
+首轮 step-200 gradient-clip A/B 暴露了一处配置路由错误：resolved config 已登记 candidate 为
+`separate`，但 worker 构造 actor 时只传入 `actor` 子配置，而裁剪实现从该子配置读取了存放在
+`model` 下的开关，因此实际仍执行 `joint`。修复后由 worker 从 model config 显式解析并传给
+actor；运行指标必须报告 `policy/separate_gradient_clipping=1` 才承认候选真正生效。独立训练
+分叉的随机 rollout 不要求动作/token 完全相同，基础设施门改为要求 `(task_id, rollout_id)`
+工作负载完全一致；完整 trace 差异保留为诊断并强制进入固定 valid-seen 效果门。
+
 该救援首次实跑在 15 条已提交结果中救回 5 条、其余 10 条仍为 600 秒
 `expert_wall_timeout`，证明延长窗口有效，但等待全部 43 条没有实验价值。正式覆盖率仍只需
 累计救回 8 条。当前支持从仍在增长的 rescue run 读取 checksum 校验通过的 committed-shard

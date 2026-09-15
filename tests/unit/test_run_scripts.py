@@ -496,10 +496,14 @@ class RunScriptTests(unittest.TestCase):
 
         self.assertIn('run_case "${CONTROL_NAME}" joint', script)
         self.assertIn('run_case "${CANDIDATE_NAME}" separate', script)
+        self.assertIn('CONTROL_RUN="${CONTROL_RUN:-}"', script)
+        self.assertIn('reusing gradient-clip control', script)
         self.assertIn('HYBRID_PREFIX_CUDA_GRAPH=1', script)
         self.assertIn('EVAL_BATCH_SIZE=64', script)
         self.assertIn('--candidate-mode separate-grad-clip', script)
         self.assertIn('"infrastructure_gate_passed": all(checks.values())', script)
+        self.assertIn('"same_training_workload"', script)
+        self.assertIn('exit "${INFRASTRUCTURE_RC}"', script)
 
 
 if __name__ == "__main__":

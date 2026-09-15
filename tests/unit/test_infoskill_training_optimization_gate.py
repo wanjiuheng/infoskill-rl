@@ -9,12 +9,35 @@ from scripts import compare_infoskill_training_optimization_runs as gate
 from scripts.compare_infoskill_training_optimization_runs import (
     _candidate_option_checks,
     _checkpoint_step,
+    _compare_training_trace_workload,
     _compare_values,
     _without_candidate_options,
 )
 
 
 class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
+    def test_training_workload_ignores_stochastic_trajectory_content(self) -> None:
+        baseline = [
+            {"task_id": "task-b", "rollout_id": 1, "steps": ["open"]},
+            {"task_id": "task-a", "rollout_id": 0, "steps": ["look"]},
+        ]
+        candidate = [
+            {"task_id": "task-a", "rollout_id": 0, "steps": ["go north"]},
+            {"task_id": "task-b", "rollout_id": 1, "steps": ["take mug"]},
+        ]
+
+        report = _compare_training_trace_workload(baseline, candidate)
+        missing = _compare_training_trace_workload(baseline, candidate[:1])
+        duplicate = _compare_training_trace_workload(
+            baseline,
+            [candidate[0], candidate[0]],
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertTrue(report["same_trajectory_keys"])
+        self.assertFalse(missing["passed"])
+        self.assertFalse(duplicate["passed"])
+
     def test_candidate_modes_require_only_their_registered_changes(self) -> None:
         baseline = {
             "skip_unused_old_logprob_entropy": False,
@@ -274,7 +297,11 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
             parity = {"passed": True, "semantic_exact": True}
             checkpoint = {"passed": True, "all_tensors_exact": True}
             with (
-                patch.object(gate, "_read_training_trace", return_value=[]),
+                patch.object(
+                    gate,
+                    "_read_training_trace",
+                    return_value=[{"task_id": "task", "rollout_id": 0}],
+                ),
                 patch.object(gate, "compare_records", return_value=parity),
                 patch.object(gate, "_compare_checkpoints", return_value=checkpoint),
             ):
@@ -287,7 +314,11 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
             }
             changed_checkpoint = {"passed": False, "all_tensors_exact": False}
             with (
-                patch.object(gate, "_read_training_trace", return_value=[]),
+                patch.object(
+                    gate,
+                    "_read_training_trace",
+                    return_value=[{"task_id": "task", "rollout_id": 0}],
+                ),
                 patch.object(
                     gate,
                     "compare_records",
@@ -321,7 +352,11 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                 fused_kl_ppo=1.0,
             )
             with (
-                patch.object(gate, "_read_training_trace", return_value=[]),
+                patch.object(
+                    gate,
+                    "_read_training_trace",
+                    return_value=[{"task_id": "task", "rollout_id": 0}],
+                ),
                 patch.object(gate, "compare_records", return_value=parity),
                 patch.object(
                     gate,
@@ -356,7 +391,11 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
                 separate_grad_clip=1.0,
             )
             with (
-                patch.object(gate, "_read_training_trace", return_value=[]),
+                patch.object(
+                    gate,
+                    "_read_training_trace",
+                    return_value=[{"task_id": "task", "rollout_id": 0}],
+                ),
                 patch.object(gate, "compare_records", return_value=parity),
                 patch.object(
                     gate,

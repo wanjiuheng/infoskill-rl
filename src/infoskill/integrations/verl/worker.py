@@ -23,6 +23,7 @@ from infoskill.checkpoint_effect import (
     summarize_named_tensors,
 )
 from infoskill.integrations.verl.memory_metrics import PhysicalMemorySampler
+from infoskill.integrations.verl.worker_options import policy_gradient_clip_mode
 
 
 class _CoordinatedPolicySchedulers:
@@ -233,6 +234,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             projector=distributed.projector,
             projector_optimizer=distributed.projector_optimizer,
             projector_scheduler=distributed.projector_scheduler,
+            gradient_clip_mode=policy_gradient_clip_mode(self.config.model),
         )
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)

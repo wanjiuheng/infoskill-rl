@@ -368,3 +368,17 @@ success 次排：候选 Macro 至少高 3 个百分点且 Overall 不下降才�
 先重复关键 checkpoint，候选更差则回退 joint。只有裁剪 A/B 不能改善平台时，才依次测试
 success-only/mask-shaping-only 的 reward 信号候选、partial-group curriculum 与两物体任务专项采样；
 这些变量不得和梯度裁剪同时首次启用。
+
+## D030：梯度裁剪模式由 worker 显式传入，随机 A/B 只锁定工作负载身份
+
+首轮 step-200 A/B 的 resolved config 正确记录了 `separate`，但运行指标仍为
+`policy/separate_gradient_clipping=0`，actor 与 projector 也使用同一个裁剪系数。根因是开关
+注册在 VERL `model` 配置中，而自定义 actor 只接收 `actor` 子配置并从错误层级读取，静默回退
+为 `joint`。现在 worker 在构造 actor 前从 model config 解析、校验并以必填参数显式传入；默认
+仍为 `joint`，未知值 fail-fast。运行路径指标是判断候选是否真正启用的硬门。
+
+joint 与 separate 都在 rollout 完成后才改变梯度更新，因此两个独立进程的 stochastic rollout
+无需逐 token 相同，也不应把采样差异误判为裁剪实现故障。A/B 基础设施门改为要求完整且唯一的
+`(task_id, rollout_id)` 集合一致，并继续记录完整 trace/logprob 差异作为行为诊断；算法候选仍
+必须通过后续固定 140 条 valid-seen Macro/Overall 效果门。门禁脚本允许复用已完成的 joint
+control，只重跑修复后的 candidate，并保证基础设施门失败时也先生成诊断压缩包。

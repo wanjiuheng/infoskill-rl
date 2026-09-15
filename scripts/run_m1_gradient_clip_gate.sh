@@ -13,6 +13,7 @@ CONFIG="${CONFIG:-configs/alfworld_qwen25_7b.yaml}"
 MINIMUM_PHYSICAL_FREE_GB="${MINIMUM_PHYSICAL_FREE_GB:-8.0}"
 MINIMUM_FREE_DISK_GB="${MINIMUM_FREE_DISK_GB:-15}"
 RUN_NAME_PREFIX="${RUN_NAME_PREFIX:-m1-gradient-clip-gate}"
+CONTROL_RUN="${CONTROL_RUN:-}"
 
 if [[ -z "${SOURCE_CHECKPOINT}" || ! -f "${SOURCE_CHECKPOINT}/checkpoint.complete.json" ]]; then
   echo "SOURCE_CHECKPOINT must be a committed portable checkpoint" >&2
@@ -81,10 +82,18 @@ run_case() {
     bash scripts/run_alfworld.sh train infoskill
 }
 
-run_case "${CONTROL_NAME}" joint
+if [[ -n "${CONTROL_RUN}" ]]; then
+  if [[ ! -f "${CONTROL_RUN}/training_summary.json" ]]; then
+    echo "CONTROL_RUN must contain a completed one-update control run" >&2
+    exit 2
+  fi
+  echo "[INFO-SKILL] reusing gradient-clip control: ${CONTROL_RUN}"
+else
+  run_case "${CONTROL_NAME}" joint
+  CONTROL_RUN="$(find "${PROJECT_ROOT}/runs" -maxdepth 1 -type d -name "*-${CONTROL_NAME}" | sort | tail -n 1)"
+fi
 run_case "${CANDIDATE_NAME}" separate
 
-CONTROL_RUN="$(find "${PROJECT_ROOT}/runs" -maxdepth 1 -type d -name "*-${CONTROL_NAME}" | sort | tail -n 1)"
 CANDIDATE_RUN="$(find "${PROJECT_ROOT}/runs" -maxdepth 1 -type d -name "*-${CANDIDATE_NAME}" | sort | tail -n 1)"
 if [[ -z "${CONTROL_RUN}" || -z "${CANDIDATE_RUN}" ]]; then
   echo "failed to resolve gradient-clip A/B run directories" >&2
@@ -104,8 +113,9 @@ COMPARE_RC="${PIPESTATUS[0]}"
 set -e
 
 # A different post-update checkpoint is expected for an algorithm candidate.
-# The one-update gate passes only when setup, pre-update rollout parity, memory,
-# and the selected clip path are all valid; efficacy is evaluated separately.
+# Independent stochastic forks need the same scheduled task/rollout identities,
+# not identical sampled actions. Efficacy is evaluated separately.
+set +e
 "${PYTHON}" - "${GATE_REPORT}" "${COMPARE_RC}" <<'PY'
 import json
 import sys
@@ -113,7 +123,9 @@ import sys
 report = json.load(open(sys.argv[1], encoding="utf-8"))
 checks = {
     "settings_valid": report.get("settings_valid") is True,
-    "rollout_trace_exact": report.get("trace_comparison", {}).get("passed") is True,
+    "same_training_workload": (
+        report.get("trace_workload_comparison", {}).get("passed") is True
+    ),
     "physical_memory_valid": report.get("physical_memory_valid") is True,
     "algorithm_change_registered": report.get("algorithm_change_requested") is True,
     "efficacy_gate_required": report.get("efficacy_gate_required") is True,
@@ -129,11 +141,16 @@ summary = {
     "control_core_seconds": report.get("baseline_performance", {}).get("core_seconds"),
     "candidate_core_seconds": report.get("candidate_performance", {}).get("core_seconds"),
     "candidate_physical_min_free_gb": report.get("candidate_physical_min_free_gb"),
+    "rollout_trace_exact_diagnostic": (
+        report.get("trace_comparison", {}).get("passed") is True
+    ),
 }
 print(json.dumps(summary, ensure_ascii=False, indent=2))
 if not summary["infrastructure_gate_passed"]:
     raise SystemExit(2)
 PY
+INFRASTRUCTURE_RC="$?"
+set -e
 
 CONTROL_REL="${CONTROL_RUN#${PROJECT_ROOT}/}"
 CANDIDATE_REL="${CANDIDATE_RUN#${PROJECT_ROOT}/}"
@@ -151,3 +168,4 @@ echo "CONTROL_RUN=${CONTROL_RUN}"
 echo "CANDIDATE_RUN=${CANDIDATE_RUN}"
 echo "GATE_REPORT=${GATE_REPORT}"
 echo "ARCHIVE=${ARCHIVE}"
+exit "${INFRASTRUCTURE_RC}"

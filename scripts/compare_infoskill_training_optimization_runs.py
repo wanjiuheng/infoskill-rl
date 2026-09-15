@@ -167,9 +167,15 @@ def compare_runs(
         )
     )
 
+    baseline_trace = _read_training_trace(baseline, baseline_update)
+    candidate_trace = _read_training_trace(candidate, candidate_update)
+    trace_workload_comparison = _compare_training_trace_workload(
+        baseline_trace,
+        candidate_trace,
+    )
     trace_comparison = compare_records(
-        _read_training_trace(baseline, baseline_update),
-        _read_training_trace(candidate, candidate_update),
+        baseline_trace,
+        candidate_trace,
         logprob_tolerance=logprob_tolerance,
     )
     checkpoint_comparison = _compare_checkpoints(
@@ -255,6 +261,7 @@ def compare_runs(
         "diagnostic_only": True,
         "control_checks": control_checks,
         "settings_valid": settings_valid,
+        "trace_workload_comparison": trace_workload_comparison,
         "trace_comparison": trace_comparison,
         "checkpoint_comparison": checkpoint_comparison,
         "baseline_performance": baseline_performance,
@@ -428,6 +435,54 @@ def _read_training_trace(run: Path, update: int) -> list[dict]:
             for line in io.TextIOWrapper(reader, encoding="utf-8"):
                 records.append(json.loads(line))
     return records
+
+
+def _compare_training_trace_workload(
+    baseline: Sequence[Mapping[str, object]],
+    candidate: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    """Compare scheduled trajectory identities without requiring sampled parity."""
+
+    def key(record: Mapping[str, object]) -> tuple[str, int]:
+        return str(record.get("task_id", "")), int(record.get("rollout_id", -1))
+
+    baseline_keys = sorted(key(record) for record in baseline)
+    candidate_keys = sorted(key(record) for record in candidate)
+    baseline_unique = len(set(baseline_keys)) == len(baseline_keys)
+    candidate_unique = len(set(candidate_keys)) == len(candidate_keys)
+    same_keys = baseline_keys == candidate_keys
+    mismatches = [
+        {
+            "index": index,
+            "baseline": left,
+            "candidate": right,
+        }
+        for index, (left, right) in enumerate(
+            zip(baseline_keys, candidate_keys, strict=False)
+        )
+        if left != right
+    ][:20]
+    if len(baseline_keys) != len(candidate_keys) and len(mismatches) < 20:
+        mismatches.append(
+            {
+                "baseline_trajectory_count": len(baseline_keys),
+                "candidate_trajectory_count": len(candidate_keys),
+            }
+        )
+    return {
+        "passed": (
+            bool(baseline_keys)
+            and same_keys
+            and baseline_unique
+            and candidate_unique
+        ),
+        "baseline_trajectory_count": len(baseline_keys),
+        "candidate_trajectory_count": len(candidate_keys),
+        "same_trajectory_keys": same_keys,
+        "baseline_keys_unique": baseline_unique,
+        "candidate_keys_unique": candidate_unique,
+        "mismatches": mismatches,
+    }
 
 
 def _performance(metric: dict[str, object]) -> dict[str, float | None]:
