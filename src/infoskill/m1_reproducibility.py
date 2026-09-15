@@ -444,14 +444,7 @@ def _vllm_lora_b_is_zero(
         return False
     for snapshot in snapshots:
         adapters = snapshot.get("adapters")
-        if not isinstance(adapters, Mapping) or len(adapters) != 1:
-            return False
-        adapter = next(iter(adapters.values()))
-        nonzero = _nested(
-            adapter if isinstance(adapter, Mapping) else {},
-            ("summary", "partitions", "lora_b", "nonzero_count"),
-        )
-        if nonzero != 0:
+        if not isinstance(adapters, Mapping) or len(adapters) > 1:
             return False
         active_nonzero = _nested(
             snapshot,
@@ -463,6 +456,23 @@ def _vllm_lora_b_is_zero(
             ),
         )
         if active_nonzero != 0:
+            return False
+        if not adapters:
+            slots = snapshot.get("active_gpu_slots")
+            if (
+                snapshot.get("registered_adapter_ids") != []
+                or snapshot.get("active_adapter_ids") != []
+                or not isinstance(slots, Mapping)
+                or slots
+            ):
+                return False
+            continue
+        adapter = next(iter(adapters.values()))
+        nonzero = _nested(
+            adapter if isinstance(adapter, Mapping) else {},
+            ("summary", "partitions", "lora_b", "nonzero_count"),
+        )
+        if nonzero != 0:
             return False
     return True
 

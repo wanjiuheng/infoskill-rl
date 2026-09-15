@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 try:
@@ -64,6 +65,19 @@ def _vllm_lora(
                 },
             }
         },
+    }
+
+
+def _vllm_without_lora(rank: int) -> dict[str, object]:
+    return {
+        "rank": rank,
+        "registered_adapter_ids": [],
+        "active_adapter_ids": [],
+        "active_gpu_slots": {},
+        "active_gpu_slot_summary": {
+            "partitions": {"lora_b": {"nonzero_count": 0}},
+        },
+        "adapters": {},
     }
 
 
@@ -194,6 +208,55 @@ class M1ReproducibilityTests(unittest.TestCase):
             report["classification"],
             "vllm_lora_execution_nondeterminism",
         )
+
+    def test_absent_base_lora_does_not_mask_checkpoint_execution_drift(self) -> None:
+        empty = tuple(_vllm_without_lora(rank) for rank in range(2))
+        base_a = replace(
+            _sample("base-a", token=3),
+            vllm_lora_snapshots=(empty, empty, empty),
+        )
+        base_b = replace(
+            _sample("base-b", token=3),
+            vllm_lora_snapshots=(empty, empty, empty),
+        )
+        report = build_m1_reproducibility_report(
+            (
+                _sample("checkpoint-a", token=1),
+                _sample("checkpoint-b", token=2),
+                base_a,
+                base_b,
+            )
+        )
+
+        self.assertTrue(report["checks"]["base_controls_have_zero_lora_b"])
+        self.assertEqual(
+            report["classification"],
+            "vllm_lora_execution_nondeterminism",
+        )
+
+    def test_absent_base_adapter_with_active_gpu_slot_is_not_zero_control(self) -> None:
+        empty = tuple(_vllm_without_lora(rank) for rank in range(2))
+        stale = dict(_vllm_without_lora(0))
+        stale["active_gpu_slots"] = {"42": 0}
+        base_a = replace(
+            _sample("base-a", token=3),
+            vllm_lora_snapshots=((stale, empty[1]),) * 3,
+        )
+        base_b = replace(
+            _sample("base-b", token=3),
+            vllm_lora_snapshots=(empty, empty, empty),
+        )
+        report = build_m1_reproducibility_report(
+            (
+                _sample("checkpoint-a", token=1),
+                _sample("checkpoint-b", token=2),
+                base_a,
+                base_b,
+            )
+        )
+
+        self.assertFalse(report["checks"]["base_controls_have_zero_lora_b"])
+        self.assertEqual(report["classification"], "base_control_not_lora_zero")
 
 
 if __name__ == "__main__":

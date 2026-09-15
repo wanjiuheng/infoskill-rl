@@ -401,5 +401,10 @@ SHA-256、若干有界 base tensor 的精确指纹，以及每轮 token/logprob�
 分类优先寻找第一个失效边界：checkpoint load、FSDP LoRA、M1 module、FSDP→vLLM LoRA sync、
 vLLM base fingerprint、base/hybrid generation，最后才是 LoRA execution。base control 必须验证
 LoRA-B 全零，避免把随机初始化 adapter 误称为无 LoRA 对照。该诊断的非复现分类是有效结果而非
-CLI 失败；只有初始化、加载或产物写入异常才返回非零。定位完成前，梯度裁剪 A/B 的成功率结论
+CLI 失败；只有初始化、加载或产物写入异常才返回非零。无注册适配器、无活跃 ID 且无活跃 GPU
+槽位也是有效的全零 LoRA 对照；缺少适配器但仍有活跃槽位则不能通过该门。step-205 的四-runtime
+诊断离线复算后，FSDP、M1 模块、vLLM 注册适配器与活跃 GPU 槽位指纹均一致；base generation
+逐 token/logprob 精确复现，而 checkpoint 组的相同探针出现最多 27/32 个 token 的 logprob 漂移
+（最大绝对误差约 0.04289），分类为 `vllm_lora_execution_nondeterminism`。这定位到启用 LoRA
+之后的生成边界，但不单凭该探针认定 CUDA Graph 为因。定位完成前，梯度裁剪 A/B 的成功率结论
 保持暂停，正式训练也不因单次评测波动更改算法。
