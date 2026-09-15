@@ -199,7 +199,7 @@ def tensor_payload_sha256(tensors: Mapping[str, object]) -> str:
         digest.update(b"\0")
         digest.update(str(tuple(detached.shape)).encode("ascii"))
         digest.update(b"\0")
-        digest.update(detached.view(torch.uint8).numpy().tobytes())
+        digest.update(detached.reshape(-1).view(torch.uint8).numpy().tobytes())
         digest.update(b"\n")
     return digest.hexdigest()
 

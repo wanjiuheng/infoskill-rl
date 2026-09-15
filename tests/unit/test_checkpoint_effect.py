@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 try:
     import torch
@@ -37,6 +39,50 @@ def _result(request_id: str, tokens: tuple[int, ...], logprobs: tuple[float, ...
 
 
 class CheckpointEffectTests(unittest.TestCase):
+    def test_tensor_payload_hash_flattens_scalar_before_byte_view(self) -> None:
+        class ByteArray:
+            def numpy(self):
+                return self
+
+            def tobytes(self):
+                return b"scalar-bytes"
+
+        class Vector:
+            dtype = "torch.float32"
+            shape = (1,)
+
+            def view(self, _dtype):
+                return ByteArray()
+
+        class Scalar:
+            dtype = "torch.float32"
+            shape = ()
+
+            def detach(self):
+                return self
+
+            def to(self, *, device):
+                self.device = device
+                return self
+
+            def contiguous(self):
+                return self
+
+            def reshape(self, size):
+                self.reshape_size = size
+                return Vector()
+
+            def view(self, _dtype):
+                raise RuntimeError("scalar byte view is invalid")
+
+        scalar = Scalar()
+        fake_torch = SimpleNamespace(uint8=object())
+        with patch.dict("sys.modules", {"torch": fake_torch}):
+            digest = tensor_payload_sha256({"projector.temperature": scalar})
+
+        self.assertEqual(len(digest), 64)
+        self.assertEqual(scalar.reshape_size, -1)
+
     def test_probe_requests_are_deterministic_alfworld_messages(self) -> None:
         first = build_checkpoint_effect_probes(master_seed=7)
         second = build_checkpoint_effect_probes(master_seed=7)
@@ -88,6 +134,15 @@ class CheckpointEffectTests(unittest.TestCase):
             tensor_payload_sha256(source),
             tensor_payload_sha256({"y": source["x"]}),
         )
+
+    @unittest.skipUnless(torch is not None, "requires torch")
+    def test_tensor_payload_hash_accepts_scalar_module_state(self) -> None:
+        scalar = {"projector.temperature": torch.tensor(0.7)}
+
+        digest = tensor_payload_sha256(scalar)
+
+        self.assertEqual(len(digest), 64)
+        self.assertEqual(digest, tensor_payload_sha256(scalar))
 
     @unittest.skipUnless(torch is not None, "requires torch")
     def test_base_fingerprint_selection_is_bounded_and_excludes_lora(self) -> None:
