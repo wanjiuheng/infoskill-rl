@@ -12,6 +12,7 @@ from infoskill.rollout import GenerationRequest, GenerationResult, PromptLengthE
 
 from .generation_boundary import trim_vllm_padding_sentinel
 from .hybrid_prefix import build_hybrid_vllm_inputs
+from .object_array import object_array
 from .policy_replay import PolicyReplayExample, build_policy_replay_tensors
 
 
@@ -90,10 +91,10 @@ class VerlBatchCodec:
                 "raw_prompt_ids": np.array([list(item) for item in batch.raw_prompt_ids], dtype=object),
                 "request_ids": np.array([request.request_id for request in requests], dtype=object),
                 "semantic_seeds": np.array([request.seed for request in requests], dtype=np.int64),
-                "infoskill_prefix_embeds": _object_array(
+                "infoskill_prefix_embeds": object_array(
                     [item.get("infoskill_prefix_embeds") for item in vllm_inputs]
                 ),
-                "infoskill_prefix_masks": _object_array(
+                "infoskill_prefix_masks": object_array(
                     [item.get("infoskill_prefix_mask") for item in vllm_inputs]
                 ),
             },
@@ -224,9 +225,3 @@ class VerlBatchCodec:
         if len(token_ids) >= maximum:
             return "length"
         return "stop"
-
-
-def _object_array(values: Sequence[object]) -> np.ndarray:
-    result = np.empty(len(values), dtype=object)
-    result[:] = list(values)
-    return result
