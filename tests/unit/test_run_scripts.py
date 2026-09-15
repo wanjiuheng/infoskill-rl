@@ -488,6 +488,19 @@ class RunScriptTests(unittest.TestCase):
             script,
         )
 
+    def test_m1_gradient_clip_gate_runs_control_and_candidate_sequentially(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_m1_gradient_clip_gate.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('run_case "${CONTROL_NAME}" joint', script)
+        self.assertIn('run_case "${CANDIDATE_NAME}" separate', script)
+        self.assertIn('HYBRID_PREFIX_CUDA_GRAPH=1', script)
+        self.assertIn('EVAL_BATCH_SIZE=64', script)
+        self.assertIn('--candidate-mode separate-grad-clip', script)
+        self.assertIn('"infrastructure_gate_passed": all(checks.values())', script)
+
 
 if __name__ == "__main__":
     unittest.main()

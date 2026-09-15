@@ -105,49 +105,48 @@ def compare_runs(
             _checkpoint_committed(baseline, baseline_update)
             and _checkpoint_committed(candidate, candidate_update)
         ),
-        "baseline_registered_defaults": (
-            baseline_options.get("skip_unused_old_logprob_entropy", False)
-            is False
-            and baseline_options.get("rollout_max_batched_tokens", 16_384)
-            == 16_384
-            and baseline_options.get("hybrid_prefix_cuda_graph", False)
-            is False
-            and baseline_options.get("fuse_kl_ppo_forward", False) is False
-            and baseline_options.get("policy_gradient_clip_mode", "joint")
-            == "joint"
+        "baseline_registered_defaults": _baseline_options_match_gate(
+            baseline_options,
+            candidate_mode=candidate_mode,
         ),
         "physical_memory_sampling_enabled": (
             _positive_int(baseline_options.get("cuda_memory_poll_interval_ms")) > 0
             and baseline_options.get("cuda_memory_poll_interval_ms")
             == candidate_options.get("cuda_memory_poll_interval_ms")
         ),
-        "runtime_reports_expected_entropy_paths": (
-            float(baseline_metric.get("perf/old_logprob_entropy_skipped", 0.0))
-            == 0.0
-            and float(candidate_metric.get("perf/old_logprob_entropy_skipped", 0.0))
-            == float(
+        "runtime_reports_expected_entropy_paths": _runtime_flag_paths_match_gate(
+            baseline_metric,
+            candidate_metric,
+            baseline_options,
+            candidate_options,
+            metric_name="perf/old_logprob_entropy_skipped",
+            option_name="skip_unused_old_logprob_entropy",
+            legacy_candidate_expected=(
                 candidate_mode in {"combined", "entropy-only", "deep-combined"}
-            )
+            ),
+            candidate_mode=candidate_mode,
         ),
-        "runtime_reports_expected_cuda_graph_path": (
-            float(
-                baseline_metric.get("perf/hybrid_prefix_cuda_graph", 0.0)
-            )
-            == 0.0
-            and float(
-                candidate_metric.get("perf/hybrid_prefix_cuda_graph", 0.0)
-            )
-            == float(candidate_mode in {"cuda-graph", "deep-combined"})
+        "runtime_reports_expected_cuda_graph_path": _runtime_flag_paths_match_gate(
+            baseline_metric,
+            candidate_metric,
+            baseline_options,
+            candidate_options,
+            metric_name="perf/hybrid_prefix_cuda_graph",
+            option_name="hybrid_prefix_cuda_graph",
+            legacy_candidate_expected=(
+                candidate_mode in {"cuda-graph", "deep-combined"}
+            ),
+            candidate_mode=candidate_mode,
         ),
-        "runtime_reports_expected_kl_ppo_path": (
-            float(
-                baseline_metric.get("perf/fuse_kl_ppo_forward", 0.0)
-            )
-            == 0.0
-            and float(
-                candidate_metric.get("perf/fuse_kl_ppo_forward", 0.0)
-            )
-            == float(candidate_mode in _FUSED_KL_PPO_MODES)
+        "runtime_reports_expected_kl_ppo_path": _runtime_flag_paths_match_gate(
+            baseline_metric,
+            candidate_metric,
+            baseline_options,
+            candidate_options,
+            metric_name="perf/fuse_kl_ppo_forward",
+            option_name="fuse_kl_ppo_forward",
+            legacy_candidate_expected=(candidate_mode in _FUSED_KL_PPO_MODES),
+            candidate_mode=candidate_mode,
         ),
         "runtime_reports_expected_gradient_clip_path": (
             float(
@@ -290,13 +289,24 @@ def _candidate_option_checks(
         baseline.get("rollout_max_batched_tokens", 16_384)
     )
     candidate_capacity = _positive_int(candidate.get("rollout_max_batched_tokens"))
-    expected_entropy = candidate_mode in {
-        "combined",
-        "entropy-only",
-        "deep-combined",
-    }
-    expected_cuda_graph = candidate_mode in {"cuda-graph", "deep-combined"}
-    expected_fused_kl_ppo = candidate_mode in _FUSED_KL_PPO_MODES
+    if candidate_mode == "separate-grad-clip":
+        expected_entropy = bool(
+            baseline.get("skip_unused_old_logprob_entropy", False)
+        )
+        expected_cuda_graph = bool(
+            baseline.get("hybrid_prefix_cuda_graph", False)
+        )
+        expected_fused_kl_ppo = bool(
+            baseline.get("fuse_kl_ppo_forward", False)
+        )
+    else:
+        expected_entropy = candidate_mode in {
+            "combined",
+            "entropy-only",
+            "deep-combined",
+        }
+        expected_cuda_graph = candidate_mode in {"cuda-graph", "deep-combined"}
+        expected_fused_kl_ppo = candidate_mode in _FUSED_KL_PPO_MODES
     expected_gradient_clip_mode = (
         "separate" if candidate_mode == "separate-grad-clip" else "joint"
     )
@@ -331,6 +341,49 @@ def _candidate_option_checks(
             == expected_gradient_clip_mode
         ),
     }
+
+
+def _baseline_options_match_gate(
+    options: Mapping[str, object],
+    *,
+    candidate_mode: str,
+) -> bool:
+    if candidate_mode == "separate-grad-clip":
+        # The clip A/B is allowed to start from the already-approved runtime
+        # execution settings.  Only the historical joint clip is mandatory.
+        return options.get("policy_gradient_clip_mode", "joint") == "joint"
+    return (
+        options.get("skip_unused_old_logprob_entropy", False) is False
+        and options.get("rollout_max_batched_tokens", 16_384) == 16_384
+        and options.get("hybrid_prefix_cuda_graph", False) is False
+        and options.get("fuse_kl_ppo_forward", False) is False
+        and options.get("policy_gradient_clip_mode", "joint") == "joint"
+    )
+
+
+def _runtime_flag_paths_match_gate(
+    baseline_metric: Mapping[str, object],
+    candidate_metric: Mapping[str, object],
+    baseline_options: Mapping[str, object],
+    candidate_options: Mapping[str, object],
+    *,
+    metric_name: str,
+    option_name: str,
+    legacy_candidate_expected: bool,
+    candidate_mode: str,
+) -> bool:
+    if candidate_mode == "separate-grad-clip":
+        baseline_expected = bool(baseline_options.get(option_name, False))
+        candidate_expected = bool(candidate_options.get(option_name, False))
+    else:
+        baseline_expected = False
+        candidate_expected = legacy_candidate_expected
+    return (
+        float(baseline_metric.get(metric_name, 0.0))
+        == float(baseline_expected)
+        and float(candidate_metric.get(metric_name, 0.0))
+        == float(candidate_expected)
+    )
 
 
 def _without_candidate_options(payload: dict[str, object]) -> dict[str, object]:

@@ -137,6 +137,29 @@ class InfoSkillTrainingOptimizationGateTests(unittest.TestCase):
             _without_candidate_options(candidate),
         )
 
+    def test_separate_clip_preserves_an_approved_cuda_graph_control(self) -> None:
+        baseline = {
+            "skip_unused_old_logprob_entropy": False,
+            "rollout_max_batched_tokens": 16_384,
+            "hybrid_prefix_cuda_graph": True,
+            "fuse_kl_ppo_forward": False,
+            "policy_gradient_clip_mode": "joint",
+        }
+        candidate = {
+            **baseline,
+            "policy_gradient_clip_mode": "separate",
+        }
+
+        self.assertTrue(
+            all(
+                _candidate_option_checks(
+                    baseline,
+                    candidate,
+                    candidate_mode="separate-grad-clip",
+                ).values()
+            )
+        )
+
     def test_checkpoint_step_is_fail_closed(self) -> None:
         self.assertEqual(_checkpoint_step("/run/checkpoints/step-000050"), 50)
         self.assertEqual(_checkpoint_step("/run/checkpoints/latest"), -1)
