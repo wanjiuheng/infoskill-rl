@@ -16,8 +16,11 @@ from infoskill.checkpoint_effect import (
     compare_generation_results,
     compare_named_tensors,
     compare_vllm_to_checkpoint_aggregate,
+    flatten_active_vllm_lora_slot_tensors,
     flatten_lora_model_tensors,
+    select_named_tensors_for_fingerprint,
     summarize_named_tensors,
+    tensor_payload_sha256,
 )
 from infoskill.rollout import GenerationResult
 
@@ -71,6 +74,74 @@ class CheckpointEffectTests(unittest.TestCase):
         partitions = summary["partitions"]
         self.assertEqual(partitions["lora_a"]["nonzero_count"], 2)
         self.assertEqual(partitions["lora_b"]["nonzero_count"], 1)
+
+    @unittest.skipUnless(torch is not None, "requires torch")
+    def test_tensor_payload_hash_covers_values_dtype_shape_and_names(self) -> None:
+        source = {"x": torch.tensor([1.0, 2.0], dtype=torch.bfloat16)}
+
+        self.assertEqual(tensor_payload_sha256(source), tensor_payload_sha256(source))
+        self.assertNotEqual(
+            tensor_payload_sha256(source),
+            tensor_payload_sha256({"x": torch.tensor([1.0, 3.0], dtype=torch.bfloat16)}),
+        )
+        self.assertNotEqual(
+            tensor_payload_sha256(source),
+            tensor_payload_sha256({"y": source["x"]}),
+        )
+
+    @unittest.skipUnless(torch is not None, "requires torch")
+    def test_base_fingerprint_selection_is_bounded_and_excludes_lora(self) -> None:
+        tensors = {
+            "a": torch.ones(2),
+            "b.lora_a": torch.ones(2),
+            "c": torch.ones(20),
+            "d": torch.ones(3),
+            "e": torch.ones(4),
+        }
+
+        selected = select_named_tensors_for_fingerprint(
+            tensors,
+            maximum_tensors=2,
+            maximum_elements_per_tensor=10,
+        )
+
+        self.assertEqual(set(selected), {"a", "e"})
+
+    @unittest.skipUnless(torch is not None, "requires torch")
+    def test_active_vllm_slot_fingerprint_reads_kernel_buffers(self) -> None:
+        class Module:
+            lora_a_stacked = (
+                torch.tensor([[[[1.0]]], [[[2.0]]]]),
+            )
+            lora_b_stacked = (
+                torch.tensor([[[[3.0]]], [[[4.0]]]]),
+            )
+            lora_embeddings_tensor = None
+            lora_bias_stacked = None
+
+        class Manager:
+            lora_index_to_id = [7, 9]
+            modules = {"model.layer": Module()}
+
+        tensors, slots = flatten_active_vllm_lora_slot_tensors(Manager(), [9])
+
+        self.assertEqual(slots, {9: 1})
+        self.assertEqual(len(tensors), 2)
+        self.assertTrue(
+            torch.equal(
+                tensors["slot_1.model.layer.lora_a_stacked.component_0"],
+                torch.tensor([[[2.0]]]),
+            )
+        )
+
+    @unittest.skipUnless(torch is not None, "requires torch")
+    def test_active_vllm_slot_fingerprint_rejects_missing_slot(self) -> None:
+        class Manager:
+            lora_index_to_id = [7, None]
+            modules = {}
+
+        with self.assertRaisesRegex(RuntimeError, "maps to 0 GPU slots"):
+            flatten_active_vllm_lora_slot_tensors(Manager(), [9])
 
     def test_generation_comparison_detects_logit_effect_without_token_change(self) -> None:
         baseline = (_result("a", (1, 2), (-0.1, -0.2)),)

@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
         return _raw_skill_ab(config, args)
     if args.command == "checkpoint-effect":
         return _checkpoint_effect(config, args)
+    if args.command == "m1-lora-reproducibility":
+        return _m1_lora_reproducibility(config, args)
     if args.command == "grounding":
         return _grounding(config, args)
     if args.command == "grounding-timeout-rescue":
@@ -183,6 +185,25 @@ def _parser() -> argparse.ArgumentParser:
     checkpoint_effect.add_argument("--run-name")
     checkpoint_effect.add_argument("--max-new-tokens", type=int, default=64)
     checkpoint_effect.add_argument("--verbose-runtime-logs", action="store_true")
+    m1_repro = subparsers.add_parser(
+        "m1-lora-reproducibility",
+        help=(
+            "compare exact M1/FSDP/vLLM fingerprints and deterministic generation "
+            "across fresh checkpoint and base runtimes"
+        ),
+    )
+    m1_repro.add_argument("--config", required=True)
+    m1_repro.add_argument("--policy-checkpoint", required=True)
+    m1_repro.add_argument("--num-gpus", type=int, required=True)
+    m1_repro.add_argument("--run-name")
+    m1_repro.add_argument("--case-count", type=int, default=3)
+    m1_repro.add_argument("--max-new-tokens", type=int, default=32)
+    m1_repro.add_argument(
+        "--hybrid-prefix-cuda-graph",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    m1_repro.add_argument("--verbose-runtime-logs", action="store_true")
     grounding = subparsers.add_parser("grounding", help="generate strict train-only expert labels")
     grounding.add_argument("--config", required=True)
     grounding.add_argument("--run-name")
@@ -1686,6 +1707,11 @@ def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:
         runtime_factory=lambda: VerlRuntime.start(runtime_settings),
         checkpoint_runtime_directory=checkpoint.runtime_directory,
         probes=probes,
+        progress=lambda label, stage: logger.info(
+            "M1 LoRA reproducibility runtime=%s stage=%s",
+            label,
+            stage,
+        ),
     )
 
     generation_comparison = compare_generation_results(
@@ -1733,6 +1759,190 @@ def _checkpoint_effect(config: AppConfig, args: argparse.Namespace) -> int:
     )
     logger.info("Diagnostic report: %s", output)
     return 0 if verdict["passed"] else 5
+
+
+def _m1_lora_reproducibility(
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    """Locate M1 fresh-runtime drift at checkpoint, vLLM LoRA, or execution."""
+
+    if args.num_gpus <= 0:
+        raise ValueError("num_gpus must be positive")
+    if args.case_count <= 0 or args.case_count > 3:
+        raise ValueError("case_count must be between 1 and 3")
+    if args.max_new_tokens <= 0 or args.max_new_tokens > config.max_response_tokens:
+        raise ValueError(
+            "max_new_tokens must be positive and no greater than max_response_tokens"
+        )
+    if config.paths.policy_adapter is not None:
+        raise ValueError(
+            "m1-lora-reproducibility loads portable state explicitly; "
+            "paths.policy_adapter must be null"
+        )
+    _validate_paths(
+        config,
+        mode=SkillMode.INFO_SKILL,
+        require_checkpoint=False,
+        require_training_runtime=True,
+    )
+
+    from transformers import AutoConfig
+
+    from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
+    from infoskill.m1_reproducibility import (
+        build_hybrid_prefix_reproducibility_probes,
+        build_m1_reproducibility_report,
+        collect_m1_reproducibility_samples,
+    )
+    from infoskill.persistence import resolve_portable_checkpoint
+    from infoskill.persistence.model_identity import (
+        provenance_matches_pinned_model,
+        verify_policy_model_identity,
+    )
+
+    checkpoint = resolve_portable_checkpoint(args.policy_checkpoint)
+    provenance_path = checkpoint.directory / "provenance.json"
+    if not provenance_path.is_file():
+        raise RuntimeError(
+            f"portable checkpoint has no policy provenance: {provenance_path}"
+        )
+    checkpoint_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    if not isinstance(checkpoint_provenance, dict):
+        raise RuntimeError(
+            f"portable checkpoint provenance is not an object: {provenance_path}"
+        )
+    if checkpoint_provenance.get("mode") != SkillMode.INFO_SKILL.value:
+        raise RuntimeError("portable checkpoint mode is not infoskill")
+    if not (checkpoint.runtime_directory / "actor" / "infoskill" / "infoskill_manifest.json").is_file():
+        raise RuntimeError("portable checkpoint has no committed INFO-SKILL module state")
+
+    policy_identity = verify_policy_model_identity(
+        config.paths.policy_model,
+        model_id=config.policy_model_id,
+    )
+    if not provenance_matches_pinned_model(
+        checkpoint_provenance,
+        model_id=config.policy_model_id or "",
+    ):
+        raise RuntimeError(
+            "portable checkpoint policy provenance differs from the registered model"
+        )
+    if VerlRuntime is None or VerlRuntimeConfig is None:
+        raise RuntimeError("the pinned VERL runtime is unavailable")
+
+    model_config = AutoConfig.from_pretrained(
+        config.paths.policy_model,
+        trust_remote_code=True,
+        local_files_only=True,
+    )
+    hidden_size = int(model_config.hidden_size)
+    probes = build_hybrid_prefix_reproducibility_probes(
+        hidden_size=hidden_size,
+        prefix_length=5,
+        master_seed=config.master_seed,
+        max_new_tokens=args.max_new_tokens,
+        case_count=args.case_count,
+    )
+    run_directory = _run_directory(
+        config,
+        args.run_name
+        or f"m1-lora-reproducibility-step-{checkpoint.global_update:06d}",
+    )
+    logger = _configure_logging(run_directory)
+    settings = VerlRuntimeConfig(
+        skillrl_source=config.paths.skillrl_source,
+        model_path=config.paths.policy_model,
+        num_gpus=args.num_gpus,
+        num_cpus=96,
+        max_prompt_tokens=config.max_prompt_tokens,
+        max_response_tokens=config.max_response_tokens,
+        total_training_steps=max(1, checkpoint.global_update),
+        action_minibatch_size=256,
+        policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
+        gpu_memory_utilization=0.45,
+        require_hybrid_prefix=True,
+        hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
+        soft_prefix_length=5,
+        master_seed=config.master_seed,
+        persistent_rollout_session=True,
+        verbose_runtime_logs=args.verbose_runtime_logs,
+        cuda_memory_poll_interval_ms=0,
+        balance_policy_tokens_across_ranks=True,
+        enable_infoskill_modules=True,
+        semantic_model_path=config.paths.semantic_model,
+        skill_bank_path=config.paths.skill_bank,
+        enable_infoskill_auxiliary=False,
+        infoskill_history_length=config.history_length,
+    )
+    resolved = config.as_dict()
+    resolved["m1_lora_reproducibility"] = {
+        "policy_checkpoint": str(checkpoint.directory),
+        "checkpoint_step": checkpoint.global_update,
+        "num_gpus": args.num_gpus,
+        "case_count": args.case_count,
+        "generation_rounds_per_runtime": 2,
+        "fresh_checkpoint_runtimes": 2,
+        "fresh_base_control_runtimes": 2,
+        "max_new_tokens": args.max_new_tokens,
+        "hybrid_prefix_cuda_graph": args.hybrid_prefix_cuda_graph,
+        "soft_prefix_source": "fixed_synthetic_bfloat16_v1",
+    }
+    resolved["policy_model_identity"] = policy_identity.as_dict()
+    _write_json(run_directory / "resolved_config.json", resolved)
+
+    logger.info(
+        "Initializing four sequential fresh runtimes on %d GPU(s): "
+        "two checkpoint and two base-only controls",
+        args.num_gpus,
+    )
+    samples = collect_m1_reproducibility_samples(
+        checkpoint_runtime_factory=lambda: VerlRuntime.start(settings),
+        base_runtime_factory=lambda: VerlRuntime.start(settings),
+        checkpoint_runtime_directory=checkpoint.runtime_directory,
+        probes=probes,
+    )
+    report = build_m1_reproducibility_report(samples)
+    report.update(
+        {
+            "checkpoint": {
+                "directory": str(checkpoint.directory),
+                "global_update": checkpoint.global_update,
+                "provenance_sha256": hashlib.sha256(
+                    provenance_path.read_bytes()
+                ).hexdigest(),
+            },
+            "probe": {
+                "request_ids": [request.request_id for request in probes],
+                "case_count": len(probes),
+                "max_new_tokens": args.max_new_tokens,
+                "soft_prefix_length": 5,
+                "hidden_size": hidden_size,
+                "deterministic": True,
+                "runtime_topology": (
+                    "two_fresh_checkpoint_runtimes_plus_two_fresh_base_controls"
+                ),
+            },
+            "execution": {
+                "hybrid_prefix_cuda_graph": args.hybrid_prefix_cuda_graph,
+                "hybrid_prefix_cuda_graph_custom_kernels": (
+                    args.hybrid_prefix_cuda_graph
+                ),
+                "hybrid_prefix_cuda_graph_use_inductor": (
+                    False if args.hybrid_prefix_cuda_graph else None
+                ),
+            },
+        }
+    )
+    output = run_directory / "m1_lora_reproducibility.json"
+    _write_json(output, report)
+    logger.info(
+        "M1 LoRA reproducibility classification=%s reproducible=%s",
+        report["classification"],
+        report["reproducible"],
+    )
+    logger.info("Diagnostic report: %s", output)
+    return 0
 
 
 def _grounding(config: AppConfig, args: argparse.Namespace) -> int:

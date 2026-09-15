@@ -85,6 +85,12 @@ rollout/recompute P99 为 `0.23041`，低于统一 `0.30` 门限。该诊断 run
 **Skill-Injection Control Mode**:
 共享同一训练评测框架、但改变技能信息如何进入策略的实验模式；首阶段包括 `no_skill`、`raw_skill_prompt` 和 `infoskill`。
 
+同一 M1 step-205 checkpoint 的独立评测现已确认存在 fresh-runtime generation 漂移：分叉前
+prompt、技能、latent 与 soft prefix 一致，eager 和 CUDA Graph 均可观察到，因此首先排查动态
+LoRA checkpoint→FSDP→vLLM 边界。`m1-lora-reproducibility` 会用两个 checkpoint runtime、两个
+LoRA-B 全零 base control、逐 tensor 精确 SHA-256 和重复固定 hybrid-prefix generation 一次区分
+权重加载/同步漂移与相同权重下的执行漂移；该门完成前不依据单次 140 条结果采用梯度裁剪候选。
+
 2026-09-07 的 `raw_skill_prompt` embedding smoke 完成工程链路，但其 step-1
 portable checkpoint 在固定 140 条 `valid_seen` 上为 0/140；全部任务跑满 30 步，
 轨迹以重复 `look` 和重复旧动作循环为主。该 smoke update 的组内 policy signal 为

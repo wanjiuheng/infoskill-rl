@@ -728,6 +728,36 @@ class TrainingCliTests(unittest.TestCase):
             "/runs/pilot/checkpoints/step-000025",
         )
 
+    def test_m1_lora_reproducibility_accepts_checkpoint_and_execution_mode(self) -> None:
+        arguments = [
+            "m1-lora-reproducibility",
+            "--config",
+            "configs/alfworld_qwen25_7b.yaml",
+            "--num-gpus",
+            "3",
+            "--policy-checkpoint",
+            "/runs/formal/checkpoints/step-000205",
+            "--case-count",
+            "2",
+            "--max-new-tokens",
+            "24",
+            "--no-hybrid-prefix-cuda-graph",
+        ]
+
+        with patch(
+            "infoskill.cli._m1_lora_reproducibility",
+            return_value=0,
+            create=True,
+        ) as diagnose:
+            result = main(arguments)
+
+        parsed = diagnose.call_args.args[1]
+        self.assertEqual(result, 0)
+        self.assertEqual(parsed.num_gpus, 3)
+        self.assertEqual(parsed.case_count, 2)
+        self.assertEqual(parsed.max_new_tokens, 24)
+        self.assertFalse(parsed.hybrid_prefix_cuda_graph)
+
     def test_raw_skill_ab_dispatches_one_runtime_diagnostic(self) -> None:
         arguments = [
             "raw-skill-ab",

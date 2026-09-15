@@ -14,6 +14,10 @@ CHECKPOINT_STEP="${CHECKPOINT_STEP:-0}"
 EVAL_BACKEND="${EVAL_BACKEND:-transformers}" # transformers | verl
 POLICY_CHECKPOINT="${POLICY_CHECKPOINT:-}"
 CHECKPOINT_EFFECT_MAX_NEW_TOKENS="${CHECKPOINT_EFFECT_MAX_NEW_TOKENS:-64}"
+# Four-runtime M1 fingerprint/generation probe; intentionally capped at the
+# three built-in ALFWorld-shaped requests to keep the diagnosis short.
+M1_REPRO_CASE_COUNT="${M1_REPRO_CASE_COUNT:-3}"
+M1_REPRO_MAX_NEW_TOKENS="${M1_REPRO_MAX_NEW_TOKENS:-32}"
 PROFILE="${PROFILE:-smoke}"                   # smoke | integration | benchmark | pilot | formal
 MAX_UPDATES="${MAX_UPDATES:-}"
 RESUME="${RESUME:-}"
@@ -132,6 +136,14 @@ if [[ ! "${CUDA_MEMORY_POLL_INTERVAL_MS}" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "${POLICY_MAX_TOKENS_PER_GPU}" =~ ^[1-9][0-9]*$ ]]; then
   echo "POLICY_MAX_TOKENS_PER_GPU must be a positive integer" >&2
+  exit 2
+fi
+if [[ ! "${M1_REPRO_CASE_COUNT}" =~ ^[1-3]$ ]]; then
+  echo "M1_REPRO_CASE_COUNT must be 1, 2, or 3" >&2
+  exit 2
+fi
+if [[ ! "${M1_REPRO_MAX_NEW_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "M1_REPRO_MAX_NEW_TOKENS must be a positive integer" >&2
   exit 2
 fi
 if [[ -n "${SEGMENT_END_UPDATE}" && ! "${SEGMENT_END_UPDATE}" =~ ^[1-9][0-9]*$ ]]; then
@@ -453,6 +465,46 @@ case "${ACTION}" in
         ;;
     esac
     python -m infoskill.cli checkpoint-effect "${EFFECT_ARGS[@]}"
+    ;;
+  m1-lora-reproducibility)
+    IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
+    if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
+      echo "GPUS must contain at least one physical GPU index" >&2
+      exit 2
+    fi
+    for gpu_id in "${GPU_IDS[@]}"; do
+      if [[ ! "${gpu_id}" =~ ^[0-9]+$ ]]; then
+        echo "Invalid GPU index in GPUS=${GPUS}: ${gpu_id}" >&2
+        exit 2
+      fi
+    done
+    if [[ -z "${POLICY_CHECKPOINT}" ]]; then
+      echo "POLICY_CHECKPOINT is required for m1-lora-reproducibility" >&2
+      exit 2
+    fi
+    M1_REPRO_ARGS=(
+      --config "${CONFIG}"
+      --policy-checkpoint "${POLICY_CHECKPOINT}"
+      --num-gpus "${#GPU_IDS[@]}"
+      --case-count "${M1_REPRO_CASE_COUNT}"
+      --max-new-tokens "${M1_REPRO_MAX_NEW_TOKENS}"
+    )
+    if [[ -n "${RUN_NAME}" ]]; then
+      M1_REPRO_ARGS+=(--run-name "${RUN_NAME}")
+    fi
+    case "${HYBRID_PREFIX_CUDA_GRAPH}" in
+      0) M1_REPRO_ARGS+=(--no-hybrid-prefix-cuda-graph) ;;
+      1) M1_REPRO_ARGS+=(--hybrid-prefix-cuda-graph) ;;
+    esac
+    case "${VERBOSE_RUNTIME_LOGS}" in
+      0) ;;
+      1) M1_REPRO_ARGS+=(--verbose-runtime-logs) ;;
+      *)
+        echo "VERBOSE_RUNTIME_LOGS must be 0 or 1" >&2
+        exit 2
+        ;;
+    esac
+    python -m infoskill.cli m1-lora-reproducibility "${M1_REPRO_ARGS[@]}"
     ;;
   grounding)
     GROUNDING_ARGS=(

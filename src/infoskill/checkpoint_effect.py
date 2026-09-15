@@ -175,11 +175,126 @@ def summarize_named_tensors(tensors: Mapping[str, object]) -> dict[str, object]:
             partitions["lora_b"].append(tensor)
     return {
         "tensor_names_sha256": _tensor_names_sha256(tensors),
+        "tensor_payload_sha256": tensor_payload_sha256(tensors),
         "partitions": {
             name: _summarize_tensor_sequence(values)
             for name, values in partitions.items()
         },
     }
+
+
+def tensor_payload_sha256(tensors: Mapping[str, object]) -> str:
+    """Hash tensor names, geometry, dtype and exact payload bytes canonically."""
+
+    import hashlib
+    import torch
+
+    digest = hashlib.sha256()
+    for name in sorted(tensors):
+        tensor = tensors[name]
+        detached = tensor.detach().to(device="cpu").contiguous()  # type: ignore[attr-defined]
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(detached.dtype).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(tuple(detached.shape)).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(detached.view(torch.uint8).numpy().tobytes())
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def select_named_tensors_for_fingerprint(
+    tensors: Mapping[str, object],
+    *,
+    maximum_tensors: int = 6,
+    maximum_elements_per_tensor: int = 1_000_000,
+) -> dict[str, object]:
+    """Choose stable, bounded tensors for a cheap exact base-model fingerprint."""
+
+    if maximum_tensors <= 0 or maximum_elements_per_tensor <= 0:
+        raise ValueError("fingerprint limits must be positive")
+    eligible = [
+        name
+        for name, tensor in sorted(tensors.items())
+        if "lora" not in name.lower()
+        and 0 < int(tensor.numel()) <= maximum_elements_per_tensor  # type: ignore[attr-defined]
+    ]
+    if len(eligible) <= maximum_tensors:
+        selected = eligible
+    elif maximum_tensors == 1:
+        selected = [eligible[len(eligible) // 2]]
+    else:
+        selected = [
+            eligible[index * (len(eligible) - 1) // (maximum_tensors - 1)]
+            for index in range(maximum_tensors)
+        ]
+    return {name: tensors[name] for name in selected}
+
+
+def flatten_active_vllm_lora_slot_tensors(
+    adapter_manager: object,
+    active_adapter_ids: Sequence[int],
+) -> tuple[dict[str, object], dict[int, int]]:
+    """Expose the exact GPU LoRA slots consumed by vLLM 0.8.x kernels."""
+
+    import torch
+
+    slot_ids = getattr(adapter_manager, "lora_index_to_id", None)
+    modules = getattr(adapter_manager, "modules", None)
+    if not isinstance(slot_ids, list):
+        raise RuntimeError("vLLM LoRA manager has no lora_index_to_id slots")
+    if not isinstance(modules, Mapping):
+        raise RuntimeError("vLLM LoRA manager has no LoRA module mapping")
+
+    active_slots: dict[int, int] = {}
+    for adapter_id in active_adapter_ids:
+        matches = [
+            index
+            for index, candidate in enumerate(slot_ids)
+            if candidate == adapter_id
+        ]
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"active vLLM adapter {adapter_id} maps to {len(matches)} GPU slots"
+            )
+        active_slots[adapter_id] = matches[0]
+
+    tensors: dict[str, object] = {}
+    stacked_attributes = (
+        "lora_a_stacked",
+        "lora_b_stacked",
+        "embeddings_tensors",
+        "lora_embeddings_tensor",
+        "lora_bias_stacked",
+    )
+    for module_name, module in sorted(modules.items()):
+        for attribute in stacked_attributes:
+            stacked = getattr(module, attribute, None)
+            components = (
+                stacked if isinstance(stacked, (list, tuple)) else (stacked,)
+            )
+            for component_index, component in enumerate(components):
+                if component is None:
+                    continue
+                if not torch.is_tensor(component):
+                    raise RuntimeError(
+                        f"unexpected vLLM LoRA slot value at {module_name}.{attribute}"
+                    )
+                if component.ndim == 0 or component.shape[0] != len(slot_ids):
+                    raise RuntimeError(
+                        f"unexpected vLLM LoRA slot geometry at {module_name}.{attribute}: "
+                        f"{tuple(component.shape)}"
+                    )
+                for adapter_id, slot_index in active_slots.items():
+                    key = (
+                        f"slot_{slot_index}.{module_name}.{attribute}."
+                        f"component_{component_index}"
+                    )
+                    tensors[key] = component[slot_index]
+    if active_slots and not tensors:
+        raise RuntimeError("active vLLM adapters expose no GPU LoRA slot tensors")
+    return tensors, active_slots
 
 
 def compare_named_tensors(

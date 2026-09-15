@@ -382,3 +382,24 @@ joint 与 separate 都在 rollout 完成后才改变梯度更新，因此两个�
 `(task_id, rollout_id)` 集合一致，并继续记录完整 trace/logprob 差异作为行为诊断；算法候选仍
 必须通过后续固定 140 条 valid-seen Macro/Overall 效果门。门禁脚本允许复用已完成的 joint
 control，只重跑修复后的 candidate，并保证基础设施门失败时也先生成诊断压缩包。
+
+## D031：跨新 runtime 的 M1 复现问题先以精确权重指纹定位
+
+同一个 step-205 checkpoint 的两次独立 140 条评测出现 48/140 与 36/140。逐步轨迹差分显示，
+全部任务的首个分叉都位于模型 generation/logprob 层；分叉前的 prompt、候选技能、conditioning
+latent 与 soft prefix 一致，动作解析器和环境不是首个分叉点。历史 eager 小样本也存在同类漂移，
+因此不能把该问题归因于 CUDA Graph 本身，也不能继续用单次独立评测决定小幅算法差异。
+
+新增 `m1-lora-reproducibility` 只读诊断入口。它顺序启动两个加载同一 portable checkpoint 的
+全新 runtime 和两个不加载 checkpoint 的 base control runtime；每个 runtime 对相同的固定
+ALFWorld-shaped prompt、BF16 synthetic soft prefix 做两轮 deterministic generation。探针不运行
+环境、不训练、不写 checkpoint。它同时记录：portable checkpoint 对 FSDP LoRA 的 exact comparison、
+M1 复制模块的逐 tensor SHA-256、vLLM 注册适配器及推理内核实际读取的活跃 GPU LoRA 槽位
+SHA-256、若干有界 base tensor 的精确指纹，以及每轮 token/logprob。随机的 vLLM adapter ID
+不进入权重等价判断。
+
+分类优先寻找第一个失效边界：checkpoint load、FSDP LoRA、M1 module、FSDP→vLLM LoRA sync、
+vLLM base fingerprint、base/hybrid generation，最后才是 LoRA execution。base control 必须验证
+LoRA-B 全零，避免把随机初始化 adapter 误称为无 LoRA 对照。该诊断的非复现分类是有效结果而非
+CLI 失败；只有初始化、加载或产物写入异常才返回非零。定位完成前，梯度裁剪 A/B 的成功率结论
+保持暂停，正式训练也不因单次评测波动更改算法。

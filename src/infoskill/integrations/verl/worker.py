@@ -19,7 +19,9 @@ from verl.workers.fsdp_workers import ActorRolloutRefWorker
 from infoskill.fsdp_checkpoint import load_peft_adapter_under_full_fsdp_state
 from infoskill.checkpoint_effect import (
     compare_named_tensors,
+    flatten_active_vllm_lora_slot_tensors,
     flatten_lora_model_tensors,
+    select_named_tensors_for_fingerprint,
     summarize_named_tensors,
 )
 from infoskill.integrations.verl.memory_metrics import PhysicalMemorySampler
@@ -531,9 +533,20 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             int(adapter_id)
             for adapter_id in sharding.inference_engine.llm_engine.list_loras()
         )
+        active_slot_tensors, active_slots = flatten_active_vllm_lora_slot_tensors(
+            adapter_manager,
+            active_ids,
+        )
         return {
             "rank": dist.get_rank(),
             "active_adapter_ids": active_ids,
+            "active_gpu_slots": {
+                str(adapter_id): slot_index
+                for adapter_id, slot_index in sorted(active_slots.items())
+            },
+            "active_gpu_slot_summary": summarize_named_tensors(
+                active_slot_tensors
+            ),
             "registered_adapter_ids": sorted(int(adapter_id) for adapter_id in adapters),
             "adapters": {
                 str(adapter_id): {
@@ -544,6 +557,39 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                 }
                 for adapter_id, adapter in adapters.items()
             },
+        }
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def infoskill_module_snapshot(self) -> dict[str, object]:
+        """Fingerprint every loaded replicated M1 module without exporting weights."""
+
+        conditioner = self._infoskill_worker_conditioner
+        if conditioner is None:
+            raise RuntimeError("INFO-SKILL module inspection requires M1 modules")
+        tensors: dict[str, object] = {}
+        for module_name, module in self._infoskill_modules().items():
+            wrapped = getattr(module, "module", module)
+            for tensor_name, tensor in wrapped.state_dict().items():
+                tensors[f"{module_name}.{tensor_name}"] = tensor
+        return {
+            "rank": dist.get_rank(),
+            "summary": summarize_named_tensors(tensors),
+        }
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def infoskill_vllm_base_fingerprint(self) -> dict[str, object]:
+        """Fingerprint a bounded deterministic sample of live vLLM base tensors."""
+
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("vLLM base inspection requires an active rollout session")
+        model = self.rollout_sharding_manager.model_runner.model
+        selected = select_named_tensors_for_fingerprint(
+            dict(model.named_parameters()),
+        )
+        return {
+            "rank": dist.get_rank(),
+            "selected_tensor_names": sorted(selected),
+            "summary": summarize_named_tensors(selected),
         }
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)

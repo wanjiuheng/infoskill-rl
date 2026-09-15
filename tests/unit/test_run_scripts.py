@@ -368,6 +368,23 @@ class RunScriptTests(unittest.TestCase):
             script,
         )
 
+    def test_m1_lora_reproducibility_forwards_bounded_probe_controls(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("m1-lora-reproducibility)", script)
+        self.assertIn('M1_REPRO_CASE_COUNT="${M1_REPRO_CASE_COUNT:-3}"', script)
+        self.assertIn(
+            '--max-new-tokens "${M1_REPRO_MAX_NEW_TOKENS}"',
+            script,
+        )
+        self.assertIn(
+            'python -m infoskill.cli m1-lora-reproducibility',
+            script,
+        )
+
     def test_retrieval_mode_override_reaches_training_and_evaluation(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

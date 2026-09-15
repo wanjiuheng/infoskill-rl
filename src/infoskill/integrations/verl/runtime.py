@@ -715,6 +715,16 @@ class VerlRuntime:
             raise RuntimeError("vLLM LoRA snapshot requires an active rollout session")
         return tuple(self.worker_group.infoskill_vllm_lora_snapshot())
 
+    def infoskill_module_snapshot(self) -> tuple[Mapping[str, object], ...]:
+        if not self.config.enable_infoskill_modules:
+            raise RuntimeError("INFO-SKILL module snapshot requires M1 modules")
+        return tuple(self.worker_group.infoskill_module_snapshot())
+
+    def vllm_base_fingerprint(self) -> tuple[Mapping[str, object], ...]:
+        if not self._rollout_session_active:
+            raise RuntimeError("vLLM base fingerprint requires an active rollout session")
+        return tuple(self.worker_group.infoskill_vllm_base_fingerprint())
+
     def reset_rollout_prefix_cache(self) -> None:
         if not self._rollout_session_active:
             raise RuntimeError("prefix-cache reset requires an active rollout session")
