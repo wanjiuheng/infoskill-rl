@@ -528,6 +528,22 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("trap archive_diagnostics EXIT", script)
         self.assertIn("--exclude='*/checkpoints/*/runtime/*'", script)
 
+    def test_m1_gradient_clip_repeat_runner_is_eval_only_and_resumable(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_m1_gradient_clip_efficacy_repeat.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("run_alfworld.sh train", script)
+        self.assertEqual(script.count("run_alfworld.sh eval infoskill"), 1)
+        self.assertIn('run_evaluation "${CONTROL_RUN}" joint', script)
+        self.assertIn('run_evaluation "${CANDIDATE_RUN}" separate', script)
+        self.assertIn("evaluation_is_reusable", script)
+        self.assertIn("compare_infoskill_efficacy_repeats.py", script)
+        self.assertIn("--minimum-macro-delta 0.03", script)
+        self.assertIn("--minimum-overall-delta 0.0", script)
+        self.assertIn("trap archive_diagnostics EXIT", script)
+
 
 if __name__ == "__main__":
     unittest.main()
