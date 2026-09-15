@@ -505,6 +505,29 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn('"same_training_workload"', script)
         self.assertIn('exit "${INFRASTRUCTURE_RC}"', script)
 
+    def test_m1_gradient_clip_efficacy_runner_locks_python_and_archives(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_m1_gradient_clip_efficacy.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('export PATH="$(dirname -- "${PYTHON}"):${PATH}"', script)
+        self.assertIn('[[ "$(command -v python)" == "${PYTHON}" ]]', script)
+        self.assertIn('run_branch "${CONTROL_RUN}" "${CONTROL_UPDATE}" joint', script)
+        self.assertIn(
+            'run_branch "${CANDIDATE_RUN}" "${CANDIDATE_UPDATE}" separate',
+            script,
+        )
+        self.assertIn('SEGMENT_END_UPDATE="${TARGET_UPDATE}"', script)
+        self.assertIn("already at update ${TARGET_UPDATE}", script)
+        self.assertIn('run_evaluation "${CONTROL_RUN}" joint', script)
+        self.assertIn('run_evaluation "${CANDIDATE_RUN}" separate', script)
+        self.assertIn("--expected-task-count 140", script)
+        self.assertIn('classification = "candidate_selected"', script)
+        self.assertIn('classification = "repeat_required"', script)
+        self.assertIn("trap archive_diagnostics EXIT", script)
+        self.assertIn("--exclude='*/checkpoints/*/runtime/*'", script)
+
 
 if __name__ == "__main__":
     unittest.main()
