@@ -715,6 +715,11 @@ class VerlRuntime:
             raise RuntimeError("vLLM LoRA snapshot requires an active rollout session")
         return tuple(self.worker_group.infoskill_vllm_lora_snapshot())
 
+    def vllm_last_input_fingerprints(self) -> tuple[Mapping[str, object], ...]:
+        if not self._rollout_session_active:
+            raise RuntimeError("vLLM input fingerprint requires an active rollout session")
+        return tuple(self.worker_group.infoskill_vllm_last_input_fingerprints())
+
     def infoskill_module_snapshot(self) -> tuple[Mapping[str, object], ...]:
         if not self.config.enable_infoskill_modules:
             raise RuntimeError("INFO-SKILL module snapshot requires M1 modules")

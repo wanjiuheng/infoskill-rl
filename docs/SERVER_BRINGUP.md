@@ -1988,6 +1988,12 @@ batch 12；如以后更改 vLLM、CUDA 或 kernel 实现，必须重新运行同
 
 ## M1 独立评测 CUDA Graph 候选
 
+M1 step-205 的波动定位可用 `scripts/run_alfworld.sh m1-lora-isolation` 一次执行四个
+有界只读 runtime。必须提供 `GPUS=0,1,2` 和完整的 `POLICY_CHECKPOINT`，且脚本使用
+安装了 `sentence-transformers` 的 `/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python`。
+运行目录中的 `m1_lora_isolation_partial.json` 在每个 runtime 完成后更新；完整结果为
+`m1_lora_isolation.json`。这项探针不运行 140 条正式测评。
+
 独立 `eval infoskill` 入口支持默认关闭的 `HYBRID_PREFIX_CUDA_GRAPH=1`。该开关与训练入口
 使用同一条 hybrid-prefix vLLM CUDA Graph 实现，并写入
 `provenance.json.evaluation_runtime.hybrid_prefix_cuda_graph`、`resolved_config.json`、

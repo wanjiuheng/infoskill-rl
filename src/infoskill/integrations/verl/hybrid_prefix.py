@@ -1,8 +1,68 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Any
+
+
+def fingerprint_vllm_generation_inputs(
+    prompts: Sequence[dict[str, Any]], sampling_params: Sequence[object]
+) -> dict[str, object]:
+    """Hash the exact bounded input submitted to the pinned vLLM engine."""
+    if len(prompts) != len(sampling_params):
+        raise ValueError("vLLM prompts and sampling parameters have different lengths")
+    requests = []
+    for prompt, params in zip(prompts, sampling_params):
+        prefix = prompt.get("infoskill_prefix_embeds")
+        prefix_hash = None
+        if prefix is not None:
+            if isinstance(prefix, (bytes, bytearray)):
+                raw = bytes(prefix)
+                metadata = {"dtype": "bytes", "shape": [len(raw)]}
+            else:
+                import torch
+
+                if not isinstance(prefix, torch.Tensor):
+                    raise TypeError("vLLM prefix fingerprint requires a tensor")
+                detached = prefix.detach().to("cpu").contiguous()
+                raw = detached.view(torch.uint8).numpy().tobytes()
+                metadata = {
+                    "dtype": str(detached.dtype),
+                    "shape": list(detached.shape),
+                }
+            digest = hashlib.sha256()
+            digest.update(json.dumps(metadata, sort_keys=True).encode("utf-8"))
+            digest.update(raw)
+            prefix_hash = digest.hexdigest()
+        payload = {
+            "prompt_token_ids": list(prompt["prompt_token_ids"]),
+            "prefix_sha256": prefix_hash,
+            "prefix_mask": prompt.get("infoskill_prefix_mask"),
+            "seed": getattr(params, "seed", None),
+            "temperature": getattr(params, "temperature", None),
+            "top_p": getattr(params, "top_p", None),
+            "max_tokens": getattr(params, "max_tokens", None),
+            "sampling": {
+                name: getattr(params, name, None)
+                for name in (
+                    "stop", "stop_token_ids", "top_k", "min_p", "n", "best_of",
+                    "repetition_penalty", "presence_penalty", "frequency_penalty",
+                    "ignore_eos", "logprobs", "detokenize",
+                    "include_stop_str_in_output",
+                )
+            },
+        }
+        requests.append(hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest())
+    return {
+        "request_sha256": requests,
+        "batch_sha256": hashlib.sha256(
+            json.dumps(requests, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
+    }
 
 
 def build_hybrid_vllm_inputs(

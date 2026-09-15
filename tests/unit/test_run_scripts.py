@@ -5,6 +5,14 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_m1_isolation_entry_is_three_gpu_and_audit_only(self) -> None:
+        script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
+        isolation = script.split("  m1-lora-isolation)\n", 1)[1].split("    ;;", 1)[0]
+        self.assertIn("INFOSKILL_VLLM_INPUT_AUDIT=1", isolation)
+        self.assertIn('"${#GPU_IDS[@]}" -ne 3', isolation)
+        self.assertIn('"${POLICY_CHECKPOINT}"', isolation)
+        self.assertIn("python -m infoskill.cli m1-lora-isolation", isolation)
+
     def test_step50_formal_fork_recipe_is_complete(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         bringup = (project_root / "docs" / "SERVER_BRINGUP.md").read_text(

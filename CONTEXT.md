@@ -90,6 +90,8 @@ prompt、技能、latent 与 soft prefix 一致，eager 和 CUDA Graph 均可观
 LoRA checkpoint→FSDP→vLLM 边界。`m1-lora-reproducibility` 会用两个 checkpoint runtime、两个
 LoRA-B 全零 base control、逐 tensor 精确 SHA-256 和重复固定 hybrid-prefix generation 一次区分
 权重加载/同步漂移与相同权重下的执行漂移；该门完成前不依据单次 140 条结果采用梯度裁剪候选。
+`m1-lora-isolation` 将 Graph/eager、前缀/无前缀及三卡填充布局统一到一次四-runtime
+后台诊断，连续重复采样并校验实际 vLLM 输入指纹；输出不是正式成功率指标。
 
 2026-09-07 的 `raw_skill_prompt` embedding smoke 完成工程链路，但其 step-1
 portable checkpoint 在固定 140 条 `valid_seen` 上为 0/140；全部任务跑满 30 步，

@@ -47,6 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         return _checkpoint_effect(config, args)
     if args.command == "m1-lora-reproducibility":
         return _m1_lora_reproducibility(config, args)
+    if args.command == "m1-lora-isolation":
+        return _m1_lora_isolation(config, args)
     if args.command == "grounding":
         return _grounding(config, args)
     if args.command == "grounding-timeout-rescue":
@@ -204,6 +206,16 @@ def _parser() -> argparse.ArgumentParser:
         default=True,
     )
     m1_repro.add_argument("--verbose-runtime-logs", action="store_true")
+    m1_isolation = subparsers.add_parser(
+        "m1-lora-isolation",
+        help="run one bounded M1 LoRA, prefix, padding, and CUDA Graph isolation suite",
+    )
+    m1_isolation.add_argument("--config", required=True)
+    m1_isolation.add_argument("--policy-checkpoint", required=True)
+    m1_isolation.add_argument("--num-gpus", type=int, required=True)
+    m1_isolation.add_argument("--run-name")
+    m1_isolation.add_argument("--max-new-tokens", type=int, default=32)
+    m1_isolation.add_argument("--verbose-runtime-logs", action="store_true")
     grounding = subparsers.add_parser("grounding", help="generate strict train-only expert labels")
     grounding.add_argument("--config", required=True)
     grounding.add_argument("--run-name")
@@ -1941,6 +1953,148 @@ def _m1_lora_reproducibility(
         report["classification"],
         report["reproducible"],
     )
+    logger.info("Diagnostic report: %s", output)
+    return 0
+
+
+def _m1_lora_isolation(config: AppConfig, args: argparse.Namespace) -> int:
+    """Run all fixed causal cells in a single unattended three-GPU job."""
+    if args.num_gpus != 3:
+        raise ValueError("M1 LoRA isolation requires exactly three physical GPUs")
+    if os.environ.get("INFOSKILL_VLLM_INPUT_AUDIT") != "1":
+        raise RuntimeError("m1-lora-isolation requires scoped vLLM input audit")
+    if args.max_new_tokens <= 0 or args.max_new_tokens > config.max_response_tokens:
+        raise ValueError("max_new_tokens is outside the response cap")
+    if config.paths.policy_adapter is not None:
+        raise ValueError("portable state is loaded explicitly; policy_adapter must be null")
+    _validate_paths(
+        config,
+        mode=SkillMode.INFO_SKILL,
+        require_checkpoint=False,
+        require_training_runtime=True,
+    )
+    from transformers import AutoConfig
+
+    from infoskill.integrations.verl import VerlRuntime, VerlRuntimeConfig
+    from infoskill.m1_lora_isolation import (
+        build_m1_lora_isolation_report,
+        collect_m1_isolation_samples,
+    )
+    from infoskill.m1_reproducibility import build_hybrid_prefix_reproducibility_probes
+    from infoskill.persistence import resolve_portable_checkpoint
+    from infoskill.persistence.model_identity import (
+        provenance_matches_pinned_model,
+        verify_policy_model_identity,
+    )
+
+    checkpoint = resolve_portable_checkpoint(args.policy_checkpoint)
+    provenance_path = checkpoint.directory / "provenance.json"
+    if not provenance_path.is_file():
+        raise RuntimeError("portable checkpoint has no policy provenance")
+    checkpoint_provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    if not isinstance(checkpoint_provenance, dict):
+        raise RuntimeError("checkpoint policy provenance is not a JSON object")
+    if checkpoint_provenance.get("mode") != SkillMode.INFO_SKILL.value:
+        raise RuntimeError("portable checkpoint is not an infoskill checkpoint")
+    if not (
+        checkpoint.runtime_directory / "actor" / "infoskill" / "infoskill_manifest.json"
+    ).is_file():
+        raise RuntimeError("portable checkpoint has no committed M1 state")
+    policy_identity = verify_policy_model_identity(
+        config.paths.policy_model, model_id=config.policy_model_id
+    )
+    if not provenance_matches_pinned_model(
+        checkpoint_provenance, model_id=config.policy_model_id or ""
+    ):
+        raise RuntimeError("checkpoint policy provenance differs from the pinned model")
+    if VerlRuntime is None or VerlRuntimeConfig is None:
+        raise RuntimeError("pinned VERL runtime is unavailable")
+    hidden_size = int(AutoConfig.from_pretrained(
+        config.paths.policy_model,
+        trust_remote_code=True,
+        local_files_only=True,
+    ).hidden_size)
+    probes = build_hybrid_prefix_reproducibility_probes(
+        hidden_size=hidden_size,
+        prefix_length=5,
+        master_seed=config.master_seed,
+        max_new_tokens=args.max_new_tokens,
+        case_count=3,
+    )
+    run_directory = _run_directory(
+        config,
+        args.run_name or f"m1-lora-isolation-step-{checkpoint.global_update:06d}",
+    )
+    logger = _configure_logging(run_directory)
+    settings = VerlRuntimeConfig(
+        skillrl_source=config.paths.skillrl_source,
+        model_path=config.paths.policy_model,
+        num_gpus=3,
+        num_cpus=96,
+        max_prompt_tokens=config.max_prompt_tokens,
+        max_response_tokens=config.max_response_tokens,
+        total_training_steps=max(1, checkpoint.global_update),
+        action_minibatch_size=256,
+        policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
+        gpu_memory_utilization=0.45,
+        require_hybrid_prefix=True,
+        hybrid_prefix_cuda_graph=False,
+        soft_prefix_length=5,
+        master_seed=config.master_seed,
+        persistent_rollout_session=True,
+        verbose_runtime_logs=args.verbose_runtime_logs,
+        cuda_memory_poll_interval_ms=0,
+        balance_policy_tokens_across_ranks=True,
+        enable_infoskill_modules=True,
+        semantic_model_path=config.paths.semantic_model,
+        skill_bank_path=config.paths.skill_bank,
+        enable_infoskill_auxiliary=False,
+        infoskill_history_length=config.history_length,
+    )
+    resolved = config.as_dict()
+    resolved["m1_lora_isolation"] = {
+        "policy_checkpoint": str(checkpoint.directory),
+        "checkpoint_step": checkpoint.global_update,
+        "num_gpus": 3,
+        "max_new_tokens": args.max_new_tokens,
+        "runtime_count": 4,
+        "cells_per_runtime": 4,
+        "rounds_per_cell": 3,
+        "probe_source": "fixed_synthetic_bfloat16_v1",
+    }
+    resolved["policy_model_identity"] = policy_identity.as_dict()
+    _write_json(run_directory / "resolved_config.json", resolved)
+    partial_samples = []
+
+    def save_partial(sample: object) -> None:
+        from dataclasses import asdict
+
+        partial_samples.append(asdict(sample))
+        _write_json(run_directory / "m1_lora_isolation_partial.json", {
+            "schema_version": 1,
+            "completed_runtimes": len(partial_samples),
+            "runtime_samples": partial_samples,
+        })
+
+    logger.info("Initializing one four-runtime LoRA isolation suite on 3 GPUs")
+    samples = collect_m1_isolation_samples(
+        runtime_factory=lambda graph: VerlRuntime.start(
+            replace(settings, hybrid_prefix_cuda_graph=graph)
+        ),
+        checkpoint_runtime_directory=checkpoint.runtime_directory,
+        probes=probes,
+        progress=lambda label, event: logger.info("runtime=%s event=%s", label, event),
+        on_sample=save_partial,
+    )
+    report = build_m1_lora_isolation_report(samples)
+    report["checkpoint"] = {
+        "directory": str(checkpoint.directory),
+        "global_update": checkpoint.global_update,
+        "provenance_sha256": hashlib.sha256(provenance_path.read_bytes()).hexdigest(),
+    }
+    output = run_directory / "m1_lora_isolation.json"
+    _write_json(output, report)
+    logger.info("M1 LoRA isolation classification=%s", report["classification"])
     logger.info("Diagnostic report: %s", output)
     return 0
 

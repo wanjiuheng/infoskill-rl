@@ -516,6 +516,15 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         return report
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def infoskill_vllm_last_input_fingerprints(self) -> dict[str, object]:
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("vLLM input inspection requires an active rollout session")
+        fingerprints = getattr(self.rollout, "_infoskill_last_input_fingerprints", ())
+        if not fingerprints:
+            raise RuntimeError("no vLLM generation input fingerprint is available")
+        return {"rank": dist.get_rank(), "calls": list(fingerprints)}
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def infoskill_vllm_lora_snapshot(self) -> dict[str, object]:
         """Inspect the active pinned-vLLM adapter after FSDP-to-vLLM sync."""
 

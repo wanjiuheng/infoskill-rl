@@ -7,6 +7,7 @@ from typing import Any
 
 from .hybrid_prefix import (
     clone_sampling_params_with_seeds,
+    fingerprint_vllm_generation_inputs,
     temporary_sampling_overrides,
 )
 
@@ -38,6 +39,7 @@ class _HybridInferenceEngine:
         self._prefix_embeds = prefix_embeds
         self._prefix_masks = prefix_masks
         self._semantic_seeds = semantic_seeds
+        self.input_fingerprints: list[dict[str, object]] = []
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._engine, name)
@@ -64,6 +66,10 @@ class _HybridInferenceEngine:
         per_request_params = clone_sampling_params_with_seeds(
             sampling_params, self._semantic_seeds
         )
+        if os.environ.get("INFOSKILL_VLLM_INPUT_AUDIT") == "1":
+            self.input_fingerprints.append(
+                fingerprint_vllm_generation_inputs(enriched, per_request_params)
+            )
         return self._engine.generate(
             prompts=enriched,
             sampling_params=per_request_params,
@@ -130,12 +136,13 @@ def hybrid_vllm_rollout_class():
                 for value in non_tensors.pop("semantic_seeds", [0] * batch_size)
             )
             engine = self.inference_engine
-            self.inference_engine = _HybridInferenceEngine(
+            wrapper = _HybridInferenceEngine(
                 engine,
                 prefix_embeds=prefixes,
                 prefix_masks=masks,
                 semantic_seeds=seeds,
             )
+            self.inference_engine = wrapper
             try:
                 meta = prompts.meta_info  # type: ignore[attr-defined]
                 with temporary_sampling_overrides(
@@ -145,7 +152,11 @@ def hybrid_vllm_rollout_class():
                     max_tokens=int(meta.get("max_tokens", self.config.response_length)),
                     response_cap=int(self.config.response_length),
                 ):
-                    return super().generate_sequences(prompts, **kwargs)
+                    output = super().generate_sequences(prompts, **kwargs)
+                    self._infoskill_last_input_fingerprints = tuple(
+                        wrapper.input_fingerprints
+                    )
+                    return output
             finally:
                 self.inference_engine = engine
 

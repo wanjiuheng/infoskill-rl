@@ -408,3 +408,14 @@ CLI 失败；只有初始化、加载或产物写入异常才返回非零。无�
 （最大绝对误差约 0.04289），分类为 `vllm_lora_execution_nondeterminism`。这定位到启用 LoRA
 之后的生成边界，但不单凭该探针认定 CUDA Graph 为因。定位完成前，梯度裁剪 A/B 的成功率结论
 保持暂停，正式训练也不因单次评测波动更改算法。
+
+2026-09-16 补 `m1-lora-isolation` 一次后台矩阵，避免人工逐轮切换条件造成 GPU 空档和
+Graph/eager 探针请求数不一致的混淆。四个全新 runtime 依次为 checkpoint-eager、base-eager、
+checkpoint-graph、base-graph；每个 runtime 在同一持久 rollout session 中对固定前三条探针
+比较 hybrid 前缀/纯 token 与三卡无填充/两请求一填充四格，均重复三轮并交替执行顺序。
+诊断只读取 step-205 checkpoint，不运行 ALFWorld 环境、不训练、不更新权重。每轮记录 driver
+输入以及实际送给 vLLM 的 token、BF16 前缀、mask、seed、sampling 参数摘要，同时检查
+FSDP、M1 模块、vLLM 注册 LoRA/活跃 GPU 槽位和 base 权重指纹。每个 runtime 完成即落盘
+partial 报告；完整分类只能作为定位线索，不能替代固定 140 条成功率门。
+vLLM 输入摘要只在该入口通过 `INFOSKILL_VLLM_INPUT_AUDIT=1` 启用，正常训练与正式评测
+不承担额外的 BF16 前缀 CPU 复制和 SHA-256 开销。

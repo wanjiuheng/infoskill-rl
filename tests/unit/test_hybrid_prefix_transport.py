@@ -10,6 +10,7 @@ from unittest.mock import patch
 from infoskill.integrations.verl.hybrid_prefix import (
     build_hybrid_vllm_inputs,
     clone_sampling_params_with_seeds,
+    fingerprint_vllm_generation_inputs,
     temporary_sampling_overrides,
 )
 from infoskill.integrations.verl.hybrid_rollout import (
@@ -41,6 +42,16 @@ class _FakeTensor:
         result = copy.copy(self)
         result.contiguous_value = True
         return result
+
+    def view(self, _dtype: object):
+        class FakeBytes:
+            def numpy(self):
+                return self
+
+            def tobytes(self):
+                return b"fixed-prefix"
+
+        return FakeBytes()
 
 
 class _SamplingParams:
@@ -180,11 +191,16 @@ class HybridPrefixTransportTests(unittest.TestCase):
             semantic_seeds=(13, 17),
         )
 
-        output = proxy.generate(
-            prompts=[{"prompt_token_ids": [0, 0, 9]}, {"prompt_token_ids": [8]}],
-            sampling_params=_SamplingParams(seed=999),
-            use_tqdm=False,
-        )
+        with patch.dict(os.environ, {"INFOSKILL_VLLM_INPUT_AUDIT": "1"}):
+            with patch(
+                "infoskill.integrations.verl.hybrid_rollout.fingerprint_vllm_generation_inputs",
+                return_value={"batch_sha256": "fake"},
+            ):
+                output = proxy.generate(
+                    prompts=[{"prompt_token_ids": [0, 0, 9]}, {"prompt_token_ids": [8]}],
+                    sampling_params=_SamplingParams(seed=999),
+                    use_tqdm=False,
+                )
 
         self.assertEqual(output, ("ok",))
         self.assertIs(engine.call["prompts"][0]["infoskill_prefix_embeds"], prefix)
@@ -197,6 +213,38 @@ class HybridPrefixTransportTests(unittest.TestCase):
             [item.seed for item in engine.call["sampling_params"]],
             [13, 17],
         )
+        self.assertEqual(proxy.input_fingerprints[0]["batch_sha256"], "fake")
+
+    def test_actual_vllm_input_digest_changes_with_seed_and_prefix(self) -> None:
+        params = _SamplingParams(seed=7)
+        plain = fingerprint_vllm_generation_inputs(
+            [{"prompt_token_ids": [3, 4]}], [params]
+        )
+        seeded = fingerprint_vllm_generation_inputs(
+            [{"prompt_token_ids": [3, 4]}], [_SamplingParams(seed=8)]
+        )
+        prefixed = fingerprint_vllm_generation_inputs(
+            [{"prompt_token_ids": [3, 4],
+              "infoskill_prefix_embeds": b"prefix",
+              "infoskill_prefix_mask": [True, False]}],
+            [params],
+        )
+        self.assertNotEqual(plain["batch_sha256"], seeded["batch_sha256"])
+        self.assertNotEqual(plain["batch_sha256"], prefixed["batch_sha256"])
+
+    def test_input_audit_is_off_on_normal_training_and_evaluation(self) -> None:
+        proxy = _HybridInferenceEngine(
+            _Engine(),
+            prefix_embeds=(None,),
+            prefix_masks=(None,),
+            semantic_seeds=(7,),
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            proxy.generate(
+                prompts=[{"prompt_token_ids": [3, 4]}],
+                sampling_params=_SamplingParams(),
+            )
+        self.assertEqual(proxy.input_fingerprints, [])
 
     def test_sampling_overrides_apply_requested_values_and_restore(self) -> None:
         params = _SamplingParams(temperature=1.0, top_p=1.0, max_tokens=256)
