@@ -506,11 +506,14 @@ case "${ACTION}" in
     esac
     python -m infoskill.cli m1-lora-reproducibility "${M1_REPRO_ARGS[@]}"
     ;;
-  m1-lora-isolation)
+  m1-lora-isolation|m1-lora-boundary)
     export INFOSKILL_VLLM_INPUT_AUDIT=1
+    if [[ "${ACTION}" == "m1-lora-boundary" ]]; then
+      export INFOSKILL_VLLM_BOUNDARY_AUDIT=1
+    fi
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     if [[ "${#GPU_IDS[@]}" -ne 3 ]]; then
-      echo "m1-lora-isolation requires exactly three GPU indices" >&2
+      echo "${ACTION} requires exactly three GPU indices" >&2
       exit 2
     fi
     for gpu_id in "${GPU_IDS[@]}"; do
@@ -520,7 +523,7 @@ case "${ACTION}" in
       fi
     done
     if [[ -z "${POLICY_CHECKPOINT}" ]]; then
-      echo "POLICY_CHECKPOINT is required for m1-lora-isolation" >&2
+      echo "POLICY_CHECKPOINT is required for ${ACTION}" >&2
       exit 2
     fi
     M1_ISOLATION_ARGS=(
@@ -535,7 +538,7 @@ case "${ACTION}" in
     if [[ "${VERBOSE_RUNTIME_LOGS}" == 1 ]]; then
       M1_ISOLATION_ARGS+=(--verbose-runtime-logs)
     fi
-    python -m infoskill.cli m1-lora-isolation "${M1_ISOLATION_ARGS[@]}"
+    python -m infoskill.cli "${ACTION}" "${M1_ISOLATION_ARGS[@]}"
     ;;
   grounding)
     GROUNDING_ARGS=(

@@ -720,6 +720,21 @@ class VerlRuntime:
             raise RuntimeError("vLLM input fingerprint requires an active rollout session")
         return tuple(self.worker_group.infoskill_vllm_last_input_fingerprints())
 
+    def begin_vllm_boundary_capture(self) -> None:
+        if not self._rollout_session_active:
+            raise RuntimeError("vLLM boundary capture requires an active session")
+        self.worker_group.begin_infoskill_vllm_boundary_capture()
+
+    def take_vllm_boundary_rows(self) -> tuple[Mapping[str, object], ...]:
+        if not self._rollout_session_active:
+            raise RuntimeError("vLLM boundary rows require an active session")
+        return tuple(self.worker_group.take_infoskill_vllm_boundary_rows())
+
+    def end_vllm_boundary_capture(self) -> None:
+        if not self._rollout_session_active:
+            return
+        self.worker_group.end_infoskill_vllm_boundary_capture()
+
     def infoskill_module_snapshot(self) -> tuple[Mapping[str, object], ...]:
         if not self.config.enable_infoskill_modules:
             raise RuntimeError("INFO-SKILL module snapshot requires M1 modules")

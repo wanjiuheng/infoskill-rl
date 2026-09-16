@@ -1994,6 +1994,17 @@ M1 step-205 的波动定位可用 `scripts/run_alfworld.sh m1-lora-isolation` �
 运行目录中的 `m1_lora_isolation_partial.json` 在每个 runtime 完成后更新；完整结果为
 `m1_lora_isolation.json`。这项探针不运行 140 条正式测评。
 
+若已经确认活跃 LoRA 路径漂移，可改用 `m1-lora-boundary`（同样三卡和同一个
+`POLICY_CHECKPOINT`）。它复用上述四运行时、四 cell、三轮固定输入控制，额外只在诊断
+rollout session 内记录每个相同生成历史的原始 logits top-4/归一化值、采样前处理后的
+logits、采样 token 和返回 logprob。日志和 `m1_lora_isolation_partial.json` 每完成一个
+runtime 更新；最终报告为 `m1_lora_boundary.json`，诊断分类在
+`boundary_diagnostic.classification`。正常 train/eval 不挂载这些 hook，不安装或改动 vLLM。
+若四组输入/权重控制失败、基础模型也漂移、或没有相同生成历史，报告会判为不确定/控制
+失败，不能把差异强行归因于 LoRA kernel。top-4 与归一化值是有界摘要，不是整张词表的
+逐元素验证；报告不代表 140 条 success。采样边界在已固定的 vLLM 0.8.4 模型执行路径上，
+远程首次运行仍须核验 worker hook 与该 wheel 兼容。
+
 独立 `eval infoskill` 入口支持默认关闭的 `HYBRID_PREFIX_CUDA_GRAPH=1`。该开关与训练入口
 使用同一条 hybrid-prefix vLLM CUDA Graph 实现，并写入
 `provenance.json.evaluation_runtime.hybrid_prefix_cuda_graph`、`resolved_config.json`、

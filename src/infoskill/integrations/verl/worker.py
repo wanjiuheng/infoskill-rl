@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 from dataclasses import asdict
 from pathlib import Path
@@ -458,13 +459,19 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         if not self._infoskill_rollout_session_active:
             return
         try:
+            capture = getattr(self, "_infoskill_vllm_boundary_capture", None)
             try:
-                self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
-                self._infoskill_rollout_memory_snapshot.update(
-                    self._stop_infoskill_cuda_memory_sampler()
-                )
+                if capture is not None:
+                    capture.remove()
+                    self._infoskill_vllm_boundary_capture = None
             finally:
-                self.rollout_sharding_manager.__exit__(None, None, None)
+                try:
+                    self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
+                    self._infoskill_rollout_memory_snapshot.update(
+                        self._stop_infoskill_cuda_memory_sampler()
+                    )
+                finally:
+                    self.rollout_sharding_manager.__exit__(None, None, None)
         finally:
             # Start a fresh peak window for old/ref logprob and actor update.
             get_torch_device().reset_peak_memory_stats()
@@ -523,6 +530,42 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         if not fingerprints:
             raise RuntimeError("no vLLM generation input fingerprint is available")
         return {"rank": dist.get_rank(), "calls": list(fingerprints)}
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def begin_infoskill_vllm_boundary_capture(self) -> None:
+        """Install bounded logits hooks for the explicit M1 diagnostic only."""
+
+        if os.environ.get("INFOSKILL_VLLM_BOUNDARY_AUDIT") != "1":
+            raise RuntimeError("vLLM boundary capture requires its scoped audit flag")
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("vLLM boundary capture requires an active session")
+        if getattr(self, "_infoskill_vllm_boundary_capture", None) is not None:
+            raise RuntimeError("vLLM boundary capture is already active")
+        from infoskill.m1_lora_boundary import VllmBoundaryCapture
+
+        capture = VllmBoundaryCapture(
+            self.rollout_sharding_manager.model_runner,
+            rank=dist.get_rank(),
+        )
+        capture.install()
+        self._infoskill_vllm_boundary_capture = capture
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def take_infoskill_vllm_boundary_rows(self) -> dict[str, object]:
+        capture = getattr(self, "_infoskill_vllm_boundary_capture", None)
+        if capture is None:
+            raise RuntimeError("vLLM boundary capture is not active")
+        return {"rank": dist.get_rank(), "rows": capture.take()}
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def end_infoskill_vllm_boundary_capture(self) -> None:
+        capture = getattr(self, "_infoskill_vllm_boundary_capture", None)
+        if capture is None:
+            return
+        try:
+            capture.remove()
+        finally:
+            self._infoskill_vllm_boundary_capture = None
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def infoskill_vllm_lora_snapshot(self) -> dict[str, object]:

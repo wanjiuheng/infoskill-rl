@@ -119,6 +119,21 @@ class M1LoRAIsolationTests(unittest.TestCase):
         )
         self.assertEqual(report["drift_cells"]["base-eager"], [])
 
+    def test_boundary_capture_is_scoped_and_has_three_rounds_per_cell(self) -> None:
+        runtimes = []
+        def factory(graph: bool):
+            runtime = _FakeRuntime(graph)
+            runtimes.append(runtime)
+            return runtime
+        samples = collect_m1_isolation_samples(
+            runtime_factory=factory,
+            checkpoint_runtime_directory=Path("checkpoint"),
+            probes=tuple(_probe(index) for index in range(3)),
+            capture_boundaries=True,
+        )
+        self.assertTrue(all(runtime.boundary_starts == 1 and runtime.boundary_ends == 1 for runtime in runtimes))
+        self.assertTrue(all(len(cell.boundary_rounds) == 3 for sample in samples for cell in sample.cells))
+
 
 class _FakeRuntime:
     def __init__(self, graph_enabled: bool) -> None:
@@ -126,6 +141,8 @@ class _FakeRuntime:
         self.generation_calls = 0
         self.closed = False
         self.loaded = False
+        self.boundary_starts = 0
+        self.boundary_ends = 0
 
     def load_portable_state(self, _directory: Path) -> tuple[dict[str, object], ...]:
         self.loaded = True
@@ -175,6 +192,22 @@ class _FakeRuntime:
 
     def vllm_last_input_fingerprints(self) -> tuple[dict[str, object], ...]:
         return ({"rank": 0, "calls": [{"digest": "stable"}]},)
+
+    def begin_vllm_boundary_capture(self) -> None:
+        self.boundary_starts += 1
+
+    def take_vllm_boundary_rows(self) -> tuple[dict[str, object], ...]:
+        return ({"rank": 0, "rows": [{
+            "rank": 0,
+            "history_sha256": "fixed",
+            "raw": {"top_values": [1.0], "logsumexp": 1.2},
+            "processed": {"top_values": [1.0], "logsumexp": 1.2},
+            "sampled_token_id": 1,
+            "returned_logprob": -0.1,
+        }]},)
+
+    def end_vllm_boundary_capture(self) -> None:
+        self.boundary_ends += 1
 
     def close(self) -> None:
         self.closed = True

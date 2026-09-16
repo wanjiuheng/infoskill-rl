@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
         return _m1_lora_reproducibility(config, args)
     if args.command == "m1-lora-isolation":
         return _m1_lora_isolation(config, args)
+    if args.command == "m1-lora-boundary":
+        return _m1_lora_isolation(config, args)
     if args.command == "grounding":
         return _grounding(config, args)
     if args.command == "grounding-timeout-rescue":
@@ -216,6 +218,16 @@ def _parser() -> argparse.ArgumentParser:
     m1_isolation.add_argument("--run-name")
     m1_isolation.add_argument("--max-new-tokens", type=int, default=32)
     m1_isolation.add_argument("--verbose-runtime-logs", action="store_true")
+    m1_boundary = subparsers.add_parser(
+        "m1-lora-boundary",
+        help="capture raw/processed logits and sampling boundaries in one four-runtime suite",
+    )
+    m1_boundary.add_argument("--config", required=True)
+    m1_boundary.add_argument("--policy-checkpoint", required=True)
+    m1_boundary.add_argument("--num-gpus", type=int, required=True)
+    m1_boundary.add_argument("--run-name")
+    m1_boundary.add_argument("--max-new-tokens", type=int, default=32)
+    m1_boundary.add_argument("--verbose-runtime-logs", action="store_true")
     grounding = subparsers.add_parser("grounding", help="generate strict train-only expert labels")
     grounding.add_argument("--config", required=True)
     grounding.add_argument("--run-name")
@@ -1963,6 +1975,9 @@ def _m1_lora_isolation(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("M1 LoRA isolation requires exactly three physical GPUs")
     if os.environ.get("INFOSKILL_VLLM_INPUT_AUDIT") != "1":
         raise RuntimeError("m1-lora-isolation requires scoped vLLM input audit")
+    capture_boundaries = args.command == "m1-lora-boundary"
+    if capture_boundaries and os.environ.get("INFOSKILL_VLLM_BOUNDARY_AUDIT") != "1":
+        raise RuntimeError("m1-lora-boundary requires scoped vLLM boundary audit")
     if args.max_new_tokens <= 0 or args.max_new_tokens > config.max_response_tokens:
         raise ValueError("max_new_tokens is outside the response cap")
     if config.paths.policy_adapter is not None:
@@ -1980,6 +1995,7 @@ def _m1_lora_isolation(config: AppConfig, args: argparse.Namespace) -> int:
         build_m1_lora_isolation_report,
         collect_m1_isolation_samples,
     )
+    from infoskill.m1_lora_boundary import build_boundary_isolation_report
     from infoskill.m1_reproducibility import build_hybrid_prefix_reproducibility_probes
     from infoskill.persistence import resolve_portable_checkpoint
     from infoskill.persistence.model_identity import (
@@ -2023,7 +2039,11 @@ def _m1_lora_isolation(config: AppConfig, args: argparse.Namespace) -> int:
     )
     run_directory = _run_directory(
         config,
-        args.run_name or f"m1-lora-isolation-step-{checkpoint.global_update:06d}",
+        args.run_name or (
+            f"m1-lora-boundary-step-{checkpoint.global_update:06d}"
+            if capture_boundaries
+            else f"m1-lora-isolation-step-{checkpoint.global_update:06d}"
+        ),
     )
     logger = _configure_logging(run_directory)
     settings = VerlRuntimeConfig(
@@ -2061,6 +2081,7 @@ def _m1_lora_isolation(config: AppConfig, args: argparse.Namespace) -> int:
         "cells_per_runtime": 4,
         "rounds_per_cell": 3,
         "probe_source": "fixed_synthetic_bfloat16_v1",
+        "capture_boundaries": capture_boundaries,
     }
     resolved["policy_model_identity"] = policy_identity.as_dict()
     _write_json(run_directory / "resolved_config.json", resolved)
@@ -2085,14 +2106,26 @@ def _m1_lora_isolation(config: AppConfig, args: argparse.Namespace) -> int:
         probes=probes,
         progress=lambda label, event: logger.info("runtime=%s event=%s", label, event),
         on_sample=save_partial,
+        capture_boundaries=capture_boundaries,
     )
     report = build_m1_lora_isolation_report(samples)
+    if capture_boundaries:
+        boundary_report = build_boundary_isolation_report(samples)
+        if not all(report["controls"].values()):
+            boundary_report["classification"] = "input_or_weight_control_failure"
+        report["boundary_diagnostic"] = boundary_report
+        logger.info(
+            "M1 LoRA boundary classification=%s",
+            boundary_report["classification"],
+        )
     report["checkpoint"] = {
         "directory": str(checkpoint.directory),
         "global_update": checkpoint.global_update,
         "provenance_sha256": hashlib.sha256(provenance_path.read_bytes()).hexdigest(),
     }
-    output = run_directory / "m1_lora_isolation.json"
+    output = run_directory / (
+        "m1_lora_boundary.json" if capture_boundaries else "m1_lora_isolation.json"
+    )
     _write_json(output, report)
     logger.info("M1 LoRA isolation classification=%s", report["classification"])
     logger.info("Diagnostic report: %s", output)

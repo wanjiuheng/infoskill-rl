@@ -33,6 +33,7 @@ class IsolationCellSample:
     input_digests_after: tuple[str, ...]
     worker_input_snapshots: tuple[tuple[Mapping[str, object], ...], ...]
     generation_rounds: tuple[tuple[GenerationResult, ...], ...]
+    boundary_rounds: tuple[tuple[Mapping[str, object], ...], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +183,7 @@ def collect_m1_isolation_samples(
     probes: tuple[GenerationRequest, ...],
     progress: Callable[[str, str], None] | None = None,
     on_sample: Callable[[IsolationRuntimeSample], None] | None = None,
+    capture_boundaries: bool = False,
 ) -> tuple[IsolationRuntimeSample, ...]:
     """Run the complete four-runtime matrix in one bounded GPU session."""
 
@@ -213,29 +215,40 @@ def collect_m1_isolation_samples(
                     progress(label, "checkpoint-loaded-and-fingerprinted")
 
             cell_rows: dict[str, dict[str, list[object]]] = {
-                cell.name: {"before": [], "after": [], "worker": [], "results": []}
+                cell.name: {"before": [], "after": [], "worker": [], "results": [], "boundary": []}
                 for cell in cells
             }
             with runtime.rollout_session():
+                if capture_boundaries:
+                    runtime.begin_vllm_boundary_capture()
                 lora_before = tuple(runtime.vllm_lora_snapshot())
                 base_before = tuple(runtime.vllm_base_fingerprint())
-                for round_index in range(3):
-                    order = cells if round_index % 2 == 0 else tuple(reversed(cells))
-                    for cell in order:
-                        runtime.reset_rollout_prefix_cache()
-                        before = request_batch_digest(cell.requests)
-                        results = tuple(runtime.generate(cell.requests))
-                        worker = tuple(runtime.vllm_last_input_fingerprints())
-                        after = request_batch_digest(cell.requests)
-                        row = cell_rows[cell.name]
-                        row["before"].append(before)
-                        row["results"].append(results)
-                        row["worker"].append(worker)
-                        row["after"].append(after)
-                        if progress is not None:
-                            progress(label, f"{cell.name}-round-{round_index + 1}-complete")
-                lora_after = tuple(runtime.vllm_lora_snapshot())
-                base_after = tuple(runtime.vllm_base_fingerprint())
+                try:
+                    for round_index in range(3):
+                        order = cells if round_index % 2 == 0 else tuple(reversed(cells))
+                        for cell in order:
+                            runtime.reset_rollout_prefix_cache()
+                            before = request_batch_digest(cell.requests)
+                            results = tuple(runtime.generate(cell.requests))
+                            worker = tuple(runtime.vllm_last_input_fingerprints())
+                            boundary = (
+                                tuple(runtime.take_vllm_boundary_rows())
+                                if capture_boundaries else ()
+                            )
+                            after = request_batch_digest(cell.requests)
+                            row = cell_rows[cell.name]
+                            row["before"].append(before)
+                            row["results"].append(results)
+                            row["worker"].append(worker)
+                            row["boundary"].append(boundary)
+                            row["after"].append(after)
+                            if progress is not None:
+                                progress(label, f"{cell.name}-round-{round_index + 1}-complete")
+                    lora_after = tuple(runtime.vllm_lora_snapshot())
+                    base_after = tuple(runtime.vllm_base_fingerprint())
+                finally:
+                    if capture_boundaries:
+                        runtime.end_vllm_boundary_capture()
             if load_checkpoint:
                 infoskill_after = tuple(runtime.infoskill_module_snapshot())
 
@@ -256,6 +269,14 @@ def collect_m1_isolation_samples(
                         input_digests_after=tuple(cell_rows[cell.name]["after"]),
                         worker_input_snapshots=tuple(cell_rows[cell.name]["worker"]),
                         generation_rounds=tuple(cell_rows[cell.name]["results"]),
+                        boundary_rounds=tuple(
+                            tuple(
+                                row
+                                for rank_report in reports
+                                for row in rank_report["rows"]
+                            )
+                            for reports in cell_rows[cell.name]["boundary"]
+                        ) if capture_boundaries else (),
                     )
                     for cell in cells
                 ),
