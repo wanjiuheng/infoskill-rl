@@ -218,6 +218,24 @@ def _parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    m1_repro.add_argument(
+        "--lora-shrink-split-k-one",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "install the production SPLIT_K=1 LoRA shrink intervention in "
+            "every fresh runtime and fail closed unless every rank verifies it"
+        ),
+    )
+    m1_repro.add_argument(
+        "--lora-kernel-intervention",
+        choices=("none", "reference_full"),
+        default="none",
+        help=(
+            "diagnostic-only LoRA kernel replacement; reference_full uses "
+            "deterministic reference shrink and expand for fresh-runtime isolation"
+        ),
+    )
     m1_repro.add_argument("--verbose-runtime-logs", action="store_true")
     m1_isolation = subparsers.add_parser(
         "m1-lora-isolation",
@@ -1861,6 +1879,24 @@ def _m1_lora_reproducibility(
             "m1-lora-reproducibility loads portable state explicitly; "
             "paths.policy_adapter must be null"
         )
+    if (
+        args.lora_shrink_split_k_one
+        and args.lora_kernel_intervention != "none"
+    ):
+        raise ValueError(
+            "SPLIT_K=1 and a reference LoRA kernel intervention cannot be combined"
+        )
+    if os.environ.get("INFOSKILL_VLLM_INPUT_AUDIT") != "1":
+        raise RuntimeError(
+            "m1-lora-reproducibility requires scoped vLLM input audit"
+        )
+    if (
+        args.lora_kernel_intervention != "none"
+        and os.environ.get("INFOSKILL_VLLM_LAYER_AUDIT") != "1"
+    ):
+        raise RuntimeError(
+            "LoRA kernel intervention requires scoped vLLM layer audit"
+        )
     _validate_paths(
         config,
         mode=SkillMode.INFO_SKILL,
@@ -1955,6 +1991,7 @@ def _m1_lora_reproducibility(
         skill_bank_path=config.paths.skill_bank,
         enable_infoskill_auxiliary=False,
         infoskill_history_length=config.history_length,
+        lora_shrink_split_k_one=args.lora_shrink_split_k_one,
     )
     resolved = config.as_dict()
     resolved["m1_lora_reproducibility"] = {
@@ -1967,6 +2004,9 @@ def _m1_lora_reproducibility(
         "fresh_base_control_runtimes": 2,
         "max_new_tokens": args.max_new_tokens,
         "hybrid_prefix_cuda_graph": args.hybrid_prefix_cuda_graph,
+        "lora_shrink_split_k_one": args.lora_shrink_split_k_one,
+        "capture_input_fingerprints": True,
+        "lora_kernel_intervention": args.lora_kernel_intervention,
         "soft_prefix_source": "fixed_synthetic_bfloat16_v1",
     }
     resolved["policy_model_identity"] = policy_identity.as_dict()
@@ -1982,8 +2022,18 @@ def _m1_lora_reproducibility(
         base_runtime_factory=lambda: VerlRuntime.start(settings),
         checkpoint_runtime_directory=checkpoint.runtime_directory,
         probes=probes,
+        capture_input_fingerprints=True,
+        lora_kernel_intervention=(
+            None
+            if args.lora_kernel_intervention == "none"
+            else args.lora_kernel_intervention
+        ),
     )
-    report = build_m1_reproducibility_report(samples)
+    report = build_m1_reproducibility_report(
+        samples,
+        require_input_fingerprints=True,
+        require_split_k_one=args.lora_shrink_split_k_one,
+    )
     report.update(
         {
             "checkpoint": {
@@ -2012,6 +2062,11 @@ def _m1_lora_reproducibility(
                 "hybrid_prefix_cuda_graph_use_inductor": (
                     False if args.hybrid_prefix_cuda_graph else None
                 ),
+                "lora_shrink_split_k_one": args.lora_shrink_split_k_one,
+                "lora_shrink_split_k_one_verified": all(
+                    sample.split_k_one_verified for sample in samples
+                ),
+                "lora_kernel_intervention": args.lora_kernel_intervention,
             },
         }
     )

@@ -801,6 +801,9 @@ class TrainingCliTests(unittest.TestCase):
             "--max-new-tokens",
             "24",
             "--no-hybrid-prefix-cuda-graph",
+            "--lora-shrink-split-k-one",
+            "--lora-kernel-intervention",
+            "none",
         ]
 
         with patch(
@@ -816,6 +819,8 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(parsed.case_count, 2)
         self.assertEqual(parsed.max_new_tokens, 24)
         self.assertFalse(parsed.hybrid_prefix_cuda_graph)
+        self.assertTrue(parsed.lora_shrink_split_k_one)
+        self.assertEqual(parsed.lora_kernel_intervention, "none")
 
     def test_raw_skill_ab_dispatches_one_runtime_diagnostic(self) -> None:
         arguments = [

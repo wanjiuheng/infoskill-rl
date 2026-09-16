@@ -2095,6 +2095,21 @@ LoRA shrink kernel 的 `SPLIT_K` 固定为 1，结束和异常路径都会恢复
 无效动作率、rollout 秒数和每卡最低空闲显存。成功率是否上升只能由该效果门决定，不能由逐位
 确定性诊断直接推断。
 
+若相同 split-K=1 checkpoint 的两次完整评测不一致，不要继续重复 140 条，也不要把较高的一次当作
+修复后的成功率。运行合并的跨 runtime 矩阵：
+
+```bash
+PYTHON=/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python \
+GPUS=0,1,2 \
+POLICY_CHECKPOINT=/absolute/path/to/checkpoints/step-000205 \
+bash scripts/run_m1_splitk1_fresh_runtime_matrix.sh
+```
+
+它会顺序执行 Graph+split-K1、eager+split-K1、eager+reference-full；每格均含 checkpoint A/B
+和 base A/B，因此同一时刻只占用三张卡。最终以 `m1-splitk1-fresh-runtime-matrix-*.json` 的
+`controls_valid` 和 `classification` 为准，并自动打包三个子报告、resolved config 与日志。
+该任务预计 35–55 分钟，主要耗时是 12 次全新 runtime 初始化，不会产生新 checkpoint。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

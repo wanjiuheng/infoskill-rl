@@ -19,6 +19,7 @@ CHECKPOINT_EFFECT_MAX_NEW_TOKENS="${CHECKPOINT_EFFECT_MAX_NEW_TOKENS:-64}"
 # three built-in ALFWorld-shaped requests to keep the diagnosis short.
 M1_REPRO_CASE_COUNT="${M1_REPRO_CASE_COUNT:-3}"
 M1_REPRO_MAX_NEW_TOKENS="${M1_REPRO_MAX_NEW_TOKENS:-32}"
+M1_REPRO_LORA_KERNEL_INTERVENTION="${M1_REPRO_LORA_KERNEL_INTERVENTION:-none}"
 # One-token exact-hash replay counts for the decoder/LoRA localization suite.
 M1_LAYER_DETAILED_ROUNDS="${M1_LAYER_DETAILED_ROUNDS:-6}"
 M1_LAYER_CONTROL_ROUNDS="${M1_LAYER_CONTROL_ROUNDS:-3}"
@@ -156,6 +157,11 @@ if [[ ! "${M1_REPRO_CASE_COUNT}" =~ ^[1-3]$ ]]; then
 fi
 if [[ ! "${M1_REPRO_MAX_NEW_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "M1_REPRO_MAX_NEW_TOKENS must be a positive integer" >&2
+  exit 2
+fi
+if [[ "${M1_REPRO_LORA_KERNEL_INTERVENTION}" != "none" \
+      && "${M1_REPRO_LORA_KERNEL_INTERVENTION}" != "reference_full" ]]; then
+  echo "M1_REPRO_LORA_KERNEL_INTERVENTION must be none or reference_full" >&2
   exit 2
 fi
 if [[ -n "${SEGMENT_END_UPDATE}" && ! "${SEGMENT_END_UPDATE}" =~ ^[1-9][0-9]*$ ]]; then
@@ -487,6 +493,10 @@ case "${ACTION}" in
     "${PYTHON_BIN}" -m infoskill.cli checkpoint-effect "${EFFECT_ARGS[@]}"
     ;;
   m1-lora-reproducibility)
+    export INFOSKILL_VLLM_INPUT_AUDIT=1
+    if [[ "${M1_REPRO_LORA_KERNEL_INTERVENTION}" != "none" ]]; then
+      export INFOSKILL_VLLM_LAYER_AUDIT=1
+    fi
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     if [[ "${#GPU_IDS[@]}" -lt 1 ]]; then
       echo "GPUS must contain at least one physical GPU index" >&2
@@ -508,6 +518,7 @@ case "${ACTION}" in
       --num-gpus "${#GPU_IDS[@]}"
       --case-count "${M1_REPRO_CASE_COUNT}"
       --max-new-tokens "${M1_REPRO_MAX_NEW_TOKENS}"
+      --lora-kernel-intervention "${M1_REPRO_LORA_KERNEL_INTERVENTION}"
     )
     if [[ -n "${RUN_NAME}" ]]; then
       M1_REPRO_ARGS+=(--run-name "${RUN_NAME}")
@@ -515,6 +526,14 @@ case "${ACTION}" in
     case "${HYBRID_PREFIX_CUDA_GRAPH}" in
       0) M1_REPRO_ARGS+=(--no-hybrid-prefix-cuda-graph) ;;
       1) M1_REPRO_ARGS+=(--hybrid-prefix-cuda-graph) ;;
+    esac
+    case "${LORA_SHRINK_SPLIT_K_ONE}" in
+      0) M1_REPRO_ARGS+=(--no-lora-shrink-split-k-one) ;;
+      1) M1_REPRO_ARGS+=(--lora-shrink-split-k-one) ;;
+      *)
+        echo "LORA_SHRINK_SPLIT_K_ONE must be 0 or 1" >&2
+        exit 2
+        ;;
     esac
     case "${VERBOSE_RUNTIME_LOGS}" in
       0) ;;

@@ -435,6 +435,31 @@ class RunScriptTests(unittest.TestCase):
             '"${PYTHON_BIN}" -m infoskill.cli m1-lora-reproducibility',
             script,
         )
+        self.assertIn("export INFOSKILL_VLLM_INPUT_AUDIT=1", script)
+        self.assertIn(
+            'export INFOSKILL_VLLM_LAYER_AUDIT=1',
+            script,
+        )
+        self.assertIn(
+            '--lora-kernel-intervention "${M1_REPRO_LORA_KERNEL_INTERVENTION}"',
+            script,
+        )
+        self.assertIn(
+            '1) M1_REPRO_ARGS+=(--lora-shrink-split-k-one)',
+            script,
+        )
+
+    def test_split_k_fresh_runtime_matrix_is_one_unattended_job(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_m1_splitk1_fresh_runtime_matrix.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("run_cell graph-splitk1 1 1 none", script)
+        self.assertIn("run_cell eager-splitk1 0 1 none", script)
+        self.assertIn("run_cell eager-reference-full 0 0 reference_full", script)
+        self.assertIn("compare_m1_fresh_runtime_matrix.py", script)
+        self.assertIn("ARCHIVE=", script)
 
     def test_retrieval_mode_override_reaches_training_and_evaluation(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

@@ -21,6 +21,8 @@ class RuntimeReproducibilitySample:
     vllm_lora_snapshots: tuple[tuple[Mapping[str, object], ...], ...]
     vllm_base_snapshots: tuple[tuple[Mapping[str, object], ...], ...]
     generation_rounds: tuple[tuple[GenerationResult, ...], ...]
+    input_fingerprint_rounds: tuple[tuple[Mapping[str, object], ...], ...] = ()
+    split_k_one_verified: bool = False
 
 
 def build_hybrid_prefix_reproducibility_probes(
@@ -61,6 +63,8 @@ def collect_m1_reproducibility_samples(
     base_runtime_factory: Callable[[], object],
     checkpoint_runtime_directory: Path,
     probes: tuple[GenerationRequest, ...],
+    capture_input_fingerprints: bool = False,
+    lora_kernel_intervention: str | None = None,
     progress: Callable[[str, str], None] | None = None,
 ) -> tuple[RuntimeReproducibilitySample, ...]:
     """Probe two fresh checkpoint runtimes and two fresh base-only controls."""
@@ -100,26 +104,46 @@ def collect_m1_reproducibility_samples(
             lora_snapshots = []
             base_snapshots = []
             generation_rounds = []
+            input_fingerprint_rounds = []
+            split_k_one_verified = False
             with runtime.rollout_session():  # type: ignore[attr-defined]
-                for round_index in range(2):
-                    runtime.reset_rollout_prefix_cache()  # type: ignore[attr-defined]
+                split_k_one_verified = bool(
+                    runtime.lora_shrink_split_k_one_verified  # type: ignore[attr-defined]
+                )
+                if lora_kernel_intervention is not None:
+                    runtime.begin_vllm_lora_kernel_intervention(  # type: ignore[attr-defined]
+                        lora_kernel_intervention
+                    )
+                try:
+                    for round_index in range(2):
+                        runtime.reset_rollout_prefix_cache()  # type: ignore[attr-defined]
+                        lora_snapshots.append(
+                            tuple(runtime.vllm_lora_snapshot())  # type: ignore[attr-defined]
+                        )
+                        base_snapshots.append(
+                            tuple(runtime.vllm_base_fingerprint())  # type: ignore[attr-defined]
+                        )
+                        generation_rounds.append(tuple(
+                            runtime.generate(probes)  # type: ignore[attr-defined]
+                        ))
+                        if capture_input_fingerprints:
+                            input_fingerprint_rounds.append(tuple(
+                                runtime.vllm_last_input_fingerprints()  # type: ignore[attr-defined]
+                            ))
+                        if progress is not None:
+                            progress(
+                                label,
+                                f"generation-round-{round_index + 1}-complete",
+                            )
                     lora_snapshots.append(
                         tuple(runtime.vllm_lora_snapshot())  # type: ignore[attr-defined]
                     )
                     base_snapshots.append(
                         tuple(runtime.vllm_base_fingerprint())  # type: ignore[attr-defined]
                     )
-                    generation_rounds.append(
-                        tuple(runtime.generate(probes))  # type: ignore[attr-defined]
-                    )
-                    if progress is not None:
-                        progress(label, f"generation-round-{round_index + 1}-complete")
-                lora_snapshots.append(
-                    tuple(runtime.vllm_lora_snapshot())  # type: ignore[attr-defined]
-                )
-                base_snapshots.append(
-                    tuple(runtime.vllm_base_fingerprint())  # type: ignore[attr-defined]
-                )
+                finally:
+                    if lora_kernel_intervention is not None:
+                        runtime.end_vllm_lora_kernel_intervention()  # type: ignore[attr-defined]
             samples.append(
                 RuntimeReproducibilitySample(
                     label=label,
@@ -130,6 +154,8 @@ def collect_m1_reproducibility_samples(
                     vllm_lora_snapshots=tuple(lora_snapshots),
                     vllm_base_snapshots=tuple(base_snapshots),
                     generation_rounds=tuple(generation_rounds),
+                    input_fingerprint_rounds=tuple(input_fingerprint_rounds),
+                    split_k_one_verified=split_k_one_verified,
                 )
             )
         finally:
@@ -143,6 +169,8 @@ def build_m1_reproducibility_report(
     samples: Sequence[RuntimeReproducibilitySample],
     *,
     logprob_tolerance: float = 1e-7,
+    require_input_fingerprints: bool = False,
+    require_split_k_one: bool = False,
 ) -> dict[str, object]:
     """Classify the first non-reproducible checkpoint inference boundary."""
 
@@ -192,6 +220,21 @@ def build_m1_reproducibility_report(
         name: _generation_is_exact(comparison)
         for name, comparison in generation.items()
     }
+    input_fingerprints = {
+        "checkpoint_a_within_runtime": _input_rounds_are_exact(checkpoint_a),
+        "checkpoint_b_within_runtime": _input_rounds_are_exact(checkpoint_b),
+        "checkpoint_across_runtimes": _input_rounds_match(
+            checkpoint_a,
+            checkpoint_b,
+        ),
+        "base_a_within_runtime": _input_rounds_are_exact(base_a),
+        "base_b_within_runtime": _input_rounds_are_exact(base_b),
+        "base_across_runtimes": _input_rounds_match(base_a, base_b),
+    }
+    input_fingerprints_complete = all(input_fingerprints.values())
+    split_k_one_verified = all(
+        sample.split_k_one_verified for sample in samples
+    )
 
     actor_matches_checkpoint = all(
         snapshot.get("exact") is True
@@ -299,6 +342,14 @@ def build_m1_reproducibility_report(
     )
 
     checks = {
+        "input_fingerprints_exact": (
+            input_fingerprints_complete
+            if require_input_fingerprints
+            else True
+        ),
+        "split_k_one_verified_for_all_runtimes": (
+            split_k_one_verified if require_split_k_one else True
+        ),
         "checkpoint_load_reports_complete": checkpoint_load_reports_complete,
         "base_controls_have_zero_lora_b": base_controls_have_zero_lora_b,
         "actor_matches_checkpoint_on_all_ranks": actor_matches_checkpoint,
@@ -331,11 +382,16 @@ def build_m1_reproducibility_report(
         "reproducible": classification == "reproducible_under_probe",
         "checks": checks,
         "generation_comparisons": generation,
+        "input_fingerprint_comparisons": input_fingerprints,
         "runtime_samples": [_sample_payload(sample) for sample in samples],
     }
 
 
 def _classify(checks: Mapping[str, bool]) -> str:
+    if not checks["input_fingerprints_exact"]:
+        return "generation_input_nondeterminism"
+    if not checks["split_k_one_verified_for_all_runtimes"]:
+        return "split_k_one_not_verified"
     if not checks["checkpoint_load_reports_complete"]:
         return "checkpoint_load_incomplete"
     if not checks["base_controls_have_zero_lora_b"]:
@@ -374,6 +430,22 @@ def _classify(checks: Mapping[str, bool]) -> str:
     if not all(checks[name] for name in within):
         return "within_runtime_generation_nondeterminism"
     return "reproducible_under_probe"
+
+
+def _input_rounds_are_exact(sample: RuntimeReproducibilitySample) -> bool:
+    rounds = sample.input_fingerprint_rounds
+    return bool(rounds) and all(value == rounds[0] for value in rounds[1:])
+
+
+def _input_rounds_match(
+    first: RuntimeReproducibilitySample,
+    second: RuntimeReproducibilitySample,
+) -> bool:
+    return (
+        bool(first.input_fingerprint_rounds)
+        and bool(second.input_fingerprint_rounds)
+        and first.input_fingerprint_rounds[0] == second.input_fingerprint_rounds[0]
+    )
 
 
 def _generation_is_exact(comparison: Mapping[str, object]) -> bool:
@@ -517,4 +589,8 @@ def _sample_payload(sample: RuntimeReproducibilitySample) -> dict[str, object]:
             [asdict(result) for result in results]
             for results in sample.generation_rounds
         ],
+        "input_fingerprint_rounds": [
+            list(value) for value in sample.input_fingerprint_rounds
+        ],
+        "split_k_one_verified": sample.split_k_one_verified,
     }

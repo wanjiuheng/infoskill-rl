@@ -88,6 +88,8 @@ def _sample(
     lora_digest: str = "vllm",
     slot_digest: str | None = None,
     second_token: int | None = None,
+    input_digest: str = "input",
+    split_k_one_verified: bool = True,
 ) -> RuntimeReproducibilitySample:
     checkpoint = label.startswith("checkpoint")
     adapter_id = 1 if label.endswith("a") else 99
@@ -125,6 +127,11 @@ def _sample(
             (_result(token),),
             (_result(token if second_token is None else second_token),),
         ),
+        input_fingerprint_rounds=(
+            ({"rank": 0, "calls": [{"batch_sha256": input_digest}]},),
+            ({"rank": 0, "calls": [{"batch_sha256": input_digest}]},),
+        ),
+        split_k_one_verified=split_k_one_verified,
     )
 
 
@@ -257,6 +264,39 @@ class M1ReproducibilityTests(unittest.TestCase):
 
         self.assertFalse(report["checks"]["base_controls_have_zero_lora_b"])
         self.assertEqual(report["classification"], "base_control_not_lora_zero")
+
+    def test_report_rejects_cross_runtime_generation_input_drift_first(self) -> None:
+        report = build_m1_reproducibility_report(
+            (
+                _sample("checkpoint-a", input_digest="one"),
+                _sample("checkpoint-b", input_digest="two"),
+                _sample("base-a"),
+                _sample("base-b"),
+            ),
+            require_input_fingerprints=True,
+            require_split_k_one=True,
+        )
+
+        self.assertFalse(report["checks"]["input_fingerprints_exact"])
+        self.assertEqual(
+            report["classification"],
+            "generation_input_nondeterminism",
+        )
+
+    def test_report_requires_split_k_one_on_every_runtime(self) -> None:
+        report = build_m1_reproducibility_report(
+            (
+                _sample("checkpoint-a"),
+                _sample("checkpoint-b", split_k_one_verified=False),
+                _sample("base-a"),
+                _sample("base-b"),
+            ),
+            require_input_fingerprints=True,
+            require_split_k_one=True,
+        )
+
+        self.assertTrue(report["checks"]["input_fingerprints_exact"])
+        self.assertEqual(report["classification"], "split_k_one_not_verified")
 
 
 if __name__ == "__main__":

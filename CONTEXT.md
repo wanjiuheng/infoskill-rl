@@ -478,6 +478,11 @@ train/eval 新增默认关闭的 `LORA_SHRINK_SPLIT_K_ONE=1` 候选：它只复�
 `native_split_k_one` 干预，进入持久 rollout session 后在每个 rank 安装、离开或异常时恢复，
 并要求所有 worker 回报 active 才允许生成。该候选不改 checkpoint、基础权重或 vLLM wheel；
 只能通过命名 resume fork 改变，必须从同一 checkpoint 做固定任务与 140 条效果/吞吐门后再晋升。
+正式 step-205 重复门随后得到 44/140 与 47/140；轨迹中 139 条生成、130 条动作序列不一致，且
+首次动作分叉前输入完全一致。这否证了“split-K=1 已解决全部跨 runtime 漂移”，但不否定 v3 对
+native shrink atomic 漂移的局部因果定位。当前候选继续保持非默认，先运行一次性 fresh-runtime
+matrix（Graph/eager split-K=1 + eager reference-full，均含 checkpoint A/B 与 base A/B）再决定
+下一修复边界，不能从 step-205 继续 formal 长训。
 中央 `scripts/run_alfworld.sh` 必须直接执行显式 `PYTHON`（未设置时才回退到 `python`），不能只依赖
 外层临时修改 `PATH`；`bash -lc` 会读取登录环境并可能重置 PATH，曾导致预检与真正训练使用不同
 解释器。该约束覆盖 validate、eval、诊断、grounding 和 train 的所有 CLI 分支。

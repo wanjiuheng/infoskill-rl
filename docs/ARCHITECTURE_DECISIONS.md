@@ -473,3 +473,20 @@ provenance、resolved config、训练指标和评测 `rollout_performance` 都�
 监控曲线用独立 execution mode 标识协议切换。当前默认保持关闭；只有固定小样本复现、从干净
 step-200 分叉的短训练门、相同 checkpoint 的完整 140 条 Macro/Overall 效果门和吞吐/显存门
 全部通过后，才允许把候选用于后续 formal 训练。
+
+## D034：完整评测否证“仅修 shrink split-K 即可获得跨 runtime 可复现性”
+
+step-200 分叉并启用 D033 后，step-205 的两次独立 140 条评测都在三张卡逐 rank 验证了
+`SPLIT_K=1`，吞吐也稳定在约 560 秒；但结果分别为 44/140 与 47/140。结构化轨迹进一步显示：
+139/140 任务的生成 token 不同、130/140 的执行动作序列不同、19 个任务发生成功/失败翻转；
+所有首次动作分叉点之前的 canonical state、prompt、candidate skills、latent、soft-prefix 统计和
+prompt token count 均一致。评测是 temperature=0 的贪心解码，所以该现象不是正常采样方差。
+因此 D033 的小探针因果结论只证明默认 native shrink 的 split-K atomic reduction 是一个真实漂移源，
+不能再推导出它是唯一漂移源；正式候选仍不得晋升为默认或继续长程训练。
+
+后续诊断必须比较全新 runtime，而不能只在同一 runtime 内重复探针。新增一次性 fresh-runtime
+matrix：Graph+SPLIT_K=1、eager+SPLIT_K=1、eager+reference-full 三个 cell；每个 cell 顺序启动
+两个 checkpoint runtime 和两个 base control，并保存逐请求输入指纹、portable/FSDP/vLLM LoRA
+权重指纹、active slot、base 权重及两轮贪心输出。只有输入和权重 controls 全部 exact 后，才允许
+按结果区分 CUDA Graph、SPLIT_K=1 后仍存在的 native LoRA kernel 漂移，或 LoRA request/非 kernel
+执行漂移。该矩阵只增加诊断入口，不改变 train/eval 默认路径。
