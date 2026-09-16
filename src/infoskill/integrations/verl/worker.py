@@ -54,6 +54,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self._infoskill_rollout_memory_snapshot = None
         self._infoskill_cuda_memory_sampler = None
         self._infoskill_vllm_layer_capture = None
+        self._infoskill_vllm_lora_intervention = None
         self._infoskill_saved_lora_kwargs = None
         self._infoskill_cuda_memory_poll_interval_ms = int(
             self.config.model.get("infoskill_cuda_memory_poll_interval_ms", 0)
@@ -474,17 +475,33 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                     if layer_capture is not None:
                         layer_capture.remove()
                         self._infoskill_vllm_layer_capture = None
-                    if self._infoskill_saved_lora_kwargs is not None:
-                        self.rollout.lora_kwargs = self._infoskill_saved_lora_kwargs
-                        self._infoskill_saved_lora_kwargs = None
                 finally:
                     try:
-                        self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
-                        self._infoskill_rollout_memory_snapshot.update(
-                            self._stop_infoskill_cuda_memory_sampler()
+                        intervention = getattr(
+                            self, "_infoskill_vllm_lora_intervention", None
                         )
+                        if intervention is not None:
+                            intervention.remove()
+                            self._infoskill_vllm_lora_intervention = None
                     finally:
-                        self.rollout_sharding_manager.__exit__(None, None, None)
+                        try:
+                            if self._infoskill_saved_lora_kwargs is not None:
+                                self.rollout.lora_kwargs = (
+                                    self._infoskill_saved_lora_kwargs
+                                )
+                                self._infoskill_saved_lora_kwargs = None
+                        finally:
+                            try:
+                                self._infoskill_rollout_memory_snapshot = (
+                                    _cuda_memory_snapshot()
+                                )
+                                self._infoskill_rollout_memory_snapshot.update(
+                                    self._stop_infoskill_cuda_memory_sampler()
+                                )
+                            finally:
+                                self.rollout_sharding_manager.__exit__(
+                                    None, None, None
+                                )
         finally:
             # Start a fresh peak window for old/ref logprob and actor update.
             get_torch_device().reset_peak_memory_stats()
@@ -618,6 +635,39 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             capture.remove()
         finally:
             self._infoskill_vllm_layer_capture = None
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def begin_infoskill_vllm_lora_kernel_intervention(self, mode: str) -> None:
+        """Replace Punica LoRA stages only inside the scoped M1 audit."""
+
+        if os.environ.get("INFOSKILL_VLLM_LAYER_AUDIT") != "1":
+            raise RuntimeError("LoRA kernel intervention requires its audit flag")
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("LoRA kernel intervention requires an active session")
+        if self._infoskill_vllm_lora_intervention is not None:
+            raise RuntimeError("LoRA kernel intervention is already active")
+        if self._infoskill_vllm_layer_capture is not None:
+            raise RuntimeError("LoRA capture and intervention cannot overlap")
+        from infoskill.m1_lora_layer_localization import (
+            VllmLoraKernelIntervention,
+        )
+
+        intervention = VllmLoraKernelIntervention(
+            self.rollout_sharding_manager.model_runner,
+            mode,
+        )
+        intervention.install()
+        self._infoskill_vllm_lora_intervention = intervention
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def end_infoskill_vllm_lora_kernel_intervention(self) -> None:
+        intervention = self._infoskill_vllm_lora_intervention
+        if intervention is None:
+            return
+        try:
+            intervention.remove()
+        finally:
+            self._infoskill_vllm_lora_intervention = None
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def set_infoskill_vllm_lora_request_enabled(self, enabled: bool) -> None:

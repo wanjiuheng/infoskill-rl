@@ -234,7 +234,7 @@ def _parser() -> argparse.ArgumentParser:
         "m1-lora-layer-localization",
         help=(
             "localize active LoRA drift through final hidden state, decoder "
-            "layers, and the first affected layer's LoRA stages"
+            "layers, per-rank LoRA stages, and deterministic kernel replacements"
         ),
     )
     m1_layer.add_argument("--config", required=True)
@@ -2261,13 +2261,22 @@ def _m1_lora_layer_localization(
         "max_new_tokens": 1,
         "runtime_count": 4,
         "probe_source": "fixed_synthetic_token_only_bfloat16_v1",
+        "probe_rotation": True,
+        "kernel_interventions": [
+            "reference_shrink",
+            "reference_expand",
+            "reference_full",
+        ],
+        "reference_accumulation_dtype": "float32",
+        "pinned_vllm_shrink_split_k": "64_if_tokens_lt_128_else_8",
     }
     resolved["policy_model_identity"] = policy_identity.as_dict()
     _write_json(run_directory / "resolved_config.json", resolved)
 
     logger.info(
         "Initializing unified M1 layer localization on 3 GPUs: "
-        "checkpoint/base x eager/Graph plus LoRA-off control"
+        "checkpoint/base x eager/Graph, LoRA-off, probe rotation, and "
+        "deterministic LoRA kernel replacements"
     )
     report = collect_layer_localization_report(
         runtime_factory=lambda graph: VerlRuntime.start(
@@ -2292,9 +2301,12 @@ def _m1_lora_layer_localization(
     output = run_directory / "m1_lora_layer_localization.json"
     _write_json(output, report)
     logger.info(
-        "M1 LoRA layer localization classification=%s first_layer=%s stage=%s",
+        "M1 LoRA layer localization classification=%s layer_classification=%s "
+        "first_layer=%s per_rank=%s stage=%s",
         report["classification"],
+        report["layer_classification"],
         report["first_changed_layer"],
+        report["first_changed_layer_by_rank"],
         report["first_changed_lora_stage"],
     )
     logger.info("Diagnostic report: %s", output)

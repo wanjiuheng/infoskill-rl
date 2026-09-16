@@ -430,6 +430,19 @@ vLLM 输入摘要只在该入口通过 `INFOSKILL_VLLM_INPUT_AUDIT=1` 启用，�
 expand delta/combined output 扫描、base eager 观察者对照，以及 checkpoint/base Graph 最终
 hidden/logits 对照。它不运行环境、不训练、不保存权重。
 
+v1 实跑还暴露了两个必须修正的分析口径。第一，三个 rank 的首个变化层可以不同，报告必须保留
+`first_changed_layer_by_rank`，并按模块实际执行顺序选择每个 rank 的首个 LoRA 变化事件，不能
+把后续模块的 input 变化误报为上游根因。第二，vLLM 0.8.4 的 shrink 临时 buffer 是 FP32；其
+Triton kernel 固定启用 split-K（token 数小于 128 时为 64，否则为 8）并以 atomic add 汇总，
+所以整块 scratch hash 变化只是一条机制证据，不能单独证明 kernel 缺陷。
+
+v2 在同一 checkpoint-eager runtime 内增加三组反事实替换：仅用确定性 FP32 GEMM 替换 shrink、
+仅替换 expand、以及同时替换两者；同时对三个 probe 做 rank 轮换，每个位置重复采样。替换器只在
+`INFOSKILL_VLLM_LAYER_AUDIT=1` 且活跃 rollout session 内安装，结束或异常关闭时必须恢复原
+Punica 实例方法。只有 base、LoRA-off、观察者、probe 轮换和 full-reference 控制全部支持，且
+单阶段替换消除漂移时，报告才允许给出 `native_shrink_split_k_nondeterminism` 或对应 expand
+分类；否则保持 compound/inconclusive。该替换路径永不进入正常 train/eval。
+
 逐层 hook 只允许出现在 eager 诊断 runtime；Graph runtime 只观察 compute_logits 入口的 final
 hidden 与既有 logits/sampler 边界。分类必须同时满足：无 hook checkpoint 漂移可复现、加 hook 后
 漂移仍存在、base 加 hook 稳定、禁用 LoRARequest 后稳定。否则分别报告观察者效应、base control

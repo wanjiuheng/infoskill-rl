@@ -750,6 +750,16 @@ class VerlRuntime:
             return
         self.worker_group.end_infoskill_vllm_layer_capture()
 
+    def begin_vllm_lora_kernel_intervention(self, mode: str) -> None:
+        if not self._rollout_session_active:
+            raise RuntimeError("LoRA kernel intervention requires an active session")
+        self.worker_group.begin_infoskill_vllm_lora_kernel_intervention(mode)
+
+    def end_vllm_lora_kernel_intervention(self) -> None:
+        if not self._rollout_session_active:
+            return
+        self.worker_group.end_infoskill_vllm_lora_kernel_intervention()
+
     def set_vllm_lora_request_enabled(self, enabled: bool) -> None:
         if not self._rollout_session_active:
             raise RuntimeError("LoRA request control requires an active session")

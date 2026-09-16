@@ -3,6 +3,10 @@ from unittest.mock import patch
 
 from infoskill.m1_lora_layer_localization import (
     VllmLayerCapture,
+    _aggregate_boundary_comparisons,
+    _reference_expand_delta,
+    _reference_shrink,
+    classify_kernel_causality,
     classify_layer_localization,
     compare_layer_rounds,
     compare_lora_rounds,
@@ -19,9 +23,36 @@ def trace(layer0="a", layer1="b"):
 
 
 class LayerLocalizationTests(unittest.TestCase):
+    def test_boundary_aggregate_preserves_first_changed_seam(self):
+        exact = {
+            "comparable_rows": 3,
+            "returned_logprob_comparable_rows": 3,
+            "changed_row_counts": {
+                "final_hidden": 0,
+                "raw_logits": 0,
+                "processed_logits": 0,
+                "sampled_token": 0,
+                "returned_logprob": 0,
+            },
+        }
+        changed = {
+            **exact,
+            "changed_row_counts": {
+                **exact["changed_row_counts"],
+                "final_hidden": 2,
+                "raw_logits": 2,
+            },
+        }
+
+        report = _aggregate_boundary_comparisons((exact, changed))
+
+        self.assertEqual(report["comparable_rows"], 6)
+        self.assertEqual(report["first_changed_boundary"], "final_hidden")
+
     def test_finds_first_changed_decoder_layer(self):
         report = compare_layer_rounds((trace(), trace(layer1="changed")))
         self.assertEqual(report["first_changed_layer"], 1)
+        self.assertEqual(report["first_changed_layer_by_rank"], {"0": 1})
         self.assertEqual(report["changed_modules"], ["model.layers.1"])
 
     def test_stable_rounds_have_no_changed_layer(self):
@@ -64,7 +95,79 @@ class LayerLocalizationTests(unittest.TestCase):
         },)
         changed = (dict(baseline[0], lora_shrink=[{"sha256": "changed"}]),)
         report = compare_lora_rounds((baseline, changed))
-        self.assertEqual(report["first_changed_stage"], "lora_shrink")
+        self.assertEqual(report["first_changed_stage"], "lora_shrink_active")
+
+    def test_lora_stage_comparison_uses_execution_order_not_global_stage_order(self):
+        first = (
+            {
+                "rank": 1,
+                "module": "model.layers.0.mlp.gate_up_proj",
+                "call": 0,
+                "input": [{"sha256": "gate-input"}],
+                "base_output": [{"sha256": "gate-base"}],
+                "lora_shrink_active": [{"sha256": "gate-shrink"}],
+                "lora_expand_delta": [{"sha256": "gate-delta"}],
+                "combined_output": [{"sha256": "gate-combined"}],
+            },
+            {
+                "rank": 1,
+                "module": "model.layers.0.mlp.down_proj",
+                "call": 0,
+                "input": [{"sha256": "down-input"}],
+                "base_output": [{"sha256": "down-base"}],
+                "lora_shrink_active": [{"sha256": "down-shrink"}],
+                "lora_expand_delta": [{"sha256": "down-delta"}],
+                "combined_output": [{"sha256": "down-combined"}],
+            },
+        )
+        second = (
+            dict(
+                first[0],
+                lora_expand_delta=[{"sha256": "gate-delta-changed"}],
+                combined_output=[{"sha256": "gate-combined-changed"}],
+            ),
+            dict(first[1], input=[{"sha256": "down-input-changed"}]),
+        )
+
+        report = compare_lora_rounds((first, second))
+
+        self.assertEqual(report["first_changed_stage"], "lora_expand_delta")
+        self.assertEqual(
+            report["first_changed_event"],
+            {
+                "rank": 1,
+                "module": "model.layers.0.mlp.gate_up_proj",
+                "call": 0,
+                "stage": "lora_expand_delta",
+            },
+        )
+
+    def test_kernel_causality_attributes_shrink_only_after_intervention(self):
+        exact = {"first_changed_boundary": "exact_at_captured_boundaries"}
+        drift = {"first_changed_boundary": "final_hidden"}
+
+        report = classify_kernel_causality(
+            native=drift,
+            reference_shrink=exact,
+            reference_expand=drift,
+            reference_full=exact,
+            rotation=drift,
+        )
+
+        self.assertEqual(report, "native_shrink_split_k_nondeterminism")
+
+    def test_kernel_causality_remains_inconclusive_when_full_reference_drifts(self):
+        drift = {"first_changed_boundary": "final_hidden"}
+
+        report = classify_kernel_causality(
+            native=drift,
+            reference_shrink=drift,
+            reference_expand=drift,
+            reference_full=drift,
+            rotation=drift,
+        )
+
+        self.assertEqual(report, "drift_persists_with_full_reference_lora")
 
     def test_lora_attribution_is_rejected_when_disabled_path_drifts(self):
         report = classify_layer_localization(
@@ -139,6 +242,49 @@ class LayerLocalizationTests(unittest.TestCase):
         ):
             self.assertIn(stage, lora_row)
         self.assertEqual(runner.model.lora.apply.__func__, original_apply.__func__)
+
+    def test_reference_lora_respects_token_mapping(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is unavailable")
+
+        class Wrapper:
+            token_lora_indices = torch.tensor([0, -1, 1])
+
+        inputs = torch.tensor([
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+        ])
+        lora_a = torch.tensor([
+            [[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]],
+            [[[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]],
+        ])
+        shrink = _reference_shrink(
+            Wrapper(), torch.zeros((1, 3, 2)), inputs, (lora_a,), 2.0
+        )
+        self.assertTrue(torch.equal(
+            shrink,
+            torch.tensor([[[2.0, 4.0], [0.0, 0.0], [18.0, 14.0]]]),
+        ))
+
+        lora_b = torch.tensor([
+            [[[1.0, 0.0], [0.0, 1.0]]],
+            [[[1.0, 1.0], [2.0, 0.0]]],
+        ])
+        expanded = _reference_expand_delta(
+            Wrapper(),
+            torch.zeros((3, 2)),
+            shrink,
+            (lora_b,),
+            None,
+            (2,),
+        )
+        self.assertTrue(torch.equal(
+            expanded,
+            torch.tensor([[2.0, 4.0], [0.0, 0.0], [32.0, 36.0]]),
+        ))
 
 
 if __name__ == "__main__":
