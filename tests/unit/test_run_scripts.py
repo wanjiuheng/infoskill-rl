@@ -459,6 +459,8 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("run_cell eager-splitk1 0 1 none", script)
         self.assertIn("run_cell eager-reference-full 0 0 reference_full", script)
         self.assertIn("compare_m1_fresh_runtime_matrix.py", script)
+        self.assertIn("--query-compute-apps=pid,used_memory", script)
+        self.assertIn("already has compute processes", script)
         self.assertIn("ARCHIVE=", script)
 
     def test_retrieval_mode_override_reaches_training_and_evaluation(self) -> None:

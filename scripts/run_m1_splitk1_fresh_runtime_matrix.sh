@@ -25,6 +25,20 @@ if [[ "${#GPU_IDS[@]}" -ne 3 ]]; then
   echo "fresh-runtime matrix requires exactly three GPU indices" >&2
   exit 2
 fi
+for gpu_id in "${GPU_IDS[@]}"; do
+  if [[ ! "${gpu_id}" =~ ^[0-9]+$ ]]; then
+    echo "invalid GPU index in GPUS=${GPUS}: ${gpu_id}" >&2
+    exit 2
+  fi
+  GPU_PROCESSES="$(nvidia-smi -i "${gpu_id}" \
+    --query-compute-apps=pid,used_memory \
+    --format=csv,noheader,nounits 2>/dev/null || true)"
+  if [[ -n "${GPU_PROCESSES}" ]]; then
+    echo "GPU ${gpu_id} already has compute processes; refusing to start" >&2
+    echo "${GPU_PROCESSES}" >&2
+    exit 2
+  fi
+done
 ACTIVE="$(pgrep -af '[p]ython -m infoskill.cli (train|eval|m1-)' || true)"
 if [[ -n "${ACTIVE}" ]]; then
   echo "another INFO-SKILL GPU process is active; refusing to start" >&2
