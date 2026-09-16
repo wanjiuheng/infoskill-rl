@@ -8,9 +8,13 @@ from infoskill.m1_lora_boundary import (
 )
 
 
-def row(*, history="same", raw=1.0, processed=1.0, token=7, logprob=-0.2):
+def row(
+    *, history="same", hidden="hidden", raw=1.0, processed=1.0,
+    token=7, logprob=-0.2,
+):
     return {
         "history_sha256": history,
+        "final_hidden": {"sha256": hidden},
         "raw": {"top_values": [raw], "logsumexp": raw + 0.2},
         "processed": {"top_values": [processed], "logsumexp": processed + 0.2},
         "sampled_token_id": token,
@@ -23,6 +27,10 @@ class M1LoraBoundaryTests(unittest.TestCase):
         report = compare_boundary_rounds(((row(),), (row(raw=1.1),)))
         self.assertEqual(report["first_changed_boundary"], "raw_logits")
         self.assertEqual(report["comparable_rows"], 1)
+
+    def test_final_hidden_precedes_raw_logits(self):
+        report = compare_boundary_rounds(((row(),), (row(hidden="changed", raw=1.1),)))
+        self.assertEqual(report["first_changed_boundary"], "final_hidden")
 
     def test_processed_logit_is_first_changed_boundary(self):
         report = compare_boundary_rounds(((row(),), (row(processed=1.1),)))
@@ -78,7 +86,10 @@ class M1LoraBoundaryTests(unittest.TestCase):
         capture = VllmBoundaryCapture(runner, rank=0)
         with patch("infoskill.m1_lora_boundary._logit_summary", return_value=[{
             "top_values": [1.0], "logsumexp": 1.2, "top_token_ids": [7]
-        }]):
+        }]), patch(
+            "infoskill.m1_lora_boundary._hidden_summary",
+            return_value=[{"sha256": "hidden"}],
+        ):
             capture.install()
             runner.model.sample(
                 logits=runner.model.compute_logits(None, None),
@@ -106,6 +117,24 @@ class M1LoraBoundaryTests(unittest.TestCase):
         self.assertEqual(
             report["classification"], "base_control_drift_blocks_lora_attribution"
         )
+
+    def test_checkpoint_final_hidden_drift_is_localized_before_logits(self):
+        from types import SimpleNamespace
+        samples = [
+            SimpleNamespace(label=label, cells=[SimpleNamespace(
+                name="token-full3",
+                boundary_rounds=(
+                    (row(),),
+                    (row(hidden="changed"),) if label.startswith("checkpoint-")
+                    else (row(),),
+                ),
+            )])
+            for label in (
+                "checkpoint-eager", "base-eager", "checkpoint-graph", "base-graph"
+            )
+        ]
+        report = build_boundary_isolation_report(samples)
+        self.assertEqual(report["classification"], "active_lora_final_hidden_drift")
 
 
 if __name__ == "__main__":

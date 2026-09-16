@@ -47,6 +47,18 @@ def _logit_summary(logits: object) -> list[dict[str, object]]:
     ]
 
 
+def _hidden_summary(hidden_states: object) -> list[dict[str, object]]:
+    """Fingerprint the exact final hidden row entering the LM head."""
+
+    import torch
+
+    from infoskill.m1_lora_layer_localization import tensor_fingerprint
+
+    if not isinstance(hidden_states, torch.Tensor) or hidden_states.ndim != 2:
+        raise RuntimeError("boundary capture expected 2-D final hidden states")
+    return [tensor_fingerprint(row) for row in hidden_states]
+
+
 class VllmBoundaryCapture:
     """Scoped instance-method hooks; installed only inside a diagnostic session."""
 
@@ -94,8 +106,12 @@ class VllmBoundaryCapture:
         def compute(hidden_states, sampling_metadata):
             logits = original_compute(hidden_states, sampling_metadata)
             summaries = _logit_summary(logits)
+            hidden = _hidden_summary(hidden_states)
             self.pending = self._histories(len(summaries))
-            for row, summary in zip(self.pending, summaries):
+            if len(hidden) != len(summaries):
+                raise RuntimeError("final hidden rows do not match logits rows")
+            for row, hidden_row, summary in zip(self.pending, hidden, summaries):
+                row["final_hidden"] = hidden_row
                 row["raw"] = summary
             return logits
 
@@ -180,7 +196,7 @@ def compare_boundary_rounds(
     if len(rounds) < 2:
         raise ValueError("boundary comparison needs at least two rounds")
     counts = {name: 0 for name in (
-        "raw_logits", "processed_logits", "sampled_token", "returned_logprob"
+        "final_hidden", "raw_logits", "processed_logits", "sampled_token", "returned_logprob"
     )}
     comparable = 0
     logprob_comparable = 0
@@ -195,6 +211,10 @@ def compare_boundary_rounds(
                 if right is None:
                     continue
                 comparable += 1
+                if left.get("final_hidden", {}).get("sha256") != right.get(
+                    "final_hidden", {}
+                ).get("sha256"):
+                    counts["final_hidden"] += 1
                 if _summary_changed(left["raw"], right["raw"], tolerance):
                     counts["raw_logits"] += 1
                 if _summary_changed(left["processed"], right["processed"], tolerance):
@@ -249,7 +269,9 @@ def build_boundary_isolation_report(samples: Sequence[object]) -> dict[str, obje
             for report in by_cell.values()
             if report["first_changed_boundary"] != "exact_at_captured_boundaries"
         }
-        if "raw_logits" in changed:
+        if "final_hidden" in changed:
+            classification = "active_lora_final_hidden_drift"
+        elif "raw_logits" in changed:
             classification = "active_lora_model_logits_drift"
         elif "processed_logits" in changed:
             classification = "logits_processing_drift"

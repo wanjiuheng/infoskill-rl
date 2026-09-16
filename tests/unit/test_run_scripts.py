@@ -14,6 +14,19 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn('python -m infoskill.cli "${ACTION}"', isolation)
         self.assertIn("INFOSKILL_VLLM_BOUNDARY_AUDIT=1", isolation)
 
+    def test_m1_layer_localization_is_scoped_and_three_gpu_only(self) -> None:
+        script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
+        block = script.split("  m1-lora-layer-localization)\n", 1)[1].split(
+            "    ;;", 1
+        )[0]
+        self.assertIn("INFOSKILL_VLLM_INPUT_AUDIT=1", block)
+        self.assertIn("INFOSKILL_VLLM_BOUNDARY_AUDIT=1", block)
+        self.assertIn("INFOSKILL_VLLM_LAYER_AUDIT=1", block)
+        self.assertIn('"${#GPU_IDS[@]}" -ne 3', block)
+        self.assertIn('"${POLICY_CHECKPOINT}"', block)
+        self.assertIn("--detailed-rounds", block)
+        self.assertIn("--control-rounds", block)
+
     def test_step50_formal_fork_recipe_is_complete(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         bringup = (project_root / "docs" / "SERVER_BRINGUP.md").read_text(

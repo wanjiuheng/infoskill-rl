@@ -2005,6 +2005,42 @@ runtime 更新；最终报告为 `m1_lora_boundary.json`，诊断分类在
 逐元素验证；报告不代表 140 条 success。采样边界在已固定的 vLLM 0.8.4 模型执行路径上，
 远程首次运行仍须核验 worker hook 与该 wheel 兼容。
 
+继续向 decoder/LoRA 内部定位时，使用一次合并任务，避免逐实验人工启动。运行前必须确认三卡
+空闲；诊断会顺序创建四个 runtime，逐层 exact-hash hook 会增加 eager 阶段耗时，但不会修改
+checkpoint 或模型：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+PYTHON=/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python
+CHECKPOINT="$PWD/runs/20260915T140808Z-m1-gradient-clip-gate-joint-s200-u201-20260915T140720Z/checkpoints/step-000205"
+
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-lora-layer-localization-s205-${STAMP}.log"
+: >"$LOG"
+
+nohup env \
+  PATH="$(dirname "$PYTHON"):$PATH" \
+  GPUS=0,1,2 \
+  POLICY_CHECKPOINT="$CHECKPOINT" \
+  M1_LAYER_DETAILED_ROUNDS=6 \
+  M1_LAYER_CONTROL_ROUNDS=3 \
+  RUN_NAME=m1-lora-layer-localization-s205 \
+  bash scripts/run_alfworld.sh m1-lora-layer-localization \
+  >"$LOG" 2>&1 &
+
+PID=$!
+echo "$PID" >"${LOG}.pid"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+完成后主报告为 `m1_lora_layer_localization.json`，运行中可查看
+`m1_lora_layer_localization_partial.json`。最终重点字段为 `classification`、
+`first_changed_layer`、`first_changed_lora_stage` 和 `controls`；任何 control 为 false 时，不把层或
+stage 当作已证实根因。
+
 独立 `eval infoskill` 入口支持默认关闭的 `HYBRID_PREFIX_CUDA_GRAPH=1`。该开关与训练入口
 使用同一条 hybrid-prefix vLLM CUDA Graph 实现，并写入
 `provenance.json.evaluation_runtime.hybrid_prefix_cuda_graph`、`resolved_config.json`、

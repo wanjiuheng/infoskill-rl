@@ -735,6 +735,26 @@ class VerlRuntime:
             return
         self.worker_group.end_infoskill_vllm_boundary_capture()
 
+    def begin_vllm_layer_capture(self, layer: int | None = None) -> None:
+        if not self._rollout_session_active:
+            raise RuntimeError("vLLM layer capture requires an active session")
+        self.worker_group.begin_infoskill_vllm_layer_capture(layer)
+
+    def take_vllm_layer_rows(self) -> tuple[Mapping[str, object], ...]:
+        if not self._rollout_session_active:
+            raise RuntimeError("vLLM layer rows require an active session")
+        return tuple(self.worker_group.take_infoskill_vllm_layer_rows())
+
+    def end_vllm_layer_capture(self) -> None:
+        if not self._rollout_session_active:
+            return
+        self.worker_group.end_infoskill_vllm_layer_capture()
+
+    def set_vllm_lora_request_enabled(self, enabled: bool) -> None:
+        if not self._rollout_session_active:
+            raise RuntimeError("LoRA request control requires an active session")
+        self.worker_group.set_infoskill_vllm_lora_request_enabled(enabled)
+
     def infoskill_module_snapshot(self) -> tuple[Mapping[str, object], ...]:
         if not self.config.enable_infoskill_modules:
             raise RuntimeError("INFO-SKILL module snapshot requires M1 modules")

@@ -419,3 +419,20 @@ FSDP、M1 模块、vLLM 注册 LoRA/活跃 GPU 槽位和 base 权重指纹。每
 partial 报告；完整分类只能作为定位线索，不能替代固定 140 条成功率门。
 vLLM 输入摘要只在该入口通过 `INFOSKILL_VLLM_INPUT_AUDIT=1` 启用，正常训练与正式评测
 不承担额外的 BF16 前缀 CPU 复制和 SHA-256 开销。
+
+## D032：LoRA 漂移用一次因果矩阵定位到首个 decoder/LoRA 边界
+
+`m1-lora-boundary` 已把 step-205 的首个可见差异从 sampler 前移到 raw model logits，但它仍不能
+区分 decoder hidden、LM head 或 LoRA A/B 内核。新增只读入口
+`m1-lora-layer-localization`，固定使用三张卡、三条 token-only synthetic probe 和单 token 输出，
+在一次无人值守任务中顺序完成：checkpoint eager 无 hook 对照、同 runtime 禁用 LoRARequest 的
+因果对照、全部 decoder layer 输出 SHA-256 扫描、首个异常层的 base output/LoRA shrink/LoRA
+expand delta/combined output 扫描、base eager 观察者对照，以及 checkpoint/base Graph 最终
+hidden/logits 对照。它不运行环境、不训练、不保存权重。
+
+逐层 hook 只允许出现在 eager 诊断 runtime；Graph runtime 只观察 compute_logits 入口的 final
+hidden 与既有 logits/sampler 边界。分类必须同时满足：无 hook checkpoint 漂移可复现、加 hook 后
+漂移仍存在、base 加 hook 稳定、禁用 LoRARequest 后稳定。否则分别报告观察者效应、base control
+漂移或非 LoRARequest 漂移，不强行归因 kernel。报告只保存张量形状、dtype、有界 norm 和精确
+SHA-256，不保存 hidden tensor payload；每完成一个阶段原子覆盖 partial JSON。正常 train/eval 不设置
+三个 scoped audit 环境变量，因此不安装 hook，也没有额外 GPU→CPU 复制。

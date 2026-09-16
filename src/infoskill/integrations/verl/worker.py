@@ -53,6 +53,8 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self._infoskill_rollout_session_generation_count = 0
         self._infoskill_rollout_memory_snapshot = None
         self._infoskill_cuda_memory_sampler = None
+        self._infoskill_vllm_layer_capture = None
+        self._infoskill_saved_lora_kwargs = None
         self._infoskill_cuda_memory_poll_interval_ms = int(
             self.config.model.get("infoskill_cuda_memory_poll_interval_ms", 0)
         )
@@ -466,12 +468,23 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                     self._infoskill_vllm_boundary_capture = None
             finally:
                 try:
-                    self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
-                    self._infoskill_rollout_memory_snapshot.update(
-                        self._stop_infoskill_cuda_memory_sampler()
+                    layer_capture = getattr(
+                        self, "_infoskill_vllm_layer_capture", None
                     )
+                    if layer_capture is not None:
+                        layer_capture.remove()
+                        self._infoskill_vllm_layer_capture = None
+                    if self._infoskill_saved_lora_kwargs is not None:
+                        self.rollout.lora_kwargs = self._infoskill_saved_lora_kwargs
+                        self._infoskill_saved_lora_kwargs = None
                 finally:
-                    self.rollout_sharding_manager.__exit__(None, None, None)
+                    try:
+                        self._infoskill_rollout_memory_snapshot = _cuda_memory_snapshot()
+                        self._infoskill_rollout_memory_snapshot.update(
+                            self._stop_infoskill_cuda_memory_sampler()
+                        )
+                    finally:
+                        self.rollout_sharding_manager.__exit__(None, None, None)
         finally:
             # Start a fresh peak window for old/ref logprob and actor update.
             get_torch_device().reset_peak_memory_stats()
@@ -566,6 +579,64 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             capture.remove()
         finally:
             self._infoskill_vllm_boundary_capture = None
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def begin_infoskill_vllm_layer_capture(
+        self, layer: int | None = None
+    ) -> None:
+        """Install exact eager decoder/LoRA hooks for the scoped diagnostic."""
+
+        if os.environ.get("INFOSKILL_VLLM_LAYER_AUDIT") != "1":
+            raise RuntimeError("vLLM layer capture requires its scoped audit flag")
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("vLLM layer capture requires an active session")
+        if self._infoskill_vllm_layer_capture is not None:
+            raise RuntimeError("vLLM layer capture is already active")
+        from infoskill.m1_lora_layer_localization import VllmLayerCapture
+
+        capture = VllmLayerCapture(
+            self.rollout_sharding_manager.model_runner,
+            rank=dist.get_rank(),
+            layer=layer,
+        )
+        capture.install()
+        self._infoskill_vllm_layer_capture = capture
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def take_infoskill_vllm_layer_rows(self) -> dict[str, object]:
+        capture = self._infoskill_vllm_layer_capture
+        if capture is None:
+            raise RuntimeError("vLLM layer capture is not active")
+        return {"rank": dist.get_rank(), "rows": capture.take()}
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def end_infoskill_vllm_layer_capture(self) -> None:
+        capture = self._infoskill_vllm_layer_capture
+        if capture is None:
+            return
+        try:
+            capture.remove()
+        finally:
+            self._infoskill_vllm_layer_capture = None
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def set_infoskill_vllm_lora_request_enabled(self, enabled: bool) -> None:
+        """Temporarily omit LoRARequest while retaining the loaded adapter."""
+
+        if os.environ.get("INFOSKILL_VLLM_LAYER_AUDIT") != "1":
+            raise RuntimeError("LoRA request control requires its scoped audit flag")
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError("LoRA request control requires an active session")
+        if enabled:
+            if self._infoskill_saved_lora_kwargs is None:
+                raise RuntimeError("LoRA request is not disabled")
+            self.rollout.lora_kwargs = self._infoskill_saved_lora_kwargs
+            self._infoskill_saved_lora_kwargs = None
+        else:
+            if self._infoskill_saved_lora_kwargs is not None:
+                raise RuntimeError("LoRA request is already disabled")
+            self._infoskill_saved_lora_kwargs = self.rollout.lora_kwargs
+            self.rollout.lora_kwargs = {}
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def infoskill_vllm_lora_snapshot(self) -> dict[str, object]:

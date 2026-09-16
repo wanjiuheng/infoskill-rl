@@ -460,6 +460,12 @@ M1 formal 的 update 75--175 固定 batch-64/CUDA-Graph Macro success 只在约
 增加可观测指标。未经固定 140 条 Macro/Overall 效果门，不得用于继续 formal 或与 reward/curriculum
 改动混跑。
 
+step-205 的 LoRA 复现问题现有边界证据已定位到 raw model logits，但尚未定位到具体 decoder
+层或 LoRA A/B 阶段。新增 `m1-lora-layer-localization` 三卡只读诊断：一次任务内完成 checkpoint
+eager 无 hook、LoRARequest-off、逐 decoder 层、首个异常层 LoRA 内部、base eager 与两组 Graph
+控制；记录 final hidden 和各阶段 exact SHA-256，并持续写 partial 报告。分类必须通过观察者效应、
+base 与 LoRA-off 三道因果门；它不改变训练/评测默认路径，也不能替代 140 条成功率。
+
 首轮 step-200 gradient-clip A/B 暴露了一处配置路由错误：resolved config 已登记 candidate 为
 `separate`，但 worker 构造 actor 时只传入 `actor` 子配置，而裁剪实现从该子配置读取了存放在
 `model` 下的开关，因此实际仍执行 `joint`。修复后由 worker 从 model config 显式解析并传给
