@@ -12,6 +12,7 @@ ALLOWED_EXECUTION_RUNTIME_DIFFERENCES = (
     "hybrid_prefix_cuda_graph",
     "hybrid_prefix_cuda_graph_custom_kernels",
     "hybrid_prefix_cuda_graph_use_inductor",
+    "lora_shrink_split_k_one",
 )
 
 

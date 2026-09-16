@@ -129,6 +129,29 @@ class InfoSkillOptimizationEfficacyTests(unittest.TestCase):
         self.assertTrue(report["control_checks"]["same_checkpoint"])
         self.assertTrue(report["passed"])
 
+    def test_split_k_one_can_be_explicitly_controlled(self) -> None:
+        with TemporaryDirectory() as temporary:
+            baseline, candidate = self._runs(Path(temporary))
+            self._write_summary(baseline, macro=0.25, overall=0.30)
+            self._write_summary(candidate, macro=0.26, overall=0.31)
+            resolved = self._read(candidate / "resolved_config.json")
+            runtime = resolved["evaluation_runtime"]
+            assert isinstance(runtime, dict)
+            runtime["lora_shrink_split_k_one"] = True
+            self._write(candidate / "resolved_config.json", resolved)
+            self._make_checkpoints_identical(baseline, candidate)
+
+            report = compare_evaluations(
+                baseline,
+                candidate,
+                allowed_runtime_differences=("lora_shrink_split_k_one",),
+                require_same_checkpoint=True,
+            )
+
+        self.assertTrue(report["control_checks"]["same_evaluation_protocol"])
+        self.assertTrue(report["control_checks"]["same_checkpoint"])
+        self.assertTrue(report["passed"])
+
     def test_unexpected_protocol_difference_still_fails_with_allowlist(self) -> None:
         with TemporaryDirectory() as temporary:
             baseline, candidate = self._runs(Path(temporary))
