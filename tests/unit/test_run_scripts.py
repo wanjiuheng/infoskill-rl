@@ -5,13 +5,26 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_entrypoint_honors_explicit_python_for_eval_and_train(self) -> None:
+        script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
+
+        self.assertIn('PYTHON_BIN="${PYTHON:-python}"', script)
+        self.assertIn(
+            '"${PYTHON_BIN}" -m infoskill.cli eval "${EVAL_ARGS[@]}"',
+            script,
+        )
+        self.assertIn(
+            'exec "${PYTHON_BIN}" -m infoskill.cli train "${TRAIN_ARGS[@]}"',
+            script,
+        )
+
     def test_m1_isolation_entry_is_three_gpu_and_audit_only(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
         isolation = script.split("  m1-lora-isolation|m1-lora-boundary)\n", 1)[1].split("    ;;", 1)[0]
         self.assertIn("INFOSKILL_VLLM_INPUT_AUDIT=1", isolation)
         self.assertIn('"${#GPU_IDS[@]}" -ne 3', isolation)
         self.assertIn('"${POLICY_CHECKPOINT}"', isolation)
-        self.assertIn('python -m infoskill.cli "${ACTION}"', isolation)
+        self.assertIn('"${PYTHON_BIN}" -m infoskill.cli "${ACTION}"', isolation)
         self.assertIn("INFOSKILL_VLLM_BOUNDARY_AUDIT=1", isolation)
 
     def test_m1_layer_localization_is_scoped_and_three_gpu_only(self) -> None:
@@ -53,7 +66,7 @@ class RunScriptTests(unittest.TestCase):
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
 
         self.assertIn(
-            'exec python -m infoskill.cli train "${TRAIN_ARGS[@]}"',
+            'exec "${PYTHON_BIN}" -m infoskill.cli train "${TRAIN_ARGS[@]}"',
             script,
         )
 
@@ -231,7 +244,7 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertIn("grounding-planner-loop-diagnostic)", script)
         self.assertIn(
-            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-loop-diagnostic',
+            'CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-planner-loop-diagnostic',
             script,
         )
         self.assertIn('--source-pilot-run "${GROUNDING_SOURCE_RUN}"', script)
@@ -252,7 +265,7 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertIn("grounding-planner-pilot)", script)
         self.assertIn(
-            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-pilot',
+            'CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-planner-pilot',
             script,
         )
         self.assertIn(
@@ -284,7 +297,7 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertIn("grounding-planner-parity)", script)
         self.assertIn(
-            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-parity',
+            'CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-planner-parity',
             script,
         )
         self.assertIn(
@@ -348,7 +361,7 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertIn("grounding-expert-diagnostic)", script)
         self.assertIn(
-            'CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-expert-diagnostic',
+            'CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-expert-diagnostic',
             script,
         )
         self.assertIn('--source-grounding-run "${GROUNDING_SOURCE_RUN}"', script)
@@ -419,7 +432,7 @@ class RunScriptTests(unittest.TestCase):
             script,
         )
         self.assertIn(
-            'python -m infoskill.cli m1-lora-reproducibility',
+            '"${PYTHON_BIN}" -m infoskill.cli m1-lora-reproducibility',
             script,
         )
 

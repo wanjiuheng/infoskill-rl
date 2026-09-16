@@ -5,6 +5,7 @@ set -euo pipefail
 ACTION="${ACTION:-${1:-eval}}"                 # validate | eval | diagnostics | grounding | train
 MODE="${MODE:-${2:-no_skill}}"                # no_skill | raw_skill_prompt | infoskill
 CONFIG="${CONFIG:-${3:-configs/alfworld_qwen25_7b.yaml}}"
+PYTHON_BIN="${PYTHON:-python}"
 RETRIEVAL_MODE="${RETRIEVAL_MODE:-}"          # empty=YAML default; embedding | template
 # Registered raw control uses full; compact remains available as a measured ablation.
 RAW_SKILL_PROMPT_FORMAT="${RAW_SKILL_PROMPT_FORMAT:-full}" # full | compact
@@ -113,6 +114,11 @@ RAW_SKILL_AB_TASKS_PER_TYPE="${RAW_SKILL_AB_TASKS_PER_TYPE:-2}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
+
+if ! PYTHON_BIN="$(command -v -- "${PYTHON_BIN}")"; then
+  echo "PYTHON must name an executable interpreter: ${PYTHON:-python}" >&2
+  exit 2
+fi
 
 export CUDA_VISIBLE_DEVICES="${GPUS}"
 export PYTHONPATH="${PROJECT_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
@@ -311,7 +317,7 @@ echo "[INFO-SKILL] action=${ACTION} mode=${MODE} gpus=${GPUS} config=${CONFIG}"
 
 case "${ACTION}" in
   validate)
-    python -m infoskill.cli validate --config "${CONFIG}" --mode "${MODE}" "${RETRIEVAL_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli validate --config "${CONFIG}" --mode "${MODE}" "${RETRIEVAL_ARGS[@]}"
     ;;
   eval)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
@@ -380,7 +386,7 @@ case "${ACTION}" in
         exit 2
         ;;
     esac
-    python -m infoskill.cli eval "${EVAL_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli eval "${EVAL_ARGS[@]}"
     ;;
   raw-skill-ab|unified-skill-causal|skillrl-rl-exact|skillrl-sft-exact|skillrl-sft-causal)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
@@ -443,7 +449,7 @@ case "${ACTION}" in
         exit 2
         ;;
     esac
-    python -m infoskill.cli raw-skill-ab "${RAW_SKILL_AB_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli raw-skill-ab "${RAW_SKILL_AB_ARGS[@]}"
     ;;
   checkpoint-effect)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
@@ -478,7 +484,7 @@ case "${ACTION}" in
         exit 2
         ;;
     esac
-    python -m infoskill.cli checkpoint-effect "${EFFECT_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli checkpoint-effect "${EFFECT_ARGS[@]}"
     ;;
   m1-lora-reproducibility)
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
@@ -518,7 +524,7 @@ case "${ACTION}" in
         exit 2
         ;;
     esac
-    python -m infoskill.cli m1-lora-reproducibility "${M1_REPRO_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli m1-lora-reproducibility "${M1_REPRO_ARGS[@]}"
     ;;
   m1-lora-isolation|m1-lora-boundary)
     export INFOSKILL_VLLM_INPUT_AUDIT=1
@@ -552,7 +558,7 @@ case "${ACTION}" in
     if [[ "${VERBOSE_RUNTIME_LOGS}" == 1 ]]; then
       M1_ISOLATION_ARGS+=(--verbose-runtime-logs)
     fi
-    python -m infoskill.cli "${ACTION}" "${M1_ISOLATION_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli "${ACTION}" "${M1_ISOLATION_ARGS[@]}"
     ;;
   m1-lora-layer-localization)
     export INFOSKILL_VLLM_INPUT_AUDIT=1
@@ -586,7 +592,7 @@ case "${ACTION}" in
     if [[ "${VERBOSE_RUNTIME_LOGS}" == 1 ]]; then
       M1_LAYER_ARGS+=(--verbose-runtime-logs)
     fi
-    python -m infoskill.cli m1-lora-layer-localization "${M1_LAYER_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli m1-lora-layer-localization "${M1_LAYER_ARGS[@]}"
     ;;
   grounding)
     GROUNDING_ARGS=(
@@ -606,7 +612,7 @@ case "${ACTION}" in
     else
       GROUNDING_ARGS+=("${EXTRA_ARGS[@]}")
     fi
-    python -m infoskill.cli grounding "${GROUNDING_ARGS[@]}"
+    "${PYTHON_BIN}" -m infoskill.cli grounding "${GROUNDING_ARGS[@]}"
     ;;
   grounding-timeout-rescue)
     if [[ -z "${GROUNDING_SOURCE_RUN}" ]]; then
@@ -635,7 +641,7 @@ case "${ACTION}" in
     else
       GROUNDING_RESCUE_ARGS+=("${EXTRA_ARGS[@]}")
     fi
-    python -m infoskill.cli grounding-timeout-rescue \
+    "${PYTHON_BIN}" -m infoskill.cli grounding-timeout-rescue \
       "${GROUNDING_RESCUE_ARGS[@]}"
     ;;
   grounding-expert-diagnostic)
@@ -643,7 +649,7 @@ case "${ACTION}" in
       echo "GROUNDING_SOURCE_RUN is required for grounding-expert-diagnostic" >&2
       exit 2
     fi
-    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-expert-diagnostic \
+    CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-expert-diagnostic \
       --config "${CONFIG}" \
       --source-grounding-run "${GROUNDING_SOURCE_RUN}" \
       --tasks-per-type "${GROUNDING_DIAGNOSTIC_TASKS_PER_TYPE}" \
@@ -651,7 +657,7 @@ case "${ACTION}" in
       "${EXTRA_ARGS[@]}"
     ;;
   grounding-planner-pilot)
-    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-pilot \
+    CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-planner-pilot \
       --config "${CONFIG}" \
       --tasks-per-type "${PLANNER_PILOT_TASKS_PER_TYPE}" \
       --worker-batch-size "${GROUNDING_WORKER_BATCH_SIZE}" \
@@ -662,7 +668,7 @@ case "${ACTION}" in
       "${EXTRA_ARGS[@]}"
     ;;
   grounding-planner-parity)
-    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-parity \
+    CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-planner-parity \
       --config "${CONFIG}" \
       --tasks-per-type "${GROUNDING_PARITY_TASKS_PER_TYPE}" \
       --worker-batch-size "${GROUNDING_PARITY_WORKER_BATCH_SIZE}" \
@@ -678,7 +684,7 @@ case "${ACTION}" in
       echo "GROUNDING_SOURCE_RUN is required for grounding-planner-loop-diagnostic" >&2
       exit 2
     fi
-    CUDA_VISIBLE_DEVICES="" python -m infoskill.cli grounding-planner-loop-diagnostic \
+    CUDA_VISIBLE_DEVICES="" "${PYTHON_BIN}" -m infoskill.cli grounding-planner-loop-diagnostic \
       --config "${CONFIG}" \
       --source-pilot-run "${GROUNDING_SOURCE_RUN}" \
       --successful-two-object-controls "${PLANNER_LOOP_SUCCESS_CONTROLS}" \
@@ -773,7 +779,7 @@ case "${ACTION}" in
         exit 2
         ;;
     esac
-    exec python -m infoskill.cli train "${TRAIN_ARGS[@]}"
+    exec "${PYTHON_BIN}" -m infoskill.cli train "${TRAIN_ARGS[@]}"
     ;;
   *)
     echo "Unknown ACTION=${ACTION}; expected validate, eval, a diagnostic action, grounding, grounding-timeout-rescue, grounding-expert-diagnostic, grounding-planner-pilot, grounding-planner-parity, grounding-planner-loop-diagnostic, or train" >&2

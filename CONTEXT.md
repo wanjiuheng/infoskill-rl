@@ -478,6 +478,9 @@ train/eval 新增默认关闭的 `LORA_SHRINK_SPLIT_K_ONE=1` 候选：它只复�
 `native_split_k_one` 干预，进入持久 rollout session 后在每个 rank 安装、离开或异常时恢复，
 并要求所有 worker 回报 active 才允许生成。该候选不改 checkpoint、基础权重或 vLLM wheel；
 只能通过命名 resume fork 改变，必须从同一 checkpoint 做固定任务与 140 条效果/吞吐门后再晋升。
+中央 `scripts/run_alfworld.sh` 必须直接执行显式 `PYTHON`（未设置时才回退到 `python`），不能只依赖
+外层临时修改 `PATH`；`bash -lc` 会读取登录环境并可能重置 PATH，曾导致预检与真正训练使用不同
+解释器。该约束覆盖 validate、eval、诊断、grounding 和 train 的所有 CLI 分支。
 
 首轮 step-200 gradient-clip A/B 暴露了一处配置路由错误：resolved config 已登记 candidate 为
 `separate`，但 worker 构造 actor 时只传入 `actor` 子配置，而裁剪实现从该子配置读取了存放在
