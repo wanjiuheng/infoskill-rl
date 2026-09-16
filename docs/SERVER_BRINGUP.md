@@ -2016,7 +2016,7 @@ CHECKPOINT="$PWD/runs/20260915T140808Z-m1-gradient-clip-gate-joint-s200-u201-202
 
 mkdir -p logs
 STAMP=$(date +%Y%m%d_%H%M%S)
-LOG="$PWD/logs/m1-lora-layer-localization-s205-v2-${STAMP}.log"
+LOG="$PWD/logs/m1-lora-layer-localization-s205-v3-${STAMP}.log"
 : >"$LOG"
 
 nohup env \
@@ -2025,7 +2025,7 @@ nohup env \
   POLICY_CHECKPOINT="$CHECKPOINT" \
   M1_LAYER_DETAILED_ROUNDS=6 \
   M1_LAYER_CONTROL_ROUNDS=3 \
-  RUN_NAME=m1-lora-layer-localization-s205-v2 \
+  RUN_NAME=m1-lora-layer-localization-s205-v3 \
   bash scripts/run_alfworld.sh m1-lora-layer-localization \
   >"$LOG" 2>&1 &
 
@@ -2039,23 +2039,26 @@ tail -f "$LOG"
 完成后主报告为 `m1_lora_layer_localization.json`，运行中可查看
 `m1_lora_layer_localization_partial.json`。最终重点字段为 `classification`、
 `layer_classification`、`first_changed_layer_by_rank`、
-`first_changed_lora_event_by_rank`、`kernel_causality` 和 `controls`。v2 会在同一个 checkpoint
+`first_changed_lora_event_by_rank`、`kernel_causality`、`diagnostic_phase_seconds` 和
+`controls`。v3 会在同一个 checkpoint
 eager runtime 内额外运行 probe/rank 轮换与 reference-shrink、reference-expand、full-reference
-三组反事实替换；这些替换使用 FP32 GEMM，只作用于诊断 session，不修改 checkpoint。只有
-full-reference 与所有 base/LoRA-off/观察者控制通过时，单阶段替换结果才可用于 kernel 归因；
-任何 control 失败都必须保留为不确定分类。
+三组反事实替换，并增加 `native_split_k_one`。后者复用原生 Triton shrink kernel，只把
+`SPLIT_K` 从默认 64/8 改为 1；reference 替换使用 FP32 GEMM。所有替换只作用于诊断 session，
+不修改 checkpoint。只有 full-reference 与所有 base/LoRA-off/观察者控制通过，且
+`native_split_k_one` 逐边界 exact，才可把根因写成 split-K atomic reduction；任何 control
+失败都必须保留为不确定分类。
 
 完成后一次性打包主报告、partial、配置和完整日志：
 
 ```bash
 cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
 RUN=$(find "$PWD/runs" -maxdepth 1 -type d \
-  -name '*-m1-lora-layer-localization-s205-v2' | sort | tail -n 1)
+  -name '*-m1-lora-layer-localization-s205-v3' | sort | tail -n 1)
 echo "RUN=$RUN"
 cat "$RUN/m1_lora_layer_localization.json"
 
 STAMP=$(date +%Y%m%d_%H%M%S)
-ARCHIVE="$PWD/m1-lora-layer-localization-s205-v2-${STAMP}.tar.gz"
+ARCHIVE="$PWD/m1-lora-layer-localization-s205-v3-${STAMP}.tar.gz"
 FILES=(m1_lora_layer_localization.json resolved_config.json console.log)
 [[ -f "$RUN/m1_lora_layer_localization_partial.json" ]] && \
   FILES+=(m1_lora_layer_localization_partial.json)

@@ -467,8 +467,13 @@ output 舍入边界，随后 `down_proj` input 才变化。固定 vLLM 0.8.4 的
 split-K（小于 128 token 为 64，否则为 8），并用 atomic add 合并 partial；这构成强机制假说，
 但不能只凭 hash 宣布根因。`m1-lora-layer-localization` v2 因而在同一个三卡只读任务中增加逐
 rank 首层、有效 token 行、FP32 reference 中间值、probe/rank 轮换，以及 reference-shrink、
-reference-expand、full-reference 三种实际推理替换。只有 full-reference 稳定且单阶段替换呈现
-预期反事实时才输出 kernel 因果分类。它不改变训练/评测默认路径，也不能替代 140 条成功率。
+reference-expand、full-reference 三种实际推理替换。v2 实跑确认 reference shrink/full 稳定、
+reference expand 仍漂移，因此只能严格定位到 native shrink；仅凭默认实现使用 split-K/atomic
+add 还不能把 split-K 写成既定根因。v3 在相同 checkpoint-eager runtime 内增加
+`native_split_k_one`：复用完全相同的 vLLM Triton shrink kernel、metadata、block/warp/stage，
+只把 `SPLIT_K` 改为 1。只有该路径逐边界 exact 时才允许输出
+`native_shrink_split_k_atomic_nondeterminism`；否则明确报告 split-K=1 未消除漂移。所有干预仍只在
+诊断 session 内生效，不改变训练/评测默认路径，也不能替代 140 条成功率。
 
 首轮 step-200 gradient-clip A/B 暴露了一处配置路由错误：resolved config 已登记 candidate 为
 `separate`，但 worker 构造 actor 时只传入 `actor` 子配置，而裁剪实现从该子配置读取了存放在

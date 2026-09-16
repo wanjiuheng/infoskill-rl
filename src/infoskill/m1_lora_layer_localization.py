@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -108,6 +109,126 @@ def _vllm_084_shrink_split_k(token_count: int) -> int:
     """Mirror the fixed split-K selection in pinned vLLM 0.8.4."""
 
     return 64 if token_count < 128 else 8
+
+
+def _native_shrink_with_split_k(
+    wrapper: object,
+    output: object,
+    inputs: object,
+    lora_a_weights: object,
+    scaling: object,
+    *,
+    split_k: int,
+) -> None:
+    """Launch pinned vLLM's native shrink kernel with one chosen split-K.
+
+    This diagnostic-only path copies the vLLM 0.8.4 launch geometry and
+    metadata exactly.  It changes only ``SPLIT_K``; it does not install a
+    wheel patch or mutate model weights.
+    """
+
+    import torch
+    import triton
+    from vllm.lora.ops.triton_ops.lora_shrink import _lora_shrink_kernel
+    from vllm.lora.ops.triton_ops.utils import _get_lora_a_ptr
+
+    if not isinstance(output, torch.Tensor) or not isinstance(inputs, torch.Tensor):
+        raise TypeError("native split-K shrink requires tensor inputs and output")
+    if not isinstance(lora_a_weights, (tuple, list)) or not lora_a_weights:
+        raise TypeError("native split-K shrink requires non-empty LoRA-A weights")
+    if split_k < 1:
+        raise ValueError("split_k must be positive")
+    x = inputs.reshape(-1, inputs.shape[-1])
+    metadata = wrapper.token_mapping_meta.meta_args(x.size(0))
+    (
+        token_lora_mapping,
+        token_indices_sorted_by_lora_ids,
+        num_tokens_per_lora,
+        lora_token_start_loc,
+        lora_ids,
+        no_lora_flag_cpu,
+    ) = metadata
+    if no_lora_flag_cpu.numel() != 1:
+        raise RuntimeError("pinned vLLM no-LoRA flag has unexpected geometry")
+    if no_lora_flag_cpu.item():
+        return
+    if x.dtype != lora_a_weights[0].dtype:
+        raise RuntimeError("native split-K shrink input/weight dtype mismatch")
+    if x.dtype not in (torch.float16, torch.bfloat16):
+        raise RuntimeError("native split-K shrink requires float16 or bfloat16")
+    if not x.is_contiguous() or not output.is_contiguous():
+        raise RuntimeError("native split-K shrink requires contiguous tensors")
+
+    token_count = x.size(0)
+    if token_lora_mapping.size(0) != token_count:
+        raise RuntimeError("native split-K shrink token mapping length mismatch")
+    if token_indices_sorted_by_lora_ids.size(0) != token_count:
+        raise RuntimeError("native split-K shrink sorted-token length mismatch")
+    if lora_ids.size(0) != num_tokens_per_lora.size(0):
+        raise RuntimeError("native split-K shrink LoRA metadata length mismatch")
+    if lora_token_start_loc.size(0) != lora_ids.size(0) + 1:
+        raise RuntimeError("native split-K shrink start-location length mismatch")
+
+    for weight in lora_a_weights:
+        if not isinstance(weight, torch.Tensor):
+            raise TypeError("native split-K shrink LoRA-A weight is not a tensor")
+        if weight.dtype != x.dtype:
+            raise RuntimeError("native split-K shrink LoRA-A dtype mismatch")
+    if x.size(1) != lora_a_weights[0].size(-1):
+        raise RuntimeError("native split-K shrink hidden size mismatch")
+
+    (
+        lora_ptr_tensor,
+        lora_stride_d0,
+        lora_stride_d1,
+        lora_stride_d2,
+    ) = _get_lora_a_ptr(lora_a_weights, x.device)
+    rank, hidden_size = lora_a_weights[0].shape[-2:]
+    slice_count = len(lora_a_weights)
+    max_loras = lora_ids.size(0)
+    block_m = 32
+    block_n = 16
+    block_k = 256 if token_count < 128 else 32
+    even_k = hidden_size % (block_k * split_k) == 0
+    grid = (
+        split_k
+        * triton.cdiv(token_count, block_m)
+        * triton.cdiv(rank, block_n),
+        slice_count,
+        max_loras,
+    )
+    with torch.inference_mode():
+        _lora_shrink_kernel[grid](
+            x,
+            lora_ptr_tensor,
+            output,
+            token_count,
+            rank,
+            hidden_size,
+            token_indices_sorted_by_lora_ids,
+            num_tokens_per_lora,
+            lora_token_start_loc,
+            lora_ids,
+            float(scaling),
+            x.stride(0),
+            x.stride(1),
+            lora_stride_d0,
+            lora_stride_d1,
+            lora_stride_d2,
+            output.stride(0),
+            output.stride(1),
+            output.stride(2),
+            block_m,
+            block_n,
+            block_k,
+            even_k,
+            split_k,
+            slice_count,
+            num_warps=4,
+            num_ctas=1,
+            num_stages=2,
+            maxnreg=None,
+        )
 
 
 def _reference_shrink(
@@ -245,7 +366,12 @@ def _apply_reference_expand(
 class VllmLoraKernelIntervention:
     """Replace vLLM 0.8.4 Punica stages only inside a scoped diagnostic."""
 
-    MODES = {"reference_shrink", "reference_expand", "reference_full"}
+    MODES = {
+        "native_split_k_one",
+        "reference_shrink",
+        "reference_expand",
+        "reference_full",
+    }
 
     def __init__(self, model_runner: object, mode: str):
         if mode not in self.MODES:
@@ -266,6 +392,29 @@ class VllmLoraKernelIntervention:
             raise RuntimeError("no vLLM Punica wrappers found for intervention")
         try:
             for wrapper in wrappers.values():
+                if self.mode == "native_split_k_one":
+                    original = wrapper.add_shrink
+                    self._patched.append((wrapper, "add_shrink", original))
+
+                    def split_k_one_shrink(
+                        y,
+                        x,
+                        lora_a_stacked,
+                        scale,
+                        *,
+                        __wrapper=wrapper,
+                        **kwargs,
+                    ):
+                        _native_shrink_with_split_k(
+                            __wrapper,
+                            y,
+                            x,
+                            lora_a_stacked,
+                            scale,
+                            split_k=1,
+                        )
+
+                    wrapper.add_shrink = split_k_one_shrink
                 if self.mode in {"reference_shrink", "reference_full"}:
                     original = wrapper.add_shrink
                     self._patched.append((wrapper, "add_shrink", original))
@@ -451,6 +600,7 @@ def compare_lora_rounds(
 def classify_kernel_causality(
     *,
     native: Mapping[str, object],
+    native_split_k_one: Mapping[str, object],
     reference_shrink: Mapping[str, object],
     reference_expand: Mapping[str, object],
     reference_full: Mapping[str, object],
@@ -461,6 +611,7 @@ def classify_kernel_causality(
     exact = "exact_at_captured_boundaries"
     boundaries = (
         native.get("first_changed_boundary"),
+        native_split_k_one.get("first_changed_boundary"),
         reference_shrink.get("first_changed_boundary"),
         reference_expand.get("first_changed_boundary"),
         reference_full.get("first_changed_boundary"),
@@ -477,7 +628,9 @@ def classify_kernel_causality(
     shrink_fixed = reference_shrink.get("first_changed_boundary") == exact
     expand_fixed = reference_expand.get("first_changed_boundary") == exact
     if shrink_fixed and not expand_fixed:
-        return "native_shrink_split_k_nondeterminism"
+        if native_split_k_one.get("first_changed_boundary") == exact:
+            return "native_shrink_split_k_atomic_nondeterminism"
+        return "native_shrink_nondeterminism_not_eliminated_by_split_k_one"
     if expand_fixed and not shrink_fixed:
         return "native_expand_nondeterminism"
     if shrink_fixed and expand_fixed:
@@ -880,7 +1033,7 @@ def collect_layer_localization_report(
 
     def persist() -> None:
         if save_partial is not None:
-            save_partial({"schema_version": 2, "evidence": evidence})
+            save_partial({"schema_version": 3, "evidence": evidence})
 
     runtime = runtime_factory(False)
     try:
@@ -890,6 +1043,7 @@ def collect_layer_localization_report(
         with runtime.rollout_session():
             runtime.begin_vllm_boundary_capture()
             try:
+                phase_started = time.perf_counter()
                 control, _ = _run_rounds(
                     runtime, requests, detailed_rounds,
                     capture_layers=False, progress=progress,
@@ -898,6 +1052,7 @@ def collect_layer_localization_report(
                 evidence["checkpoint_eager_control"] = {
                     "comparison": compare_boundary_rounds(control),
                     "rounds": control,
+                    "diagnostic_seconds": time.perf_counter() - phase_started,
                 }
                 persist()
 
@@ -1032,11 +1187,13 @@ def collect_layer_localization_report(
 
                 intervention_evidence = {}
                 for mode in (
+                    "native_split_k_one",
                     "reference_shrink",
                     "reference_expand",
                     "reference_full",
                 ):
                     runtime.begin_vllm_lora_kernel_intervention(mode)
+                    phase_started = time.perf_counter()
                     try:
                         intervention_rounds, _ = _run_rounds(
                             runtime,
@@ -1053,6 +1210,7 @@ def collect_layer_localization_report(
                             intervention_rounds
                         ),
                         "rounds": intervention_rounds,
+                        "diagnostic_seconds": time.perf_counter() - phase_started,
                     }
                     evidence["checkpoint_eager_lora_interventions"] = (
                         intervention_evidence
@@ -1135,6 +1293,9 @@ def collect_layer_localization_report(
     if layer_classification in attributable_layer_labels:
         classification = classify_kernel_causality(
             native=checkpoint_control,
+            native_split_k_one=interventions[
+                "native_split_k_one"
+            ]["comparison"],
             reference_shrink=interventions["reference_shrink"]["comparison"],
             reference_expand=interventions["reference_expand"]["comparison"],
             reference_full=interventions["reference_full"]["comparison"],
@@ -1143,7 +1304,7 @@ def collect_layer_localization_report(
     else:
         classification = f"blocked_by_{layer_classification}"
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "classification": classification,
         "layer_classification": layer_classification,
         "scope": "fixed one-token synthetic replay; not a valid_seen efficacy result",
@@ -1183,6 +1344,11 @@ def collect_layer_localization_report(
                     "first_changed_boundary"
                 ] == "exact_at_captured_boundaries"
             ),
+            "native_split_k_one_stable": (
+                interventions["native_split_k_one"]["comparison"][
+                    "first_changed_boundary"
+                ] == "exact_at_captured_boundaries"
+            ),
         },
         "first_changed_layer": checkpoint_scan["layer_comparison"][
             "first_changed_layer"
@@ -1196,6 +1362,9 @@ def collect_layer_localization_report(
         ],
         "kernel_causality": {
             "native": checkpoint_control,
+            "native_split_k_one": interventions[
+                "native_split_k_one"
+            ]["comparison"],
             "probe_rotation": rotation,
             "reference_shrink": interventions[
                 "reference_shrink"
@@ -1207,11 +1376,23 @@ def collect_layer_localization_report(
                 "reference_full"
             ]["comparison"],
         },
+        "diagnostic_phase_seconds": {
+            "native": evidence["checkpoint_eager_control"][
+                "diagnostic_seconds"
+            ],
+            **{
+                mode: value["diagnostic_seconds"]
+                for mode, value in interventions.items()
+            },
+        },
         "evidence": evidence,
         "interpretation_limit": (
             "A kernel root-cause label is emitted only when no-hook, observer, "
             "base, LoRA-disabled, probe-rotation, and deterministic replacement "
-            "controls support it. This synthetic one-token result still does not "
-            "measure ALFWorld success-rate efficacy."
+            "controls support it. Split-K is named as causal only when the same "
+            "native Triton shrink kernel becomes stable with SPLIT_K=1. Timings "
+            "are diagnostic-phase measurements, not production throughput. This "
+            "synthetic one-token result still does not measure ALFWorld "
+            "success-rate efficacy."
         ),
     }

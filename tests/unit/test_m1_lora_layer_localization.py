@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from infoskill.m1_lora_layer_localization import (
+    VllmLoraKernelIntervention,
     VllmLayerCapture,
     _aggregate_boundary_comparisons,
     _reference_expand_delta,
@@ -148,19 +149,42 @@ class LayerLocalizationTests(unittest.TestCase):
 
         report = classify_kernel_causality(
             native=drift,
+            native_split_k_one=exact,
             reference_shrink=exact,
             reference_expand=drift,
             reference_full=exact,
             rotation=drift,
         )
 
-        self.assertEqual(report, "native_shrink_split_k_nondeterminism")
+        self.assertEqual(
+            report,
+            "native_shrink_split_k_atomic_nondeterminism",
+        )
+
+    def test_kernel_causality_does_not_blame_split_k_when_split_one_drifts(self):
+        exact = {"first_changed_boundary": "exact_at_captured_boundaries"}
+        drift = {"first_changed_boundary": "final_hidden"}
+
+        report = classify_kernel_causality(
+            native=drift,
+            native_split_k_one=drift,
+            reference_shrink=exact,
+            reference_expand=drift,
+            reference_full=exact,
+            rotation=drift,
+        )
+
+        self.assertEqual(
+            report,
+            "native_shrink_nondeterminism_not_eliminated_by_split_k_one",
+        )
 
     def test_kernel_causality_remains_inconclusive_when_full_reference_drifts(self):
         drift = {"first_changed_boundary": "final_hidden"}
 
         report = classify_kernel_causality(
             native=drift,
+            native_split_k_one=drift,
             reference_shrink=drift,
             reference_expand=drift,
             reference_full=drift,
@@ -168,6 +192,55 @@ class LayerLocalizationTests(unittest.TestCase):
         )
 
         self.assertEqual(report, "drift_persists_with_full_reference_lora")
+
+    def test_split_k_one_intervention_is_scoped_and_restores_wrapper(self):
+        calls = []
+
+        class Wrapper:
+            def add_shrink(self, y, x, weights, scale, **kwargs):
+                calls.append(("original", y, x, weights, scale, kwargs))
+
+        class Lora:
+            def __init__(self):
+                self.punica_wrapper = Wrapper()
+
+        class Model:
+            def __init__(self):
+                self.lora = Lora()
+
+            def named_modules(self):
+                return iter((("model.layers.0.self_attn.qkv_proj", self.lora),))
+
+        class Runner:
+            def __init__(self):
+                self.model = Model()
+
+        runner = Runner()
+        wrapper = runner.model.lora.punica_wrapper
+        original = wrapper.add_shrink
+        intervention = VllmLoraKernelIntervention(
+            runner,
+            "native_split_k_one",
+        )
+        with patch(
+            "infoskill.m1_lora_layer_localization._native_shrink_with_split_k"
+        ) as replacement:
+            intervention.install()
+            wrapper.add_shrink("y", "x", "weights", 0.5, marker="value")
+            replacement.assert_called_once_with(
+                wrapper,
+                "y",
+                "x",
+                "weights",
+                0.5,
+                split_k=1,
+            )
+            intervention.remove()
+
+        wrapper.add_shrink("y2", "x2", "weights2", 1.0, marker="restored")
+        self.assertEqual(calls[0][0], "original")
+        self.assertEqual(calls[0][-1], {"marker": "restored"})
+        self.assertEqual(wrapper.add_shrink.__func__, original.__func__)
 
     def test_lora_attribution_is_rejected_when_disabled_path_drifts(self):
         report = classify_layer_localization(

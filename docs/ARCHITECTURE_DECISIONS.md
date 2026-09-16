@@ -440,8 +440,13 @@ v2 在同一 checkpoint-eager runtime 内增加三组反事实替换：仅用确
 仅替换 expand、以及同时替换两者；同时对三个 probe 做 rank 轮换，每个位置重复采样。替换器只在
 `INFOSKILL_VLLM_LAYER_AUDIT=1` 且活跃 rollout session 内安装，结束或异常关闭时必须恢复原
 Punica 实例方法。只有 base、LoRA-off、观察者、probe 轮换和 full-reference 控制全部支持，且
-单阶段替换消除漂移时，报告才允许给出 `native_shrink_split_k_nondeterminism` 或对应 expand
-分类；否则保持 compound/inconclusive。该替换路径永不进入正常 train/eval。
+单阶段替换消除漂移时，报告只允许定位到 native shrink 或对应 expand，不能仅因为默认 shrink
+使用 split-K 就宣布 split-K 是根因。v3 再加入 `native_split_k_one` 反事实：调用同一个固定
+vLLM 0.8.4 Triton shrink kernel，保留 metadata、block、warp、stage 和 dtype，只将
+`SPLIT_K` 改为 1。只有默认 native 漂移、reference shrink/full 稳定，并且 split-K=1 的所有
+已捕获边界逐位稳定时，才允许输出 `native_shrink_split_k_atomic_nondeterminism`；split-K=1
+仍漂移时必须输出 `native_shrink_nondeterminism_not_eliminated_by_split_k_one`。诊断同时记录各
+干预 phase 的耗时，但它不是正式吞吐基准。所有替换路径永不进入正常 train/eval。
 
 逐层 hook 只允许出现在 eager 诊断 runtime；Graph runtime 只观察 compute_logits 入口的 final
 hidden 与既有 logits/sampler 边界。分类必须同时满足：无 hook checkpoint 漂移可复现、加 hook 后

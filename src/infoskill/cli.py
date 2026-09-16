@@ -2263,12 +2263,15 @@ def _m1_lora_layer_localization(
         "probe_source": "fixed_synthetic_token_only_bfloat16_v1",
         "probe_rotation": True,
         "kernel_interventions": [
+            "native_split_k_one",
             "reference_shrink",
             "reference_expand",
             "reference_full",
         ],
         "reference_accumulation_dtype": "float32",
         "pinned_vllm_shrink_split_k": "64_if_tokens_lt_128_else_8",
+        "candidate_vllm_shrink_split_k": 1,
+        "split_k_intervention_scope": "diagnostic_only_same_native_triton_kernel",
     }
     resolved["policy_model_identity"] = policy_identity.as_dict()
     _write_json(run_directory / "resolved_config.json", resolved)
@@ -2276,7 +2279,7 @@ def _m1_lora_layer_localization(
     logger.info(
         "Initializing unified M1 layer localization on 3 GPUs: "
         "checkpoint/base x eager/Graph, LoRA-off, probe rotation, and "
-        "deterministic LoRA kernel replacements"
+        "native split-K=1 plus deterministic LoRA kernel replacements"
     )
     report = collect_layer_localization_report(
         runtime_factory=lambda graph: VerlRuntime.start(
