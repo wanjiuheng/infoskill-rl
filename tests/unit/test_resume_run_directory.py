@@ -273,6 +273,50 @@ class ResumeRunDirectoryTests(unittest.TestCase):
                     allow_gpu_change=False,
                 )
 
+    def test_named_fork_may_enable_lora_shrink_split_k_one(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000200"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {"lora_shrink_split_k_one": False},
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {"lora_shrink_split_k_one": True},
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=True,
+                allow_performance_candidate_change=True,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
+    def test_in_place_resume_rejects_lora_shrink_split_k_one_change(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000200"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {"lora_shrink_split_k_one": False},
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {"lora_shrink_split_k_one": True},
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_named_fork_may_change_policy_gradient_clip_mode(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000190"
         previous = {

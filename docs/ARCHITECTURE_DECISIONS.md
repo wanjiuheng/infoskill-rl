@@ -446,7 +446,9 @@ vLLM 0.8.4 Triton shrink kernel，保留 metadata、block、warp、stage 和 dty
 `SPLIT_K` 改为 1。只有默认 native 漂移、reference shrink/full 稳定，并且 split-K=1 的所有
 已捕获边界逐位稳定时，才允许输出 `native_shrink_split_k_atomic_nondeterminism`；split-K=1
 仍漂移时必须输出 `native_shrink_nondeterminism_not_eliminated_by_split_k_one`。诊断同时记录各
-干预 phase 的耗时，但它不是正式吞吐基准。所有替换路径永不进入正常 train/eval。
+干预 phase 的耗时，但它不是正式吞吐基准。reference shrink/expand/full 等诊断替换永不进入
+正常 train/eval；经 v3 因果门确认的原生 `native_split_k_one` 只有在 D033 的显式候选开关下
+才可进入正式路径。
 
 逐层 hook 只允许出现在 eager 诊断 runtime；Graph runtime 只观察 compute_logits 入口的 final
 hidden 与既有 logits/sampler 边界。分类必须同时满足：无 hook checkpoint 漂移可复现、加 hook 后
@@ -454,3 +456,20 @@ hidden 与既有 logits/sampler 边界。分类必须同时满足：无 hook che
 漂移或非 LoRARequest 漂移，不强行归因 kernel。报告只保存张量形状、dtype、有界 norm 和精确
 SHA-256，不保存 hidden tensor payload；每完成一个阶段原子覆盖 partial JSON。正常 train/eval 不设置
 三个 scoped audit 环境变量，因此不安装 hook，也没有额外 GPU→CPU 复制。
+
+## D033：正式 rollout 以显式、逐 rank 验证的 SPLIT_K=1 候选消除 LoRA 原子归约漂移
+
+step-205 v3 已同时满足：默认 native shrink 漂移、LoRA-off/base/reference-shrink/full 稳定，
+以及调用同一个 vLLM 0.8.4 Triton shrink kernel 但固定 `SPLIT_K=1` 后 45/45 边界逐位一致。
+因此正式 `train infoskill` 与 `eval infoskill --backend verl` 共享默认关闭的
+`--lora-shrink-split-k-one`（shell 为 `LORA_SHRINK_SPLIT_K_ONE=1`）。开关只在持久 hybrid-prefix
+rollout session 内安装 `native_split_k_one`；每个 worker 必须回报 requested/active，driver
+在任一 rank 未激活时于首次 generation 前 fail closed。正常结束、初始化失败和后续异常都必须
+恢复原 Punica 方法；不得修改 vLLM wheel、checkpoint 或模型权重。
+
+该开关属于影响 rollout、动作、奖励与评测结果的算法配置，不是纯性能参数。历史配置缺失时按
+`false` 解释；原地 resume 不允许改变，只有命名 fork 可以从相同 checkpoint 开启或关闭。
+provenance、resolved config、训练指标和评测 `rollout_performance` 都记录 requested/verified，
+监控曲线用独立 execution mode 标识协议切换。当前默认保持关闭；只有固定小样本复现、从干净
+step-200 分叉的短训练门、相同 checkpoint 的完整 140 条 Macro/Overall 效果门和吞吐/显存门
+全部通过后，才允许把候选用于后续 formal 训练。

@@ -54,6 +54,7 @@ class VerlRuntimeConfig:
     policy_max_tokens_per_gpu: int = DEFAULT_POLICY_MAX_TOKENS_PER_GPU
     rollout_max_batched_tokens: int = 16_384
     hybrid_prefix_cuda_graph: bool = False
+    lora_shrink_split_k_one: bool = False
     gpu_memory_utilization: float = 0.50
     allow_unkeyed_vllm_sampling: bool = False
     require_hybrid_prefix: bool = False
@@ -104,6 +105,18 @@ class VerlRuntimeConfig:
         if self.hybrid_prefix_cuda_graph and not self.require_hybrid_prefix:
             raise ValueError(
                 "hybrid-prefix CUDA Graph requires hybrid-prefix rollout"
+            )
+        if self.lora_shrink_split_k_one and not self.enable_infoskill_modules:
+            raise ValueError(
+                "LoRA shrink SPLIT_K=1 is registered only for INFO-SKILL"
+            )
+        if self.lora_shrink_split_k_one and not self.require_hybrid_prefix:
+            raise ValueError(
+                "LoRA shrink SPLIT_K=1 requires hybrid-prefix rollout"
+            )
+        if self.lora_shrink_split_k_one and not self.persistent_rollout_session:
+            raise ValueError(
+                "LoRA shrink SPLIT_K=1 requires a persistent rollout session"
             )
         if self.fuse_kl_ppo_forward and not self.enable_infoskill_modules:
             raise ValueError(
@@ -192,6 +205,7 @@ class VerlRuntime:
         self._generation_seconds = 0.0
         self._generation_worker_seconds = 0.0
         self._rollout_session_active = False
+        self._lora_shrink_split_k_one_verified = False
         self._grounding_dataset = None
         if config.enable_infoskill_auxiliary:
             from infoskill.integrations.alfworld import GroundingDataset
@@ -424,15 +438,26 @@ class VerlRuntime:
         if self._rollout_session_active:
             yield
             return
-        self.worker_group.begin_infoskill_rollout_session()
+        reports = tuple(self.worker_group.begin_infoskill_rollout_session())
         self._rollout_session_active = True
         try:
+            self._lora_shrink_split_k_one_verified = (
+                _require_lora_shrink_split_k_one_reports(
+                    reports,
+                    expected_workers=self.worker_group.world_size,
+                    required=self.config.lora_shrink_split_k_one,
+                )
+            )
             yield
         finally:
             try:
                 self.worker_group.end_infoskill_rollout_session()
             finally:
                 self._rollout_session_active = False
+
+    @property
+    def lora_shrink_split_k_one_verified(self) -> bool:
+        return self._lora_shrink_split_k_one_verified
 
     def rollout_memory_metrics(self) -> dict[str, float]:
         """Return the completed rollout session's per-rank physical peak."""
@@ -589,6 +614,12 @@ class VerlRuntime:
                     self.config.hybrid_prefix_cuda_graph
                 ),
                 "perf/hybrid_prefix_cuda_graph_use_inductor": 0.0,
+                "perf/lora_shrink_split_k_one": float(
+                    self.config.lora_shrink_split_k_one
+                ),
+                "perf/lora_shrink_split_k_one_verified": float(
+                    self._lora_shrink_split_k_one_verified
+                ),
                 "perf/fuse_kl_ppo_forward": float(
                     self.config.fuse_kl_ppo_forward
                 ),
@@ -925,6 +956,9 @@ def _actor_config(settings: VerlRuntimeConfig):
         actor_ref.rollout.infoskill_hybrid_prefix_cuda_graph = (
             settings.hybrid_prefix_cuda_graph
         )
+        actor_ref.rollout.infoskill_lora_shrink_split_k_one = (
+            settings.lora_shrink_split_k_one
+        )
         for name, value in vllm_action_stop_settings("</action>").items():
             setattr(actor_ref.rollout, name, value)
     actor_ref.ref.log_prob_micro_batch_size_per_gpu = 4
@@ -933,6 +967,43 @@ def _actor_config(settings: VerlRuntimeConfig):
     actor_ref.ref.fsdp_config.param_offload = False
     OmegaConf.resolve(config)
     return config
+
+
+def _require_lora_shrink_split_k_one_reports(
+    reports: tuple[object, ...],
+    *,
+    expected_workers: int,
+    required: bool,
+) -> bool:
+    """Fail closed when a requested deterministic kernel is absent on any rank."""
+
+    if not required:
+        return False
+    if len(reports) != expected_workers:
+        raise RuntimeError(
+            "LoRA shrink SPLIT_K=1 was not reported by every worker"
+        )
+    ranks: set[int] = set()
+    for report in reports:
+        if not isinstance(report, Mapping):
+            raise RuntimeError(
+                "LoRA shrink SPLIT_K=1 worker report is malformed"
+            )
+        rank = report.get("rank")
+        if not isinstance(rank, int) or isinstance(rank, bool):
+            raise RuntimeError(
+                "LoRA shrink SPLIT_K=1 worker report has no rank"
+            )
+        ranks.add(rank)
+        if report.get("lora_shrink_split_k_one_active") is not True:
+            raise RuntimeError(
+                "LoRA shrink SPLIT_K=1 is not active on every worker"
+            )
+    if ranks != set(range(expected_workers)):
+        raise RuntimeError(
+            "LoRA shrink SPLIT_K=1 was not reported by every worker rank"
+        )
+    return True
 
 
 def _policy_micro_batch_size_per_gpu(

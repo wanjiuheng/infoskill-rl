@@ -226,6 +226,8 @@ def write_valid_seen_learning_curve(
         execution = {
             "cuda_graph": "CUDA Graph",
             "eager": "eager",
+            "cuda_graph_split_k_one": "CUDA Graph / LoRA SPLIT_K=1",
+            "eager_split_k_one": "eager / LoRA SPLIT_K=1",
         }.get(execution_mode, execution_mode or "execution unknown")
         return f"{batch} / {execution}"
 

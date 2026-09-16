@@ -52,6 +52,7 @@ class VerlRuntimeConfigTests(unittest.TestCase):
         self.assertFalse(settings.skip_unused_old_logprob_entropy)
         self.assertEqual(settings.rollout_max_batched_tokens, 16_384)
         self.assertFalse(settings.hybrid_prefix_cuda_graph)
+        self.assertFalse(settings.lora_shrink_split_k_one)
         self.assertFalse(settings.fuse_kl_ppo_forward)
 
         with self.assertRaisesRegex(ValueError, "maximum-length sequence"):
@@ -89,10 +90,27 @@ class VerlRuntimeConfigTests(unittest.TestCase):
                 num_gpus=4,
                 fuse_kl_ppo_forward=True,
             )
+        with self.assertRaisesRegex(ValueError, "only for INFO-SKILL"):
+            VerlRuntimeConfig(
+                skillrl_source="/skillrl",
+                model_path="/policy",
+                num_gpus=4,
+                lora_shrink_split_k_one=True,
+            )
         with self.assertRaisesRegex(ValueError, "requires hybrid-prefix"):
             VerlRuntimeConfig(
                 **common,
                 hybrid_prefix_cuda_graph=True,
+            )
+
+        with self.assertRaisesRegex(ValueError, "persistent rollout"):
+            VerlRuntimeConfig(
+                **common,
+                require_hybrid_prefix=True,
+                semantic_model_path="/semantic",
+                skill_bank_path="/skills.json",
+                persistent_rollout_session=False,
+                lora_shrink_split_k_one=True,
             )
 
         with self.assertRaisesRegex(ValueError, "grounding data"):
@@ -103,6 +121,46 @@ class VerlRuntimeConfigTests(unittest.TestCase):
                 skill_bank_path="/skills.json",
                 enable_infoskill_auxiliary=True,
             )
+
+        enabled = VerlRuntimeConfig(
+            **common,
+            require_hybrid_prefix=True,
+            semantic_model_path="/semantic",
+            skill_bank_path="/skills.json",
+            lora_shrink_split_k_one=True,
+        )
+        self.assertTrue(enabled.lora_shrink_split_k_one)
+
+    def test_rollout_session_requires_every_rank_to_confirm_split_k_one(self) -> None:
+        from infoskill.integrations.verl.runtime import VerlRuntime, VerlRuntimeConfig
+
+        settings = VerlRuntimeConfig(
+            skillrl_source="/skillrl",
+            model_path="/policy",
+            num_gpus=2,
+            enable_infoskill_modules=True,
+            require_hybrid_prefix=True,
+            semantic_model_path="/semantic",
+            skill_bank_path="/skills.json",
+            lora_shrink_split_k_one=True,
+        )
+        worker_group = _RolloutSessionWorkerGroup(
+            reports=(
+                {"rank": 0, "lora_shrink_split_k_one_active": True},
+                {"rank": 1, "lora_shrink_split_k_one_active": False},
+            )
+        )
+        runtime = VerlRuntime(
+            worker_group=worker_group,
+            codec=object(),  # type: ignore[arg-type]
+            config=settings,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "every worker"):
+            with runtime.rollout_session():
+                pass
+
+        self.assertEqual(worker_group.end_calls, 1)
 
     def test_named_auxiliary_seeds_are_stable_and_namespaced(self) -> None:
         from infoskill.integrations.verl.runtime import (
@@ -279,6 +337,20 @@ class _WorkerGroup:
 
     def condition_infoskill_serial(self, data):
         return self.condition_infoskill(data)
+
+
+class _RolloutSessionWorkerGroup:
+    world_size = 2
+
+    def __init__(self, *, reports) -> None:
+        self.reports = reports
+        self.end_calls = 0
+
+    def begin_infoskill_rollout_session(self):
+        return self.reports
+
+    def end_infoskill_rollout_session(self):
+        self.end_calls += 1
 
 
 if __name__ == "__main__":

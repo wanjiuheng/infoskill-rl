@@ -164,6 +164,22 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("--hybrid-prefix-cuda-graph", eval_case)
         self.assertIn("--no-hybrid-prefix-cuda-graph", eval_case)
 
+    def test_split_k_one_is_default_off_and_forwarded_to_train_and_eval(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (project_root / "scripts" / "run_alfworld.sh").read_text(
+            encoding="utf-8"
+        )
+        eval_case = script.split("  eval)\n", 1)[1].split("  raw-skill-ab|", 1)[0]
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+
+        self.assertIn(
+            'LORA_SHRINK_SPLIT_K_ONE="${LORA_SHRINK_SPLIT_K_ONE:-0}"',
+            script,
+        )
+        for action_case in (eval_case, train_case):
+            self.assertIn("--lora-shrink-split-k-one", action_case)
+            self.assertIn("--no-lora-shrink-split-k-one", action_case)
+
     def test_timeout_rescue_is_targeted_resumable_and_longer_bounded(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(

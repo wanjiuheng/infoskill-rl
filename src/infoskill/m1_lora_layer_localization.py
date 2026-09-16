@@ -1,7 +1,8 @@
 """Layer-by-layer localization for active vLLM LoRA inference drift.
 
-This module is diagnostic-only.  It deliberately records hashes and bounded
-statistics rather than tensor payloads, and never mutates model weights.
+The capture and comparison paths are diagnostic-only.  The scoped
+``native_split_k_one`` intervention is also reused by the registered runtime
+fix; it mutates neither model weights nor the installed vLLM package.
 """
 
 from __future__ import annotations
@@ -364,7 +365,7 @@ def _apply_reference_expand(
 
 
 class VllmLoraKernelIntervention:
-    """Replace vLLM 0.8.4 Punica stages only inside a scoped diagnostic."""
+    """Replace vLLM 0.8.4 Punica stages inside one rollout session."""
 
     MODES = {
         "native_split_k_one",

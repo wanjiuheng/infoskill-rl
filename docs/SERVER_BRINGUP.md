@@ -2078,6 +2078,23 @@ rollout 耗时和物理显存余量为准，不把轨迹逐 token 完全相同�
 必须开启物理显存轮询，且保留至少 `8 GiB` 的每卡最低空闲显存；入口默认仍为 eager，直到
 完整评测确认效果和性能。
 
+### LoRA shrink SPLIT_K=1 正式候选
+
+v3 定位通过后，正常 INFO-SKILL train/eval 可显式设置：
+
+```bash
+LORA_SHRINK_SPLIT_K_ONE=1
+```
+
+该设置不会改 vLLM 安装、checkpoint 或基础模型；它只在每次持久 rollout session 内把原生
+LoRA shrink kernel 的 `SPLIT_K` 固定为 1，结束和异常路径都会恢复。日志/产物中必须同时看到
+`lora_shrink_split_k_one=true` 与 `lora_shrink_split_k_one_verified=1`，否则不得把该次运行计入
+候选结果。风险是 kernel 吞吐可能下降且 rollout/奖励会改变，所以不要在原 run 目录原地恢复；
+从干净 checkpoint 使用新的 `RUN_NAME` 做命名 fork。推荐先从 step-200 分叉到 205（或 225），
+再用同一 eval batch、同一 CUDA Graph 设置跑完整 140 条，与未修复分支比较 Macro、Overall、
+无效动作率、rollout 秒数和每卡最低空闲显存。成功率是否上升只能由该效果门决定，不能由逐位
+确定性诊断直接推断。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

@@ -92,6 +92,36 @@ class TrainingCliTests(unittest.TestCase):
         self.assertFalse(default.hybrid_prefix_cuda_graph)
         self.assertTrue(optimized.hybrid_prefix_cuda_graph)
 
+    def test_lora_shrink_split_k_one_is_shared_explicit_m1_opt_in(self) -> None:
+        eval_default = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+            ]
+        )
+        eval_fixed = _parser().parse_args(
+            [
+                "eval",
+                "--config",
+                "configs/alfworld_qwen25_7b.yaml",
+                "--mode",
+                "infoskill",
+                "--lora-shrink-split-k-one",
+            ]
+        )
+        train_default = _parser().parse_args(self._arguments())
+        train_fixed = _parser().parse_args(
+            self._arguments() + ["--lora-shrink-split-k-one"]
+        )
+
+        self.assertFalse(eval_default.lora_shrink_split_k_one)
+        self.assertTrue(eval_fixed.lora_shrink_split_k_one)
+        self.assertFalse(train_default.lora_shrink_split_k_one)
+        self.assertTrue(train_fixed.lora_shrink_split_k_one)
+
     def test_m1_performance_candidates_are_explicitly_opt_in(self) -> None:
         default = _parser().parse_args(self._arguments())
         optimized = _parser().parse_args(
@@ -335,6 +365,35 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(payload["infoskill_latent_mode"], "sample")
         self.assertEqual(payload["infoskill_soft_prefix_length"], 5)
         self.assertEqual(payload["policy_gradient_clip_mode"], "joint")
+
+    def test_infoskill_split_k_one_reaches_training_runtime(self) -> None:
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "infoskill"
+        arguments.remove("--dry-run")
+        arguments.extend(
+            [
+                "--grounding-data",
+                "/runs/formal-grounding",
+                "--lora-shrink-split-k-one",
+            ]
+        )
+
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "infoskill.training.m0.run_policy_training",
+                return_value=0,
+            ) as train,
+        ):
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(train.call_args.kwargs["lora_shrink_split_k_one"])
+
+    def test_non_infoskill_rejects_lora_shrink_split_k_one(self) -> None:
+        with patch("pathlib.Path.exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "only for infoskill"):
+                main(self._arguments() + ["--lora-shrink-split-k-one"])
 
     def test_infoskill_separate_policy_gradient_clip_is_reported(self) -> None:
         output = io.StringIO()

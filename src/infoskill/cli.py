@@ -139,6 +139,15 @@ def _parser() -> argparse.ArgumentParser:
             "eager adaptor, and registered custom CUDA kernels"
         ),
     )
+    evaluate.add_argument(
+        "--lora-shrink-split-k-one",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "M1-only deterministic vLLM LoRA shrink: force SPLIT_K=1 "
+            "for both eager and CUDA Graph evaluation"
+        ),
+    )
     evaluate.add_argument("--verbose-runtime-logs", action="store_true")
     raw_skill_ab = subparsers.add_parser(
         "raw-skill-ab",
@@ -483,6 +492,15 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--lora-shrink-split-k-one",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "M1-only deterministic vLLM LoRA shrink: force SPLIT_K=1 "
+            "for rollout actions and rewards"
+        ),
+    )
+    train.add_argument(
         "--fuse-kl-ppo-forward",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -571,6 +589,10 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError(
             "hybrid_prefix_cuda_graph is registered only for infoskill"
         )
+    if args.lora_shrink_split_k_one and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "lora_shrink_split_k_one is registered only for infoskill"
+        )
     if args.fuse_kl_ppo_forward and mode is not SkillMode.INFO_SKILL:
         raise ValueError(
             "fuse_kl_ppo_forward is registered only for infoskill"
@@ -656,6 +678,9 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "hybrid_prefix_cuda_graph_use_inductor": (
                         False if args.hybrid_prefix_cuda_graph else None
                     ),
+                    "lora_shrink_split_k_one": (
+                        args.lora_shrink_split_k_one
+                    ),
                     "fuse_kl_ppo_forward": args.fuse_kl_ppo_forward,
                     "policy_gradient_clip_mode": (
                         args.policy_gradient_clip_mode
@@ -700,6 +725,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         rollout_max_batched_tokens=args.rollout_max_batched_tokens,
         hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
+        lora_shrink_split_k_one=args.lora_shrink_split_k_one,
         fuse_kl_ppo_forward=args.fuse_kl_ppo_forward,
         policy_gradient_clip_mode=args.policy_gradient_clip_mode,
         raw_skill_prompt_format=args.raw_skill_prompt_format,
@@ -725,6 +751,10 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("hybrid-prefix CUDA Graph evaluation is registered only for infoskill")
     if args.hybrid_prefix_cuda_graph and args.backend != "verl":
         raise ValueError("hybrid-prefix CUDA Graph evaluation requires backend=verl")
+    if args.lora_shrink_split_k_one and mode is not SkillMode.INFO_SKILL:
+        raise ValueError("LoRA shrink SPLIT_K=1 is registered only for infoskill")
+    if args.lora_shrink_split_k_one and args.backend != "verl":
+        raise ValueError("LoRA shrink SPLIT_K=1 evaluation requires backend=verl")
     if args.backend == "transformers" and args.num_gpus != 1:
         raise ValueError("the Transformers evaluation backend requires num_gpus=1")
     if mode is SkillMode.INFO_SKILL and args.backend != "verl":
@@ -925,6 +955,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "hybrid_prefix_cuda_graph_use_inductor": (
             False if args.hybrid_prefix_cuda_graph else None
         ),
+        "lora_shrink_split_k_one": args.lora_shrink_split_k_one,
         "policy_checkpoint": (
             str(checkpoint.directory) if checkpoint is not None else None
         ),
@@ -1017,6 +1048,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     gpu_memory_utilization=0.45,
                     require_hybrid_prefix=mode is SkillMode.INFO_SKILL,
                     hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
+                    lora_shrink_split_k_one=args.lora_shrink_split_k_one,
                     soft_prefix_length=5,
                     master_seed=config.master_seed,
                     persistent_rollout_session=args.persistent_rollout_session,
@@ -1177,6 +1209,15 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     rollout_performance = dict(run.performance_metrics or {})
     rollout_performance["perf/hybrid_prefix_cuda_graph"] = float(
         args.hybrid_prefix_cuda_graph
+    )
+    rollout_performance["perf/lora_shrink_split_k_one"] = float(
+        args.lora_shrink_split_k_one
+    )
+    rollout_performance["perf/lora_shrink_split_k_one_verified"] = float(
+        bool(
+            runtime is not None
+            and runtime.lora_shrink_split_k_one_verified
+        )
     )
     rollout_performance[
         "perf/hybrid_prefix_cuda_graph_custom_kernels"

@@ -55,6 +55,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self._infoskill_cuda_memory_sampler = None
         self._infoskill_vllm_layer_capture = None
         self._infoskill_vllm_lora_intervention = None
+        self._infoskill_lora_shrink_split_k_one_intervention = None
         self._infoskill_saved_lora_kwargs = None
         self._infoskill_cuda_memory_poll_interval_ms = int(
             self.config.model.get("infoskill_cuda_memory_poll_interval_ms", 0)
@@ -377,7 +378,7 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         )
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def begin_infoskill_rollout_session(self) -> None:
+    def begin_infoskill_rollout_session(self) -> dict[str, object]:
         if self._infoskill_rollout_session_active:
             raise RuntimeError("INFO-SKILL rollout session is already active")
         self._infoskill_rollout_session_active = True
@@ -385,14 +386,55 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self._infoskill_rollout_memory_snapshot = None
         get_torch_device().reset_peak_memory_stats()
         self._start_infoskill_cuda_memory_sampler()
+        sharding_entered = False
         try:
             self.rollout_sharding_manager.__enter__()
+            sharding_entered = True
+            enabled = bool(
+                self.config.rollout.get(
+                    "infoskill_lora_shrink_split_k_one",
+                    False,
+                )
+            )
+            if enabled:
+                from infoskill.m1_lora_layer_localization import (
+                    VllmLoraKernelIntervention,
+                )
+
+                intervention = VllmLoraKernelIntervention(
+                    self.rollout_sharding_manager.model_runner,
+                    "native_split_k_one",
+                )
+                intervention.install()
+                self._infoskill_lora_shrink_split_k_one_intervention = (
+                    intervention
+                )
+            return {
+                "rank": dist.get_rank(),
+                "lora_shrink_split_k_one_requested": enabled,
+                "lora_shrink_split_k_one_active": bool(
+                    self._infoskill_lora_shrink_split_k_one_intervention
+                ),
+            }
         except Exception:
             try:
-                self._stop_infoskill_cuda_memory_sampler()
-                self.rollout_sharding_manager.__exit__(None, None, None)
+                intervention = (
+                    self._infoskill_lora_shrink_split_k_one_intervention
+                )
+                if intervention is not None:
+                    try:
+                        intervention.remove()
+                    finally:
+                        self._infoskill_lora_shrink_split_k_one_intervention = None
             finally:
-                self._infoskill_rollout_session_active = False
+                try:
+                    self._stop_infoskill_cuda_memory_sampler()
+                finally:
+                    try:
+                        if sharding_entered:
+                            self.rollout_sharding_manager.__exit__(None, None, None)
+                    finally:
+                        self._infoskill_rollout_session_active = False
             raise
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
@@ -477,12 +519,24 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                         self._infoskill_vllm_layer_capture = None
                 finally:
                     try:
-                        intervention = getattr(
-                            self, "_infoskill_vllm_lora_intervention", None
+                        deterministic_intervention = getattr(
+                            self,
+                            "_infoskill_lora_shrink_split_k_one_intervention",
+                            None,
                         )
-                        if intervention is not None:
-                            intervention.remove()
-                            self._infoskill_vllm_lora_intervention = None
+                        try:
+                            if deterministic_intervention is not None:
+                                deterministic_intervention.remove()
+                        finally:
+                            self._infoskill_lora_shrink_split_k_one_intervention = None
+                            intervention = getattr(
+                                self, "_infoskill_vllm_lora_intervention", None
+                            )
+                            try:
+                                if intervention is not None:
+                                    intervention.remove()
+                            finally:
+                                self._infoskill_vllm_lora_intervention = None
                     finally:
                         try:
                             if self._infoskill_saved_lora_kwargs is not None:

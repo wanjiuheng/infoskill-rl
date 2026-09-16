@@ -96,6 +96,9 @@ ROLLOUT_MAX_BATCHED_TOKENS="${ROLLOUT_MAX_BATCHED_TOKENS:-16384}"
 # Default-off vLLM wheel candidate; uses the validated eager-adaptor + custom
 # CUDA kernel graph policy and requires 0.8.4+infoskill2.
 HYBRID_PREFIX_CUDA_GRAPH="${HYBRID_PREFIX_CUDA_GRAPH:-0}"
+# Deterministic pinned-vLLM 0.8.4 LoRA shrink.  The default stays off until
+# the step-200 recovery gate measures both efficacy and throughput.
+LORA_SHRINK_SPLIT_K_ONE="${LORA_SHRINK_SPLIT_K_ONE:-0}"
 # Default-off algorithm candidate; KL also regularizes the projector.
 FUSE_KL_PPO_FORWARD="${FUSE_KL_PPO_FORWARD:-0}"
 # Registered M1 default is one global norm.  "separate" is a named-fork-only
@@ -171,6 +174,10 @@ if [[ ! "${ROLLOUT_MAX_BATCHED_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ "${HYBRID_PREFIX_CUDA_GRAPH}" != "0" && "${HYBRID_PREFIX_CUDA_GRAPH}" != "1" ]]; then
   echo "HYBRID_PREFIX_CUDA_GRAPH must be 0 or 1" >&2
+  exit 2
+fi
+if [[ "${LORA_SHRINK_SPLIT_K_ONE}" != "0" && "${LORA_SHRINK_SPLIT_K_ONE}" != "1" ]]; then
+  echo "LORA_SHRINK_SPLIT_K_ONE must be 0 or 1" >&2
   exit 2
 fi
 if [[ "${FUSE_KL_PPO_FORWARD}" != "0" && "${FUSE_KL_PPO_FORWARD}" != "1" ]]; then
@@ -360,6 +367,10 @@ case "${ACTION}" in
         echo "HYBRID_PREFIX_CUDA_GRAPH must be 0 or 1" >&2
         exit 2
         ;;
+    esac
+    case "${LORA_SHRINK_SPLIT_K_ONE}" in
+      1) EVAL_ARGS+=(--lora-shrink-split-k-one) ;;
+      0) EVAL_ARGS+=(--no-lora-shrink-split-k-one) ;;
     esac
     case "${VERBOSE_RUNTIME_LOGS}" in
       0) ;;
@@ -733,6 +744,10 @@ case "${ACTION}" in
     case "${HYBRID_PREFIX_CUDA_GRAPH}" in
       0) TRAIN_ARGS+=(--no-hybrid-prefix-cuda-graph) ;;
       1) TRAIN_ARGS+=(--hybrid-prefix-cuda-graph) ;;
+    esac
+    case "${LORA_SHRINK_SPLIT_K_ONE}" in
+      0) TRAIN_ARGS+=(--no-lora-shrink-split-k-one) ;;
+      1) TRAIN_ARGS+=(--lora-shrink-split-k-one) ;;
     esac
     case "${FUSE_KL_PPO_FORWARD}" in
       0) TRAIN_ARGS+=(--no-fuse-kl-ppo-forward) ;;

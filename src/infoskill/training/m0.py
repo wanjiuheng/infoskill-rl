@@ -100,6 +100,7 @@ def run_m0_training(
     skip_unused_old_logprob_entropy: bool = False,
     rollout_max_batched_tokens: int = 16_384,
     hybrid_prefix_cuda_graph: bool = False,
+    lora_shrink_split_k_one: bool = False,
     fuse_kl_ppo_forward: bool = False,
     policy_gradient_clip_mode: Literal["joint", "separate"] = "joint",
     checkpoint_keep_recent: int = 2,
@@ -126,6 +127,7 @@ def run_m0_training(
         skip_unused_old_logprob_entropy=skip_unused_old_logprob_entropy,
         rollout_max_batched_tokens=rollout_max_batched_tokens,
         hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+        lora_shrink_split_k_one=lora_shrink_split_k_one,
         fuse_kl_ppo_forward=fuse_kl_ppo_forward,
         policy_gradient_clip_mode=policy_gradient_clip_mode,
         checkpoint_keep_recent=checkpoint_keep_recent,
@@ -151,6 +153,7 @@ def run_policy_training(
     skip_unused_old_logprob_entropy: bool = False,
     rollout_max_batched_tokens: int = 16_384,
     hybrid_prefix_cuda_graph: bool = False,
+    lora_shrink_split_k_one: bool = False,
     fuse_kl_ppo_forward: bool = False,
     policy_gradient_clip_mode: Literal["joint", "separate"] = "joint",
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
@@ -209,6 +212,10 @@ def run_policy_training(
     if hybrid_prefix_cuda_graph and mode is not SkillMode.INFO_SKILL:
         raise ValueError(
             "hybrid_prefix_cuda_graph is registered only for infoskill"
+        )
+    if lora_shrink_split_k_one and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "lora_shrink_split_k_one is registered only for infoskill"
         )
     if fuse_kl_ppo_forward and mode is not SkillMode.INFO_SKILL:
         raise ValueError(
@@ -377,6 +384,7 @@ def run_policy_training(
             "hybrid_prefix_cuda_graph_use_inductor": (
                 False if hybrid_prefix_cuda_graph else None
             ),
+            "lora_shrink_split_k_one": lora_shrink_split_k_one,
             "fuse_kl_ppo_forward": fuse_kl_ppo_forward,
             "policy_gradient_clip_mode": policy_gradient_clip_mode,
             "checkpoint_keep_recent": checkpoint_keep_recent,
@@ -401,7 +409,10 @@ def run_policy_training(
                     else "nonregistered_monitoring_curve"
                 ),
                 "execution_mode": (
-                    "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
+                    _rollout_execution_mode(
+                        hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+                        lora_shrink_split_k_one=lora_shrink_split_k_one,
+                    )
                 ),
             }
             if plan.evaluation_kind == "valid_seen"
@@ -482,7 +493,10 @@ def run_policy_training(
                     else "nonregistered_monitoring_curve"
                 ),
                 "execution_mode": (
-                    "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
+                    _rollout_execution_mode(
+                        hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+                        lora_shrink_split_k_one=lora_shrink_split_k_one,
+                    )
                 ),
             }
             if plan.evaluation_kind == "valid_seen"
@@ -535,7 +549,10 @@ def run_policy_training(
                 else "nonregistered_monitoring_curve"
             ),
             execution_mode=(
-                "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
+                _rollout_execution_mode(
+                    hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+                    lora_shrink_split_k_one=lora_shrink_split_k_one,
+                )
             ),
         )
 
@@ -562,6 +579,7 @@ def run_policy_training(
             policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
             rollout_max_batched_tokens=rollout_max_batched_tokens,
             hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+            lora_shrink_split_k_one=lora_shrink_split_k_one,
             fuse_kl_ppo_forward=fuse_kl_ppo_forward,
             infoskill_policy_gradient_clip_mode=policy_gradient_clip_mode,
             balance_policy_tokens_across_ranks=(
@@ -807,6 +825,7 @@ def run_policy_training(
             keep_best_valid=checkpoint_keep_best_valid,
             schedule=schedule,
             hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+            lora_shrink_split_k_one=lora_shrink_split_k_one,
         )
 
         def should_pause() -> bool:
@@ -955,6 +974,7 @@ def _evaluation_callback(
     keep_best_valid: bool,
     schedule: TaskSchedule,
     hybrid_prefix_cuda_graph: bool,
+    lora_shrink_split_k_one: bool,
 ):
     if plan.evaluation_kind == "none":
         return None
@@ -977,7 +997,10 @@ def _evaluation_callback(
             scores=valid_scores,
         )
     monitoring_only = config.eval_batch_size != 8
-    execution_mode = "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
+    execution_mode = _rollout_execution_mode(
+        hybrid_prefix_cuda_graph=hybrid_prefix_cuda_graph,
+        lora_shrink_split_k_one=lora_shrink_split_k_one,
+    )
     if valid_scores:
         write_valid_seen_learning_curve(
             curve_path,
@@ -1101,6 +1124,15 @@ def _evaluation_callback(
             checkpoint(0, schedule)
 
     return evaluate
+
+
+def _rollout_execution_mode(
+    *,
+    hybrid_prefix_cuda_graph: bool,
+    lora_shrink_split_k_one: bool,
+) -> str:
+    base = "cuda_graph" if hybrid_prefix_cuda_graph else "eager"
+    return f"{base}_split_k_one" if lora_shrink_split_k_one else base
 
 
 def _checkpoint_is_permanent(

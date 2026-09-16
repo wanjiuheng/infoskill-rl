@@ -473,7 +473,11 @@ add 还不能把 split-K 写成既定根因。v3 在相同 checkpoint-eager runt
 `native_split_k_one`：复用完全相同的 vLLM Triton shrink kernel、metadata、block/warp/stage，
 只把 `SPLIT_K` 改为 1。只有该路径逐边界 exact 时才允许输出
 `native_shrink_split_k_atomic_nondeterminism`；否则明确报告 split-K=1 未消除漂移。所有干预仍只在
-诊断 session 内生效，不改变训练/评测默认路径，也不能替代 140 条成功率。
+诊断 session 内生效，不改变训练/评测默认路径，也不能替代 140 条成功率。v3 通过后，正式
+train/eval 新增默认关闭的 `LORA_SHRINK_SPLIT_K_ONE=1` 候选：它只复用已经验证的
+`native_split_k_one` 干预，进入持久 rollout session 后在每个 rank 安装、离开或异常时恢复，
+并要求所有 worker 回报 active 才允许生成。该候选不改 checkpoint、基础权重或 vLLM wheel；
+只能通过命名 resume fork 改变，必须从同一 checkpoint 做固定任务与 140 条效果/吞吐门后再晋升。
 
 首轮 step-200 gradient-clip A/B 暴露了一处配置路由错误：resolved config 已登记 candidate 为
 `separate`，但 worker 构造 actor 时只传入 `actor` 子配置，而裁剪实现从该子配置读取了存放在
