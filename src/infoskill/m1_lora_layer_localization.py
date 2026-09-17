@@ -129,11 +129,10 @@ def _native_shrink_with_split_k(
     """
 
     import torch
-    import triton
-    from vllm.lora.ops.triton_ops.lora_shrink import _lora_shrink_kernel
-    from vllm.lora.ops.triton_ops.utils import _get_lora_a_ptr
 
-    if not isinstance(output, torch.Tensor) or not isinstance(inputs, torch.Tensor):
+    if not isinstance(output, torch.Tensor) or not isinstance(
+        inputs, torch.Tensor
+    ):
         raise TypeError("native split-K shrink requires tensor inputs and output")
     if not isinstance(lora_a_weights, (tuple, list)) or not lora_a_weights:
         raise TypeError("native split-K shrink requires non-empty LoRA-A weights")
@@ -141,6 +140,49 @@ def _native_shrink_with_split_k(
         raise ValueError("split_k must be positive")
     x = inputs.reshape(-1, inputs.shape[-1])
     metadata = wrapper.token_mapping_meta.meta_args(x.size(0))
+    return _launch_native_shrink_with_split_k(
+        output,
+        x,
+        lora_a_weights,
+        scaling,
+        metadata,
+        split_k=split_k,
+    )
+
+
+def _launch_native_shrink_with_split_k(
+    output: object,
+    inputs: object,
+    lora_a_weights: object,
+    scaling: object,
+    metadata: object,
+    *,
+    split_k: int,
+) -> bool:
+    """Launch one pinned native shrink kernel from explicit metadata.
+
+    The no-LoRA CPU flag is intentionally consumed here.  Eager callers may
+    invoke this function directly; compiled callers must hide it behind the
+    custom op registered by ``_ensure_precapture_split_k_one_op`` so Dynamo
+    never traces ``Tensor.item`` or the Triton launch internals.
+    """
+
+    import torch
+    import triton
+    from vllm.lora.ops.triton_ops.lora_shrink import _lora_shrink_kernel
+    from vllm.lora.ops.triton_ops.utils import _get_lora_a_ptr
+
+    if not isinstance(output, torch.Tensor) or not isinstance(
+        inputs, torch.Tensor
+    ):
+        raise TypeError("native split-K shrink requires tensor inputs and output")
+    if not isinstance(lora_a_weights, (tuple, list)) or not lora_a_weights:
+        raise TypeError("native split-K shrink requires non-empty LoRA-A weights")
+    if not isinstance(metadata, (tuple, list)) or len(metadata) != 6:
+        raise TypeError("native split-K shrink metadata has unexpected geometry")
+    if split_k < 1:
+        raise ValueError("split_k must be positive")
+    x = inputs.reshape(-1, inputs.shape[-1])
     (
         token_lora_mapping,
         token_indices_sorted_by_lora_ids,
@@ -479,6 +521,124 @@ class VllmLoraKernelIntervention:
         self._patched = []
 
 
+_PRECAPTURE_SPLIT_K_ONE_LIBRARY: object | None = None
+_PRECAPTURE_SPLIT_K_ONE_OP: object | None = None
+_ACTIVE_PRECAPTURE_INTERVENTION: object | None = None
+
+
+def _ensure_precapture_split_k_one_op():
+    """Register a Dynamo-opaque custom op for the capture-time kernel.
+
+    Pinned vLLM compiles the model with ``fullgraph=True``.  The no-LoRA flag
+    is a CPU tensor specifically intended to be consumed inside a custom op;
+    reading it from the Python wrapper with ``Tensor.item`` makes Dynamo abort
+    before graph capture.  Keep the flag branch and Triton launch behind this
+    explicit operator boundary, matching vLLM's own LoRA op contract.
+    """
+
+    global _PRECAPTURE_SPLIT_K_ONE_LIBRARY
+    global _PRECAPTURE_SPLIT_K_ONE_OP
+    if _PRECAPTURE_SPLIT_K_ONE_OP is not None:
+        return _PRECAPTURE_SPLIT_K_ONE_OP
+
+    import torch
+
+    library = torch.library.Library("infoskill", "FRAGMENT")
+    op_name = "lora_shrink_split_k_one"
+    library.define(
+        f"{op_name}(Tensor(a!) output, Tensor inputs, "
+        "Tensor[] lora_a_weights, Tensor token_lora_mapping, "
+        "Tensor token_indices_sorted_by_lora_ids, "
+        "Tensor num_tokens_per_lora, Tensor lora_token_start_loc, "
+        "Tensor lora_ids, Tensor no_lora_flag_cpu, float scaling) -> ()"
+    )
+
+    def implementation(
+        output,
+        inputs,
+        lora_a_weights,
+        token_lora_mapping,
+        token_indices_sorted_by_lora_ids,
+        num_tokens_per_lora,
+        lora_token_start_loc,
+        lora_ids,
+        no_lora_flag_cpu,
+        scaling,
+    ):
+        global _ACTIVE_PRECAPTURE_INTERVENTION
+        intervention = _ACTIVE_PRECAPTURE_INTERVENTION
+        if intervention is not None:
+            intervention.call_count += 1
+        launched = _launch_native_shrink_with_split_k(
+            output,
+            inputs,
+            lora_a_weights,
+            scaling,
+            (
+                token_lora_mapping,
+                token_indices_sorted_by_lora_ids,
+                num_tokens_per_lora,
+                lora_token_start_loc,
+                lora_ids,
+                no_lora_flag_cpu,
+            ),
+            split_k=1,
+        )
+        if intervention is not None and launched:
+            intervention.kernel_launch_count += 1
+
+    def fake_implementation(
+        output,
+        inputs,
+        lora_a_weights,
+        token_lora_mapping,
+        token_indices_sorted_by_lora_ids,
+        num_tokens_per_lora,
+        lora_token_start_loc,
+        lora_ids,
+        no_lora_flag_cpu,
+        scaling,
+    ):
+        del (
+            output,
+            inputs,
+            lora_a_weights,
+            token_lora_mapping,
+            token_indices_sorted_by_lora_ids,
+            num_tokens_per_lora,
+            lora_token_start_loc,
+            lora_ids,
+            no_lora_flag_cpu,
+            scaling,
+        )
+        return None
+
+    library.impl(op_name, implementation, "CUDA")
+    library.impl(op_name, fake_implementation, "Meta")
+    _PRECAPTURE_SPLIT_K_ONE_LIBRARY = library
+    _PRECAPTURE_SPLIT_K_ONE_OP = (
+        torch.ops.infoskill.lora_shrink_split_k_one.default
+    )
+    return _PRECAPTURE_SPLIT_K_ONE_OP
+
+
+def _compiled_safe_split_k_one_shrink(
+    wrapper,
+    output,
+    inputs,
+    lora_a_weights,
+    scaling,
+):
+    """Call deterministic shrink through the pre-registered custom op."""
+
+    op = _PRECAPTURE_SPLIT_K_ONE_OP
+    if op is None:
+        raise RuntimeError("pre-capture SPLIT_K=1 custom op is not registered")
+    x = inputs.reshape(-1, inputs.shape[-1])
+    metadata = wrapper.token_mapping_meta.meta_args(x.size(0))
+    op(output, x, list(lora_a_weights), *metadata, float(scaling))
+
+
 class VllmLoraPreCaptureSplitKOneIntervention:
     """Install deterministic LoRA shrink before vLLM captures CUDA Graphs.
 
@@ -490,19 +650,30 @@ class VllmLoraPreCaptureSplitKOneIntervention:
     eager execution and for any uncaptured graph fallbacks.
     """
 
-    def __init__(self, wrapper_type: type | None = None):
+    def __init__(
+        self,
+        wrapper_type: type | None = None,
+        compiled_safe_shrink=None,
+    ):
         if wrapper_type is None:
             from vllm.lora.punica_wrapper.punica_gpu import PunicaWrapperGPU
 
             wrapper_type = PunicaWrapperGPU
         self.wrapper_type = wrapper_type
+        self.compiled_safe_shrink = compiled_safe_shrink
         self.call_count = 0
         self.kernel_launch_count = 0
         self._original: object | None = None
 
     def install(self) -> None:
+        global _ACTIVE_PRECAPTURE_INTERVENTION
         if self._original is not None:
             raise RuntimeError("pre-capture SPLIT_K=1 intervention is active")
+        if _ACTIVE_PRECAPTURE_INTERVENTION is not None:
+            raise RuntimeError("another pre-capture intervention is active")
+        if self.compiled_safe_shrink is None:
+            _ensure_precapture_split_k_one_op()
+            self.compiled_safe_shrink = _compiled_safe_split_k_one_shrink
         original = self.wrapper_type.add_shrink
         owner = self
 
@@ -515,26 +686,26 @@ class VllmLoraPreCaptureSplitKOneIntervention:
             **kwargs,
         ):
             del kwargs
-            owner.call_count += 1
-            launched = _native_shrink_with_split_k(
+            owner.compiled_safe_shrink(
                 wrapper,
                 y,
                 x,
                 lora_a_stacked,
                 scale,
-                split_k=1,
             )
-            if launched:
-                owner.kernel_launch_count += 1
 
         self._original = original
+        _ACTIVE_PRECAPTURE_INTERVENTION = self
         self.wrapper_type.add_shrink = split_k_one_shrink
 
     def remove(self) -> None:
+        global _ACTIVE_PRECAPTURE_INTERVENTION
         if self._original is None:
             return
         self.wrapper_type.add_shrink = self._original
         self._original = None
+        if _ACTIVE_PRECAPTURE_INTERVENTION is self:
+            _ACTIVE_PRECAPTURE_INTERVENTION = None
 
 
 def _record_key(row: Mapping[str, object]) -> tuple[object, object, object]:

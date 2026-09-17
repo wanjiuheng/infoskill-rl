@@ -252,22 +252,29 @@ class LayerLocalizationTests(unittest.TestCase):
                 calls.append(("original", y, x, weights, scale, kwargs))
 
         original = Wrapper.add_shrink
-        intervention = VllmLoraPreCaptureSplitKOneIntervention(Wrapper)
+        intervention = None
+
+        def compiled_safe_shrink(wrapper, y, x, weights, scale):
+            self.assertIsInstance(wrapper, Wrapper)
+            self.assertEqual(
+                (y, x, weights, scale),
+                ("y", "x", "weights", 0.5),
+            )
+            intervention.call_count += 1
+            intervention.kernel_launch_count += 1
+
+        intervention = VllmLoraPreCaptureSplitKOneIntervention(
+            Wrapper,
+            compiled_safe_shrink=compiled_safe_shrink,
+        )
         with patch(
             "infoskill.m1_lora_layer_localization._native_shrink_with_split_k",
-            return_value=True,
-        ) as replacement:
+            side_effect=AssertionError("Tensor.item reached Dynamo"),
+        ) as eager_only_shrink:
             intervention.install()
             wrapper = Wrapper()
             wrapper.add_shrink("y", "x", "weights", 0.5, marker="ignored")
-            replacement.assert_called_once_with(
-                wrapper,
-                "y",
-                "x",
-                "weights",
-                0.5,
-                split_k=1,
-            )
+            eager_only_shrink.assert_not_called()
             self.assertEqual(intervention.call_count, 1)
             self.assertEqual(intervention.kernel_launch_count, 1)
             intervention.remove()

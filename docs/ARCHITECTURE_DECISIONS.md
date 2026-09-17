@@ -501,3 +501,12 @@ session 才替换 Punica 实例方法，因此 `verified=true` 不能证明已�
 SPLIT_K=1 现在还必须由每个 rank 回报 capture 窗口的实际非空 LoRA shrink kernel launch 次数
 大于零（不能只统计进入 Python 方法但因 no-LoRA 提前返回的调用），否则首次生成前
 fail closed。该修复只在两个显式候选开关同时启用时生效，正式默认仍不改变。
+
+首次 pre-capture gate 暴露了一个实现层约束：直接从被 TorchDynamo `fullgraph` 追踪的 Python
+wrapper 调用复制的 Triton launch，会在读取动态 CPU `no_lora_flag` 的 `Tensor.item()` 处以
+`torch._dynamo.exc.Unsupported` 停止。该失败发生在首个 runtime 初始化，不产生评测结果，也不改变
+checkpoint。修订实现把同一 SPLIT_K=1 launch 注册成带 output mutation schema 的 `torch.library`
+自定义算子；Dynamo 图只保留不透明 op，动态 no-LoRA 分支与 Triton launch 在算子实现内部执行，
+这与 pinned vLLM 隐藏动态 CPU 标志的边界一致。捕获期 Python wrapper 不再写计数器，实际 op
+执行次数和非空 kernel launch 次数改在自定义算子实现内记录；门禁和 fresh-runtime exact 比较
+仍共同决定候选是否通过。
