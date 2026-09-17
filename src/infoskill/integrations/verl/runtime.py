@@ -206,6 +206,9 @@ class VerlRuntime:
         self._generation_worker_seconds = 0.0
         self._rollout_session_active = False
         self._lora_shrink_split_k_one_verified = False
+        self._lora_shrink_split_k_one_worker_reports: tuple[
+            Mapping[str, object], ...
+        ] = ()
         self._grounding_dataset = None
         if config.enable_infoskill_auxiliary:
             from infoskill.integrations.alfworld import GroundingDataset
@@ -441,11 +444,18 @@ class VerlRuntime:
         reports = tuple(self.worker_group.begin_infoskill_rollout_session())
         self._rollout_session_active = True
         try:
+            self._lora_shrink_split_k_one_worker_reports = tuple(
+                report for report in reports if isinstance(report, Mapping)
+            )
             self._lora_shrink_split_k_one_verified = (
                 _require_lora_shrink_split_k_one_reports(
                     reports,
                     expected_workers=self.worker_group.world_size,
                     required=self.config.lora_shrink_split_k_one,
+                    require_graph_precapture=(
+                        self.config.lora_shrink_split_k_one
+                        and self.config.hybrid_prefix_cuda_graph
+                    ),
                 )
             )
             yield
@@ -458,6 +468,12 @@ class VerlRuntime:
     @property
     def lora_shrink_split_k_one_verified(self) -> bool:
         return self._lora_shrink_split_k_one_verified
+
+    @property
+    def lora_shrink_split_k_one_worker_reports(
+        self,
+    ) -> tuple[Mapping[str, object], ...]:
+        return self._lora_shrink_split_k_one_worker_reports
 
     def rollout_memory_metrics(self) -> dict[str, float]:
         """Return the completed rollout session's per-rank physical peak."""
@@ -974,6 +990,7 @@ def _require_lora_shrink_split_k_one_reports(
     *,
     expected_workers: int,
     required: bool,
+    require_graph_precapture: bool = False,
 ) -> bool:
     """Fail closed when a requested deterministic kernel is absent on any rank."""
 
@@ -999,6 +1016,27 @@ def _require_lora_shrink_split_k_one_reports(
             raise RuntimeError(
                 "LoRA shrink SPLIT_K=1 is not active on every worker"
             )
+        if require_graph_precapture:
+            count = report.get(
+                "lora_shrink_split_k_one_precapture_kernel_launch_count"
+            )
+            if (
+                report.get(
+                    "lora_shrink_split_k_one_precapture_requested"
+                )
+                is not True
+                or report.get(
+                    "lora_shrink_split_k_one_precapture_verified"
+                )
+                is not True
+                or not isinstance(count, int)
+                or isinstance(count, bool)
+                or count <= 0
+            ):
+                raise RuntimeError(
+                    "LoRA shrink SPLIT_K=1 was not exercised before CUDA "
+                    "Graph capture on every worker"
+                )
     if ranks != set(range(expected_workers)):
         raise RuntimeError(
             "LoRA shrink SPLIT_K=1 was not reported by every worker rank"

@@ -162,6 +162,38 @@ class VerlRuntimeConfigTests(unittest.TestCase):
 
         self.assertEqual(worker_group.end_calls, 1)
 
+    def test_graph_split_k_requires_precapture_evidence_from_every_rank(self) -> None:
+        from infoskill.integrations.verl.runtime import (
+            _require_lora_shrink_split_k_one_reports,
+        )
+
+        reports = (
+            {
+                "rank": 0,
+                "lora_shrink_split_k_one_active": True,
+                "lora_shrink_split_k_one_precapture_requested": True,
+                "lora_shrink_split_k_one_precapture_verified": True,
+                "lora_shrink_split_k_one_precapture_call_count": 12,
+                "lora_shrink_split_k_one_precapture_kernel_launch_count": 12,
+            },
+            {
+                "rank": 1,
+                "lora_shrink_split_k_one_active": True,
+                "lora_shrink_split_k_one_precapture_requested": True,
+                "lora_shrink_split_k_one_precapture_verified": False,
+                "lora_shrink_split_k_one_precapture_call_count": 0,
+                "lora_shrink_split_k_one_precapture_kernel_launch_count": 0,
+            },
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "before CUDA Graph capture"):
+            _require_lora_shrink_split_k_one_reports(
+                reports,
+                expected_workers=2,
+                required=True,
+                require_graph_precapture=True,
+            )
+
     def test_named_auxiliary_seeds_are_stable_and_namespaced(self) -> None:
         from infoskill.integrations.verl.runtime import (
             _effective_global_minibatch_size,

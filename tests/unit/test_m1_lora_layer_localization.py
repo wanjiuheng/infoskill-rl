@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from infoskill.m1_lora_layer_localization import (
     VllmLoraKernelIntervention,
+    VllmLoraPreCaptureSplitKOneIntervention,
     VllmLayerCapture,
     _aggregate_boundary_comparisons,
     _reference_expand_delta,
@@ -223,7 +224,8 @@ class LayerLocalizationTests(unittest.TestCase):
             "native_split_k_one",
         )
         with patch(
-            "infoskill.m1_lora_layer_localization._native_shrink_with_split_k"
+            "infoskill.m1_lora_layer_localization._native_shrink_with_split_k",
+            return_value=True,
         ) as replacement:
             intervention.install()
             wrapper.add_shrink("y", "x", "weights", 0.5, marker="value")
@@ -241,6 +243,38 @@ class LayerLocalizationTests(unittest.TestCase):
         self.assertEqual(calls[0][0], "original")
         self.assertEqual(calls[0][-1], {"marker": "restored"})
         self.assertEqual(wrapper.add_shrink.__func__, original.__func__)
+
+    def test_precapture_split_k_one_patches_class_counts_and_restores(self):
+        calls = []
+
+        class Wrapper:
+            def add_shrink(self, y, x, weights, scale, **kwargs):
+                calls.append(("original", y, x, weights, scale, kwargs))
+
+        original = Wrapper.add_shrink
+        intervention = VllmLoraPreCaptureSplitKOneIntervention(Wrapper)
+        with patch(
+            "infoskill.m1_lora_layer_localization._native_shrink_with_split_k",
+            return_value=True,
+        ) as replacement:
+            intervention.install()
+            wrapper = Wrapper()
+            wrapper.add_shrink("y", "x", "weights", 0.5, marker="ignored")
+            replacement.assert_called_once_with(
+                wrapper,
+                "y",
+                "x",
+                "weights",
+                0.5,
+                split_k=1,
+            )
+            self.assertEqual(intervention.call_count, 1)
+            self.assertEqual(intervention.kernel_launch_count, 1)
+            intervention.remove()
+
+        self.assertIs(Wrapper.add_shrink, original)
+        Wrapper().add_shrink("y2", "x2", "weights2", 1.0, marker="restored")
+        self.assertEqual(calls[0][-1], {"marker": "restored"})
 
     def test_lora_attribution_is_rejected_when_disabled_path_drifts(self):
         report = classify_layer_localization(

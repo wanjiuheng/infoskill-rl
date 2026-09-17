@@ -120,7 +120,7 @@ def _native_shrink_with_split_k(
     scaling: object,
     *,
     split_k: int,
-) -> None:
+) -> bool:
     """Launch pinned vLLM's native shrink kernel with one chosen split-K.
 
     This diagnostic-only path copies the vLLM 0.8.4 launch geometry and
@@ -152,7 +152,7 @@ def _native_shrink_with_split_k(
     if no_lora_flag_cpu.numel() != 1:
         raise RuntimeError("pinned vLLM no-LoRA flag has unexpected geometry")
     if no_lora_flag_cpu.item():
-        return
+        return False
     if x.dtype != lora_a_weights[0].dtype:
         raise RuntimeError("native split-K shrink input/weight dtype mismatch")
     if x.dtype not in (torch.float16, torch.bfloat16):
@@ -230,6 +230,7 @@ def _native_shrink_with_split_k(
             num_stages=2,
             maxnreg=None,
         )
+    return True
 
 
 def _reference_shrink(
@@ -476,6 +477,64 @@ class VllmLoraKernelIntervention:
         for owner, name, original in reversed(self._patched):
             setattr(owner, name, original)
         self._patched = []
+
+
+class VllmLoraPreCaptureSplitKOneIntervention:
+    """Install deterministic LoRA shrink before vLLM captures CUDA Graphs.
+
+    Instance-level replacement inside a rollout session is too late for CUDA
+    Graph: vLLM captures dummy-LoRA forwards while the rollout engine is being
+    initialized.  Patch the pinned wrapper class only for that initialization
+    window, count actual shrink calls, and restore the class immediately after
+    capture.  The normal session-scoped intervention remains responsible for
+    eager execution and for any uncaptured graph fallbacks.
+    """
+
+    def __init__(self, wrapper_type: type | None = None):
+        if wrapper_type is None:
+            from vllm.lora.punica_wrapper.punica_gpu import PunicaWrapperGPU
+
+            wrapper_type = PunicaWrapperGPU
+        self.wrapper_type = wrapper_type
+        self.call_count = 0
+        self.kernel_launch_count = 0
+        self._original: object | None = None
+
+    def install(self) -> None:
+        if self._original is not None:
+            raise RuntimeError("pre-capture SPLIT_K=1 intervention is active")
+        original = self.wrapper_type.add_shrink
+        owner = self
+
+        def split_k_one_shrink(
+            wrapper,
+            y,
+            x,
+            lora_a_stacked,
+            scale,
+            **kwargs,
+        ):
+            del kwargs
+            owner.call_count += 1
+            launched = _native_shrink_with_split_k(
+                wrapper,
+                y,
+                x,
+                lora_a_stacked,
+                scale,
+                split_k=1,
+            )
+            if launched:
+                owner.kernel_launch_count += 1
+
+        self._original = original
+        self.wrapper_type.add_shrink = split_k_one_shrink
+
+    def remove(self) -> None:
+        if self._original is None:
+            return
+        self.wrapper_type.add_shrink = self._original
+        self._original = None
 
 
 def _record_key(row: Mapping[str, object]) -> tuple[object, object, object]:

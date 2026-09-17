@@ -56,6 +56,11 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self._infoskill_vllm_layer_capture = None
         self._infoskill_vllm_lora_intervention = None
         self._infoskill_lora_shrink_split_k_one_intervention = None
+        self._infoskill_lora_shrink_split_k_one_precapture_requested = False
+        self._infoskill_lora_shrink_split_k_one_precapture_call_count = 0
+        self._infoskill_lora_shrink_split_k_one_precapture_kernel_launch_count = (
+            0
+        )
         self._infoskill_saved_lora_kwargs = None
         self._infoskill_cuda_memory_poll_interval_ms = int(
             self.config.model.get("infoskill_cuda_memory_poll_interval_ms", 0)
@@ -68,7 +73,34 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        result = super().init_model()
+        rollout_config = self.config.rollout
+        precapture_requested = bool(
+            rollout_config.get("infoskill_hybrid_prefix_cuda_graph", False)
+            and rollout_config.get("infoskill_lora_shrink_split_k_one", False)
+        )
+        precapture_intervention = None
+        if precapture_requested:
+            from infoskill.m1_lora_layer_localization import (
+                VllmLoraPreCaptureSplitKOneIntervention,
+            )
+
+            precapture_intervention = VllmLoraPreCaptureSplitKOneIntervention()
+            precapture_intervention.install()
+        try:
+            result = super().init_model()
+        finally:
+            if precapture_intervention is not None:
+                precapture_intervention.remove()
+                self._infoskill_lora_shrink_split_k_one_precapture_call_count = (
+                    precapture_intervention.call_count
+                )
+                launch_count = precapture_intervention.kernel_launch_count
+                self._infoskill_lora_shrink_split_k_one_precapture_kernel_launch_count = (
+                    launch_count
+                )
+            self._infoskill_lora_shrink_split_k_one_precapture_requested = (
+                precapture_requested
+            )
         self._infoskill_worker_conditioner = None
         self._infoskill_auxiliary_batch_builder = None
         self._infoskill_auxiliary_updater = None
@@ -414,6 +446,24 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
                 "lora_shrink_split_k_one_requested": enabled,
                 "lora_shrink_split_k_one_active": bool(
                     self._infoskill_lora_shrink_split_k_one_intervention
+                ),
+                "lora_shrink_split_k_one_precapture_requested": (
+                    self._infoskill_lora_shrink_split_k_one_precapture_requested
+                ),
+                "lora_shrink_split_k_one_precapture_call_count": (
+                    self._infoskill_lora_shrink_split_k_one_precapture_call_count
+                ),
+                "lora_shrink_split_k_one_precapture_verified": bool(
+                    not (
+                        self._infoskill_lora_shrink_split_k_one_precapture_requested
+                    )
+                    or (
+                        self._infoskill_lora_shrink_split_k_one_precapture_kernel_launch_count
+                        > 0
+                    )
+                ),
+                "lora_shrink_split_k_one_precapture_kernel_launch_count": (
+                    self._infoskill_lora_shrink_split_k_one_precapture_kernel_launch_count
                 ),
             }
         except Exception:

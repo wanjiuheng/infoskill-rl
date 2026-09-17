@@ -490,3 +490,14 @@ matrix：Graph+SPLIT_K=1、eager+SPLIT_K=1、eager+reference-full 三个 cell；
 权重指纹、active slot、base 权重及两轮贪心输出。只有输入和权重 controls 全部 exact 后，才允许
 按结果区分 CUDA Graph、SPLIT_K=1 后仍存在的 native LoRA kernel 漂移，或 LoRA request/非 kernel
 执行漂移。该矩阵只增加诊断入口，不改变 train/eval 默认路径。
+
+fresh-runtime matrix 的三个 cell 在输入、checkpoint、FSDP/INFO-SKILL/vLLM LoRA、active slot、
+base 权重全部逐位一致时，只有 Graph+SPLIT_K=1 的 active-LoRA checkpoint runtime 漂移；eager+
+SPLIT_K=1 与 eager+reference-full 均跨全新 runtime 逐位稳定。这暴露出 D033 的安装时序缺口：
+vLLM 在 rollout engine 初始化期间用 dummy LoRA 捕获 CUDA Graph，而原实现直到进入持久 rollout
+session 才替换 Punica 实例方法，因此 `verified=true` 不能证明已捕获 Graph 使用了 SPLIT_K=1。
+修复路径在 `super().init_model()` 前临时替换 pinned Punica wrapper 类的 shrink，覆盖 warmup/capture
+窗口并在初始化结束立即恢复；session 内仍保留实例级替换以覆盖 eager 与未捕获 fallback。Graph+
+SPLIT_K=1 现在还必须由每个 rank 回报 capture 窗口的实际非空 LoRA shrink kernel launch 次数
+大于零（不能只统计进入 Python 方法但因 no-LoRA 提前返回的调用），否则首次生成前
+fail closed。该修复只在两个显式候选开关同时启用时生效，正式默认仍不改变。

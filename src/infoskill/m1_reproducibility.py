@@ -23,6 +23,7 @@ class RuntimeReproducibilitySample:
     generation_rounds: tuple[tuple[GenerationResult, ...], ...]
     input_fingerprint_rounds: tuple[tuple[Mapping[str, object], ...], ...] = ()
     split_k_one_verified: bool = False
+    split_k_one_worker_reports: tuple[Mapping[str, object], ...] = ()
 
 
 def build_hybrid_prefix_reproducibility_probes(
@@ -106,9 +107,13 @@ def collect_m1_reproducibility_samples(
             generation_rounds = []
             input_fingerprint_rounds = []
             split_k_one_verified = False
+            split_k_one_worker_reports = ()
             with runtime.rollout_session():  # type: ignore[attr-defined]
                 split_k_one_verified = bool(
                     runtime.lora_shrink_split_k_one_verified  # type: ignore[attr-defined]
+                )
+                split_k_one_worker_reports = tuple(
+                    runtime.lora_shrink_split_k_one_worker_reports  # type: ignore[attr-defined]
                 )
                 if lora_kernel_intervention is not None:
                     runtime.begin_vllm_lora_kernel_intervention(  # type: ignore[attr-defined]
@@ -156,6 +161,7 @@ def collect_m1_reproducibility_samples(
                     generation_rounds=tuple(generation_rounds),
                     input_fingerprint_rounds=tuple(input_fingerprint_rounds),
                     split_k_one_verified=split_k_one_verified,
+                    split_k_one_worker_reports=split_k_one_worker_reports,
                 )
             )
         finally:
@@ -593,4 +599,7 @@ def _sample_payload(sample: RuntimeReproducibilitySample) -> dict[str, object]:
             list(value) for value in sample.input_fingerprint_rounds
         ],
         "split_k_one_verified": sample.split_k_one_verified,
+        "split_k_one_worker_reports": list(
+            sample.split_k_one_worker_reports
+        ),
     }

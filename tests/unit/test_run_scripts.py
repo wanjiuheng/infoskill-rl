@@ -459,6 +459,21 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("run_cell eager-splitk1 0 1 none", script)
         self.assertIn("run_cell eager-reference-full 0 0 reference_full", script)
         self.assertIn("compare_m1_fresh_runtime_matrix.py", script)
+
+    def test_graph_precapture_gate_reuses_stable_eager_controls(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root
+            / "scripts"
+            / "run_m1_splitk1_graph_precapture_gate.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("EAGER_RUN=", script)
+        self.assertIn("REFERENCE_RUN=", script)
+        self.assertIn("HYBRID_PREFIX_CUDA_GRAPH=1", script)
+        self.assertIn("LORA_SHRINK_SPLIT_K_ONE=1", script)
+        self.assertIn("compare_m1_fresh_runtime_matrix.py", script)
+        self.assertNotIn("eager-splitk1", script)
         self.assertIn("--query-compute-apps=pid,used_memory", script)
         self.assertIn("already has compute processes", script)
         self.assertIn("ARCHIVE=", script)
