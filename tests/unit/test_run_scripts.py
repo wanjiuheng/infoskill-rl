@@ -698,6 +698,26 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn('"checkpoint_225_loaded_on_three_ranks"', script)
         self.assertIn('"all_complete_same_140_tasks"', script)
 
+    def test_m1_precapture_clip_ab_reuses_joint_control_and_forks_candidate(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_m1_precapture_clip_ab.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(script.count("run_alfworld.sh train infoskill"), 1)
+        self.assertEqual(script.count("run_alfworld.sh eval infoskill"), 1)
+        self.assertIn('SOURCE_CHECKPOINT="${SOURCE_CHECKPOINT:?SOURCE_CHECKPOINT is required}"', script)
+        self.assertIn('CONTROL_TRAIN="${CONTROL_TRAIN:?CONTROL_TRAIN is required}"', script)
+        self.assertIn('POLICY_GRADIENT_CLIP_MODE=separate', script)
+        self.assertIn('SEGMENT_END_UPDATE=225', script)
+        self.assertIn('HYBRID_PREFIX_CUDA_GRAPH=1', script)
+        self.assertIn('LORA_SHRINK_SPLIT_K_ONE=1', script)
+        self.assertIn('EVAL_BATCH_SIZE=64', script)
+        self.assertIn('CHECKPOINT_KEEP_RECENT=5', script)
+        self.assertIn('CHECKPOINT_KEEP_BEST_VALID=1', script)
+        self.assertIn('trap archive_diagnostics EXIT', script)
+        self.assertIn('scripts/compare_m1_precapture_clip_ab.py', script)
+
 
 if __name__ == "__main__":
     unittest.main()
