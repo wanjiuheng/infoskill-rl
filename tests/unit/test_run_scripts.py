@@ -654,6 +654,30 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("--minimum-overall-delta 0.0", script)
         self.assertIn("trap archive_diagnostics EXIT", script)
 
+    def test_m1_precapture_learning_gate_is_a_bounded_named_fork(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_m1_precapture_learning_gate.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            '[[ "$(basename -- "${SOURCE_CHECKPOINT}")" == "step-000205" ]]',
+            script,
+        )
+        self.assertIn('SEGMENT_END_UPDATE=215', script)
+        self.assertIn('RUN_NAME="${TRAIN_NAME}"', script)
+        self.assertIn('LORA_SHRINK_SPLIT_K_ONE=1', script)
+        self.assertIn('HYBRID_PREFIX_CUDA_GRAPH=1', script)
+        self.assertIn('CHECKPOINT_KEEP_RECENT=5', script)
+        self.assertIn('CHECKPOINT_KEEP_BEST_VALID=1', script)
+        self.assertIn('for step in 210 215; do', script)
+        self.assertIn('EVAL_BATCH_SIZE=64', script)
+        self.assertIn('trap archive_diagnostics EXIT', script)
+        self.assertIn(
+            '"decision_scope": "short_learning_signal_only_not_formal_improvement_proof"',
+            script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
