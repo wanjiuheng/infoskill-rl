@@ -678,6 +678,26 @@ class RunScriptTests(unittest.TestCase):
             script,
         )
 
+    def test_m1_precapture_learning_followup_preserves_protocol(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_m1_precapture_learning_followup.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('"step-000215"', script)
+        self.assertIn('SEGMENT_END_UPDATE=225', script)
+        self.assertIn('RUN_NAME="${TRAIN_NAME}"', script)
+        self.assertIn('HYBRID_PREFIX_CUDA_GRAPH=1', script)
+        self.assertIn('LORA_SHRINK_SPLIT_K_ONE=1', script)
+        self.assertIn('POLICY_GRADIENT_CLIP_MODE=joint', script)
+        self.assertIn('CHECKPOINT_KEEP_RECENT=5', script)
+        self.assertIn('CHECKPOINT_KEEP_BEST_VALID=1', script)
+        self.assertIn('EVAL_BATCH_SIZE=64', script)
+        self.assertIn('CHECKPOINT_STEP=225', script)
+        self.assertIn('trap archive_diagnostics EXIT', script)
+        self.assertIn('"checkpoint_225_loaded_on_three_ranks"', script)
+        self.assertIn('"all_complete_same_140_tasks"', script)
+
 
 if __name__ == "__main__":
     unittest.main()
