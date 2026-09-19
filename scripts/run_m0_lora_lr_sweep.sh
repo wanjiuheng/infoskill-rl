@@ -56,6 +56,7 @@ target = start + delta
 maximum = int(config["training_plan"]["max_updates"])
 checks = {
     "portable_checkpoint": marker.get("portable") is True,
+    "non_emergency_checkpoint": marker.get("emergency") is not True,
     "m0_no_skill": config.get("mode") == "no_skill",
     "formal_profile": config["training_plan"].get("profile") == "formal",
     "three_gpus": config.get("num_gpus") == 3,
