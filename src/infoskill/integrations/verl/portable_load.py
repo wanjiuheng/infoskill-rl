@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -8,6 +9,7 @@ def load_portable_state_after_base_sync(
     *,
     worker_group: object,
     actor_directory: Path,
+    actor_learning_rate_override: float | None = None,
 ) -> tuple[Mapping[str, object], ...]:
     """Make dummy-loaded vLLM base-ready before restoring a portable LoRA."""
 
@@ -20,7 +22,8 @@ def load_portable_state_after_base_sync(
         raise RuntimeError("vLLM base synchronization did not complete on every rank")
     load_reports = tuple(
         worker_group.load_portable_checkpoint(  # type: ignore[attr-defined]
-            str(actor_directory)
+            str(actor_directory),
+            actor_learning_rate_override,
         )
     )
     if not load_reports:
@@ -29,6 +32,20 @@ def load_portable_state_after_base_sync(
     loaded_by_rank = _reports_by_rank(load_reports, stage="checkpoint load")
     if set(prepared_by_rank) != set(loaded_by_rank):
         raise RuntimeError("portable checkpoint preparation/load rank set differs")
+    if actor_learning_rate_override is not None:
+        expected = float(actor_learning_rate_override)
+        if any(
+            not math.isclose(
+                float(report.get("actor_learning_rate", float("nan"))),
+                expected,
+                rel_tol=1e-9,
+            )
+            for report in load_reports
+        ):
+            raise RuntimeError(
+                "portable checkpoint actor learning-rate override did not apply "
+                "on every rank"
+            )
     return tuple(
         {**prepared_by_rank[rank], **loaded_by_rank[rank]}
         for rank in sorted(prepared_by_rank)

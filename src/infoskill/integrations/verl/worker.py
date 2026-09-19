@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 from dataclasses import asdict
@@ -962,7 +963,11 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         dist.barrier()
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def load_portable_checkpoint(self, directory: str) -> dict[str, object]:
+    def load_portable_checkpoint(
+        self,
+        directory: str,
+        actor_learning_rate_override: float | None = None,
+    ) -> dict[str, object]:
         if not self._is_actor or not self._is_lora or not isinstance(self.actor_module, PeftModel):
             raise RuntimeError("portable checkpoint requires a LoRA actor")
         source = Path(directory)
@@ -996,6 +1001,21 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             source / "lora_scheduler.pt", map_location="cpu", weights_only=False
         )
         self.actor_lr_scheduler.load_state_dict(scheduler_state)
+        if actor_learning_rate_override is not None:
+            learning_rate = float(actor_learning_rate_override)
+            if not math.isfinite(learning_rate) or learning_rate <= 0:
+                raise RuntimeError(
+                    "actor learning-rate override must be finite and positive"
+                )
+            for group in self.actor_optimizer.param_groups:
+                group["lr"] = learning_rate
+                group["initial_lr"] = learning_rate
+            self.actor_lr_scheduler.base_lrs = [
+                learning_rate for _ in self.actor_optimizer.param_groups
+            ]
+            self.actor_lr_scheduler._last_lr = [
+                learning_rate for _ in self.actor_optimizer.param_groups
+            ]
         infoskill_state_loaded = False
         if self._infoskill_worker_conditioner is not None:
             from infoskill.persistence.infoskill_state import load_infoskill_state
@@ -1014,6 +1034,9 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             "global_step": global_step,
             "lora_state_loaded": True,
             "infoskill_state_loaded": infoskill_state_loaded,
+            "actor_learning_rate": float(
+                self.actor_optimizer.param_groups[0]["lr"]
+            ),
         }
 
     def _infoskill_modules(self) -> dict[str, torch.nn.Module]:

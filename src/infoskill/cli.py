@@ -5,6 +5,7 @@ from collections import Counter
 import hashlib
 import json
 import logging
+import math
 import os
 import shutil
 import sys
@@ -440,6 +441,15 @@ def _parser() -> argparse.ArgumentParser:
         help="number of recent non-final checkpoints retained in the active run",
     )
     train.add_argument(
+        "--actor-learning-rate",
+        type=float,
+        default=1e-6,
+        help=(
+            "LoRA actor learning rate; a changed value is accepted only on a "
+            "named checkpoint fork"
+        ),
+    )
+    train.add_argument(
         "--checkpoint-keep-best-valid",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -588,6 +598,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
     if args.checkpoint_keep_recent <= 0:
         raise ValueError("checkpoint_keep_recent must be positive")
+    if not math.isfinite(args.actor_learning_rate) or args.actor_learning_rate <= 0:
+        raise ValueError("actor_learning_rate must be finite and positive")
     minimum_token_budget = config.max_prompt_tokens + config.max_response_tokens
     if args.policy_max_tokens_per_gpu < minimum_token_budget:
         raise ValueError(
@@ -707,6 +719,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "resume_forked": bool(args.resume and args.run_name),
                     "segment_end_update": args.segment_end_update,
                     "checkpoint_keep_recent": args.checkpoint_keep_recent,
+                    "actor_learning_rate": args.actor_learning_rate,
                     "checkpoint_keep_best_valid": (
                         args.checkpoint_keep_best_valid
                     ),
@@ -749,6 +762,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         raw_skill_prompt_format=args.raw_skill_prompt_format,
         checkpoint_keep_recent=args.checkpoint_keep_recent,
         checkpoint_keep_best_valid=args.checkpoint_keep_best_valid,
+        actor_learning_rate=args.actor_learning_rate,
     )
 
 

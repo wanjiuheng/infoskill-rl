@@ -576,3 +576,7 @@ _Avoid_: global mutable RNG、rank-dependent randomness
 **Algorithmic Resume Equivalence**:
 恢复训练前后保持任务身份、随机流、更新边界和优化状态连续，不要求不同 GPU world size 的浮点结果逐 bit 相同。
 _Avoid_: bitwise cross-world-size identity、restart-from-scratch equivalence
+
+**Actor Learning-Rate Fork**:
+从同一 portable checkpoint 创建的命名短程分支；保留 LoRA optimizer moments、scheduler 进度、任务游标和随机状态，只在恢复完成后显式覆盖 actor optimizer/scheduler 的目标学习率。固定 `1e-6 / 3e-6 / 1e-5` 分支必须使用相同训练工作负载和同一 140 条评测协议。
+_Avoid_: in-place LR mutation、optimizer reset、config-only LR change

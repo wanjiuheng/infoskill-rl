@@ -158,6 +158,7 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         normalized_options.setdefault("policy_gradient_clip_mode", "joint")
         normalized_options.setdefault("checkpoint_keep_recent", 2)
         normalized_options.setdefault("checkpoint_keep_best_valid", False)
+        normalized_options.setdefault("actor_learning_rate", 1e-6)
         normalized["runtime_options"] = normalized_options
     return normalized
 
@@ -194,6 +195,10 @@ def _without_performance_candidates(
     # policy may change without mutating the source run. In-place resume may not.
     normalized_options.pop("checkpoint_keep_recent", None)
     normalized_options.pop("checkpoint_keep_best_valid", None)
+    # A named experimental fork may intentionally change the LoRA optimizer
+    # learning rate.  The checkpoint loader reapplies it after restoring the
+    # optimizer/scheduler state; in-place resumes remain strict.
+    normalized_options.pop("actor_learning_rate", None)
     normalized["runtime_options"] = normalized_options
     return normalized
 

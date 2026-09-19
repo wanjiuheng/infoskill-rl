@@ -510,3 +510,20 @@ checkpoint。修订实现把同一 SPLIT_K=1 launch 注册成带 output mutation
 这与 pinned vLLM 隐藏动态 CPU 标志的边界一致。捕获期 Python wrapper 不再写计数器，实际 op
 执行次数和非空 kernel launch 次数改在自定义算子实现内记录；门禁和 fresh-runtime exact 比较
 仍共同决定候选是否通过。
+
+## D035：M0 LoRA 学习率只允许通过保留优化状态的命名分支做短程配对
+
+M0 的正式默认 actor LoRA 学习率仍为 `1e-6`。为了区分“学习率过小”与“奖励/探索信号不足”，
+新增固定 `1e-6 / 3e-6 / 1e-5` 的五 update 短程筛选。三个分支必须来自同一 portable
+checkpoint，恢复同一 optimizer moments、scheduler step、任务游标和随机状态，并使用同一组
+64-trajectory 更新工作负载；每个分支结束后独立加载自己的最终 checkpoint，在相同 140 条
+`valid_seen` manifest、三张 GPU 和 batch 64 下评测。报告以 Macro success 为主、Overall
+success 为辅，同时披露逐题 gain/loss、invalid action、PPO KL、clip fraction、gradient norm 和
+运行时间。该筛选只产生候选，不足以单独修改正式默认值。
+
+仅修改 runtime 初始化配置不足以形成有效实验，因为 portable checkpoint 会恢复旧 optimizer 与
+scheduler 状态并覆盖新 LR。因此 loader 在完整恢复后把目标 LR 同步写入所有 optimizer param
+group 的 `lr/initial_lr`、scheduler `base_lrs/_last_lr`，并要求每个 rank 回报实际生效值；训练
+指标中的 `actor/lr` 必须在每个 update 与目标一致，否则整次门禁无效。LR 改动只允许 named
+fork；原地 resume 继续严格拒绝配置变化。自动脚本支持复用已完成的 train/eval cell，失败时打包
+已有诊断，但不会删除 checkpoint 或修改正在运行的训练。

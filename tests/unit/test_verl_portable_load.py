@@ -18,8 +18,14 @@ class _WorkerGroup:
         self.events.append("prepare-base")
         return self.reports
 
-    def load_portable_checkpoint(self, path: str):
-        self.events.append(f"load:{Path(path).name}")
+    def load_portable_checkpoint(
+        self,
+        path: str,
+        actor_learning_rate_override: float | None = None,
+    ):
+        self.events.append(
+            f"load:{Path(path).name}:lr={actor_learning_rate_override}"
+        )
         return self.load_reports
 
 
@@ -45,11 +51,13 @@ class VerlPortableLoadTests(unittest.TestCase):
                     "rank": 0,
                     "global_step": 7,
                     "infoskill_state_loaded": True,
+                    "actor_learning_rate": 3e-6,
                 },
                 {
                     "rank": 1,
                     "global_step": 7,
                     "infoskill_state_loaded": True,
+                    "actor_learning_rate": 3e-6,
                 },
             ],
         )
@@ -57,12 +65,29 @@ class VerlPortableLoadTests(unittest.TestCase):
         reports = load_portable_state_after_base_sync(
             worker_group=workers,
             actor_directory=Path("runtime/actor"),
+            actor_learning_rate_override=3e-6,
         )
 
-        self.assertEqual(workers.events, ["prepare-base", "load:actor"])
+        self.assertEqual(
+            workers.events,
+            ["prepare-base", "load:actor:lr=3e-06"],
+        )
         self.assertEqual(len(reports), 2)
         self.assertTrue(reports[0]["infoskill_state_loaded"])
         self.assertEqual(reports[1]["global_step"], 7)
+
+    def test_learning_rate_override_must_apply_on_every_rank(self) -> None:
+        workers = _WorkerGroup(
+            [{"rank": 0, "base_sync_done_after": True}],
+            [{"rank": 0, "global_step": 7, "actor_learning_rate": 1e-6}],
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "did not apply"):
+            load_portable_state_after_base_sync(
+                worker_group=workers,
+                actor_directory=Path("runtime/actor"),
+                actor_learning_rate_override=3e-6,
+            )
 
     def test_checkpoint_load_requires_one_matching_report_per_rank(self) -> None:
         workers = _WorkerGroup(

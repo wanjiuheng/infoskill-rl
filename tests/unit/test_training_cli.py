@@ -163,6 +163,26 @@ class TrainingCliTests(unittest.TestCase):
         self.assertIsNone(default.segment_end_update)
         self.assertEqual(bounded.segment_end_update, 51)
 
+    def test_actor_learning_rate_is_an_explicit_training_control(self) -> None:
+        default = _parser().parse_args(self._arguments())
+        candidate = _parser().parse_args(
+            self._arguments() + ["--actor-learning-rate", "3e-6"]
+        )
+
+        self.assertEqual(default.actor_learning_rate, 1e-6)
+        self.assertEqual(candidate.actor_learning_rate, 3e-6)
+
+        output = io.StringIO()
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(
+                    self._arguments() + ["--actor-learning-rate", "3e-6"]
+                )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["actor_learning_rate"], 3e-6)
+
     def test_checkpoint_best_valid_retention_is_explicitly_opt_in(self) -> None:
         default = _parser().parse_args(self._arguments())
         bounded = _parser().parse_args(

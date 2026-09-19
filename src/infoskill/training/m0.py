@@ -105,6 +105,7 @@ def run_m0_training(
     policy_gradient_clip_mode: Literal["joint", "separate"] = "joint",
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
+    actor_learning_rate: float = 1e-6,
     segment_end_update: int | None = None,
 ) -> int:
     """Backward-compatible entry point for the token-only M0 baseline."""
@@ -132,6 +133,7 @@ def run_m0_training(
         policy_gradient_clip_mode=policy_gradient_clip_mode,
         checkpoint_keep_recent=checkpoint_keep_recent,
         checkpoint_keep_best_valid=checkpoint_keep_best_valid,
+        actor_learning_rate=actor_learning_rate,
     )
 
 
@@ -159,6 +161,7 @@ def run_policy_training(
     raw_skill_prompt_format: Literal["compact", "full"] = "full",
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
+    actor_learning_rate: float = 1e-6,
     segment_end_update: int | None = None,
 ) -> int:
     """Run one registered policy mode through the pinned VERL runtime."""
@@ -175,6 +178,8 @@ def run_policy_training(
         raise ValueError("segment_end_update must be positive")
     if checkpoint_keep_recent <= 0:
         raise ValueError("checkpoint_keep_recent must be positive")
+    if not math.isfinite(actor_learning_rate) or actor_learning_rate <= 0:
+        raise ValueError("actor_learning_rate must be finite and positive")
 
     if config.paths.policy_adapter is not None:
         raise ValueError(
@@ -389,6 +394,7 @@ def run_policy_training(
             "policy_gradient_clip_mode": policy_gradient_clip_mode,
             "checkpoint_keep_recent": checkpoint_keep_recent,
             "checkpoint_keep_best_valid": checkpoint_keep_best_valid,
+            "actor_learning_rate": actor_learning_rate,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
             "infoskill_auxiliary_micro_batch_size": (
                 8 if mode is SkillMode.INFO_SKILL else None
@@ -474,6 +480,7 @@ def run_policy_training(
         "invocation": {
             "segment_start_update": initial_global_update,
             "segment_end_update": segment_end_update,
+            "actor_learning_rate": actor_learning_rate,
         },
         "checkpoint_retention": {
             "schema_version": 1,
@@ -575,6 +582,7 @@ def run_policy_training(
             max_prompt_tokens=config.max_prompt_tokens,
             max_response_tokens=config.max_response_tokens,
             total_training_steps=plan.max_updates,
+            actor_learning_rate=actor_learning_rate,
             action_minibatch_size=plan.action_minibatch_size,
             policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
             rollout_max_batched_tokens=rollout_max_batched_tokens,

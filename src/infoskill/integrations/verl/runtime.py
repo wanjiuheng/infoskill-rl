@@ -89,6 +89,8 @@ class VerlRuntimeConfig:
     infoskill_auxiliary_max_grad_norm: float = 1.0
 
     def __post_init__(self) -> None:
+        if not math.isfinite(self.actor_learning_rate) or self.actor_learning_rate <= 0:
+            raise ValueError("actor learning rate must be finite and positive")
         minimum_batched_tokens = self.max_prompt_tokens + self.max_response_tokens
         if self.rollout_max_batched_tokens < minimum_batched_tokens:
             raise ValueError(
@@ -747,6 +749,7 @@ class VerlRuntime:
         return load_portable_state_after_base_sync(
             worker_group=self.worker_group,
             actor_directory=directory / "actor",
+            actor_learning_rate_override=self.config.actor_learning_rate,
         )
 
     def compare_portable_actor_state(

@@ -390,6 +390,29 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertIn('SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"', script)
         self.assertIn('--segment-end-update "${SEGMENT_END_UPDATE}"', script)
+        self.assertIn(
+            'ACTOR_LEARNING_RATE="${ACTOR_LEARNING_RATE:-1e-6}"',
+            script,
+        )
+        self.assertIn(
+            '--actor-learning-rate "${ACTOR_LEARNING_RATE}"',
+            script,
+        )
+
+    def test_m0_lora_lr_sweep_is_one_resumable_paired_job(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_m0_lora_lr_sweep.sh"
+        ).read_text(encoding="utf-8")
+
+        for learning_rate in ("1e-6", "3e-6", "1e-5"):
+            self.assertIn(learning_rate, script)
+        self.assertIn('TARGET_DELTA_UPDATES="${TARGET_DELTA_UPDATES:-5}"', script)
+        self.assertIn('ACTOR_LEARNING_RATE="${LEARNING_RATE}"', script)
+        self.assertIn('EVAL_BATCH_SIZE=64', script)
+        self.assertIn('--expected-task-count 140', script)
+        self.assertIn('trap archive_diagnostics EXIT', script)
+        self.assertIn('compare_m0_lora_lr_sweep.py', script)
 
     def test_m0_pair_explicitly_clears_checkpoint_for_update_zero(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

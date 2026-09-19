@@ -31,6 +31,7 @@ SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"
 # bounded formal policy: recent 5 + current best valid_seen + final checkpoint.
 CHECKPOINT_KEEP_RECENT="${CHECKPOINT_KEEP_RECENT:-2}"
 CHECKPOINT_KEEP_BEST_VALID="${CHECKPOINT_KEEP_BEST_VALID:-0}"
+ACTOR_LEARNING_RATE="${ACTOR_LEARNING_RATE:-1e-6}"
 GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
 # Short-lived process boundary for TextWorld/Fast Downward resource cleanup.
 GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
@@ -170,6 +171,19 @@ if [[ -n "${SEGMENT_END_UPDATE}" && ! "${SEGMENT_END_UPDATE}" =~ ^[1-9][0-9]*$ ]
 fi
 if [[ ! "${CHECKPOINT_KEEP_RECENT}" =~ ^[1-9][0-9]*$ ]]; then
   echo "CHECKPOINT_KEEP_RECENT must be a positive integer" >&2
+  exit 2
+fi
+if ! "${PYTHON_BIN}" - "${ACTOR_LEARNING_RATE}" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and value > 0 else 1)
+PY
+then
+  echo "ACTOR_LEARNING_RATE must be finite and positive" >&2
   exit 2
 fi
 if [[ "${CHECKPOINT_KEEP_BEST_VALID}" != "0" && "${CHECKPOINT_KEEP_BEST_VALID}" != "1" ]]; then
@@ -735,6 +749,7 @@ case "${ACTION}" in
       --policy-max-tokens-per-gpu "${POLICY_MAX_TOKENS_PER_GPU}"
       --rollout-max-batched-tokens "${ROLLOUT_MAX_BATCHED_TOKENS}"
       --checkpoint-keep-recent "${CHECKPOINT_KEEP_RECENT}"
+      --actor-learning-rate "${ACTOR_LEARNING_RATE}"
       --policy-gradient-clip-mode "${POLICY_GRADIENT_CLIP_MODE}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
