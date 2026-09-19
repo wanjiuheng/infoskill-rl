@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from infoskill.imitation.train import encode_training_example
+from infoskill.imitation.train import (
+    _evaluation_strategy_kwargs,
+    encode_training_example,
+)
 
 
 class _Tokenizer:
@@ -20,6 +23,24 @@ class _Tokenizer:
 
 
 class ImitationTrainingTests(unittest.TestCase):
+    def test_evaluation_strategy_matches_installed_transformers_signature(self) -> None:
+        class NewTrainingArguments:
+            def __init__(self, output_dir, *, eval_strategy):
+                pass
+
+        class LegacyTrainingArguments:
+            def __init__(self, output_dir, *, evaluation_strategy):
+                pass
+
+        self.assertEqual(
+            _evaluation_strategy_kwargs(NewTrainingArguments),
+            {"eval_strategy": "steps"},
+        )
+        self.assertEqual(
+            _evaluation_strategy_kwargs(LegacyTrainingArguments),
+            {"evaluation_strategy": "steps"},
+        )
+
     def test_online_chat_prompt_is_masked_and_response_has_loss(self) -> None:
         tokenizer = _Tokenizer()
         encoded = encode_training_example(

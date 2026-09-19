@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -127,7 +128,6 @@ def train_actor_imitation(
         bf16=True,
         gradient_checkpointing=True,
         logging_steps=10,
-        evaluation_strategy="steps",
         eval_steps=100,
         save_strategy="steps",
         save_steps=100,
@@ -137,6 +137,7 @@ def train_actor_imitation(
         remove_unused_columns=False,
         seed=0,
         data_seed=0,
+        **_evaluation_strategy_kwargs(TrainingArguments),
     )
     trainer = Trainer(
         model=model,
@@ -225,6 +226,21 @@ def encode_training_example(
         "attention_mask": [1] * len(input_ids),
         "labels": [-100] * len(prompt_ids) + response_ids,
     }
+
+
+def _evaluation_strategy_kwargs(
+    training_arguments_type: type[object],
+) -> dict[str, str]:
+    """Bridge the Transformers evaluation_strategy -> eval_strategy rename."""
+
+    parameters = inspect.signature(training_arguments_type.__init__).parameters
+    if "eval_strategy" in parameters:
+        return {"eval_strategy": "steps"}
+    if "evaluation_strategy" in parameters:
+        return {"evaluation_strategy": "steps"}
+    raise RuntimeError(
+        "installed Transformers TrainingArguments exposes no evaluation strategy"
+    )
 
 
 def _sha256(path: Path) -> str:
