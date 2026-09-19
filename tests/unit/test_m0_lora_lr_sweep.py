@@ -8,6 +8,16 @@ from scripts.compare_m0_lora_lr_sweep import compare
 
 
 class M0LoraLearningRateSweepTests(unittest.TestCase):
+    def test_pair_requires_matching_run_counts(self) -> None:
+        with self.assertRaisesRegex(ValueError, "counts differ"):
+            compare(
+                Path("source"),
+                [Path("train")],
+                [Path("eval-a"), Path("eval-b")],
+                expected_task_count=140,
+                expected_rates=(1e-6, 1e-5),
+            )
+
     def test_valid_three_way_pair_verifies_effective_lr_and_paired_flips(self) -> None:
         source = Path("source/checkpoints/step-000100").resolve()
         trains = [Path(f"train-{index}").resolve() for index in range(3)]
@@ -120,7 +130,7 @@ class M0LoraLearningRateSweepTests(unittest.TestCase):
             ),
             patch(
                 "scripts.compare_m0_lora_lr_sweep._evaluation_tasks",
-                side_effect=task_results,
+                side_effect=lambda run, _step: task_results[evaluations.index(run)],
             ),
             patch(
                 "scripts.compare_m0_lora_lr_sweep._read_training_trace",
@@ -133,12 +143,21 @@ class M0LoraLearningRateSweepTests(unittest.TestCase):
                 evaluations,
                 expected_task_count=4,
             )
+            pair_report = compare(
+                source,
+                [trains[0], trains[2]],
+                [evaluations[0], evaluations[2]],
+                expected_task_count=4,
+                expected_rates=(1e-6, 1e-5),
+            )
 
         self.assertTrue(report["controls_valid"])
         self.assertEqual(report["classification"], "paired_lr_screen_complete")
         self.assertEqual(report["ranking_macro_then_overall"][0], "3e-06")
         self.assertEqual(report["branches"]["3e-06"]["paired_vs_1e-6"]["net_gain"], 1)
         self.assertEqual(report["branches"]["1e-05"]["paired_vs_1e-6"]["net_gain"], -1)
+        self.assertTrue(pair_report["controls_valid"])
+        self.assertEqual(pair_report["ranking_macro_then_overall"][0], "1e-06")
 
 
 if __name__ == "__main__":

@@ -408,7 +408,12 @@ class RunScriptTests(unittest.TestCase):
         for learning_rate in ("1e-6", "3e-6", "1e-5"):
             self.assertIn(learning_rate, script)
         self.assertIn('TARGET_DELTA_UPDATES="${TARGET_DELTA_UPDATES:-5}"', script)
+        self.assertIn(
+            'LEARNING_RATES_CSV="${LEARNING_RATES_CSV:-1e-6,3e-6,1e-5}"',
+            script,
+        )
         self.assertIn('ACTOR_LEARNING_RATE="${LEARNING_RATE}"', script)
+        self.assertIn('--expected-learning-rates "${LEARNING_RATES[@]}"', script)
         self.assertIn('EVAL_BATCH_SIZE=64', script)
         self.assertIn('--expected-task-count 140', script)
         self.assertIn('trap archive_diagnostics EXIT', script)

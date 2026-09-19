@@ -12,7 +12,8 @@ MINIMUM_FREE_DISK_GB="${MINIMUM_FREE_DISK_GB:-8}"
 TAG="${SWEEP_TAG:-$(date -u +%Y%m%dT%H%M%SZ)}"
 REPORT="${PROJECT_ROOT}/m0-lora-lr-sweep-${TAG}.json"
 ARCHIVE="${PROJECT_ROOT}/m0-lora-lr-sweep-${TAG}.tar.gz"
-LEARNING_RATES=(1e-6 3e-6 1e-5)
+LEARNING_RATES_CSV="${LEARNING_RATES_CSV:-1e-6,3e-6,1e-5}"
+IFS=',' read -r -a LEARNING_RATES <<< "${LEARNING_RATES_CSV}"
 
 fail() { echo "$1" >&2; exit 2; }
 
@@ -23,6 +24,24 @@ export PATH="$(dirname -- "${PYTHON}"):${PATH}"
   || fail "TARGET_DELTA_UPDATES must be a positive integer"
 [[ "${MINIMUM_FREE_DISK_GB}" =~ ^[1-9][0-9]*$ ]] \
   || fail "MINIMUM_FREE_DISK_GB must be a positive integer"
+(( ${#LEARNING_RATES[@]} >= 2 )) \
+  || fail "LEARNING_RATES_CSV must contain at least two rates"
+if ! "${PYTHON}" - "${LEARNING_RATES[@]}" <<'PY'
+import math
+import sys
+
+rates = [float(item) for item in sys.argv[1:]]
+raise SystemExit(
+    0
+    if rates[0] == 1e-6
+    and all(math.isfinite(rate) and rate > 0 for rate in rates)
+    and len(set(rates)) == len(rates)
+    else 1
+)
+PY
+then
+  fail "rates must start with 1e-6 and be finite, positive, and unique"
+fi
 IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
 [[ "${#GPU_IDS[@]}" -eq 3 ]] || fail "exactly three GPUs are required"
 for gpu_id in "${GPU_IDS[@]}"; do
@@ -254,6 +273,7 @@ done
   "${SOURCE_CHECKPOINT}" \
   --train-runs "${TRAIN_RUNS[@]}" \
   --eval-runs "${EVAL_RUNS[@]}" \
+  --expected-learning-rates "${LEARNING_RATES[@]}" \
   --expected-task-count 140 \
   --output "${REPORT}"
 echo "REPORT=${REPORT}"

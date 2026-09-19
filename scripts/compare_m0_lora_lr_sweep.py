@@ -84,7 +84,14 @@ def compare(
     eval_runs: list[Path],
     *,
     expected_task_count: int,
+    expected_rates: tuple[float, ...] = EXPECTED_RATES,
 ) -> dict:
+    if len(expected_rates) < 2:
+        raise ValueError("at least two learning rates are required")
+    if expected_rates[0] != 1e-6:
+        raise ValueError("the first learning rate must be the 1e-6 baseline")
+    if len(train_runs) != len(expected_rates) or len(eval_runs) != len(expected_rates):
+        raise ValueError("learning-rate, training-run, and evaluation-run counts differ")
     source_payload = _read_json(source / "checkpoint.complete.json")
     start = int(source_payload["global_update"])
     configs = [_read_json(run / "resolved_config.json") for run in train_runs]
@@ -102,7 +109,7 @@ def compare(
 
     rates = [float(config["runtime_options"]["actor_learning_rate"]) for config in configs]
     controls = {
-        "expected_learning_rates": rates == list(EXPECTED_RATES),
+        "expected_learning_rates": rates == list(expected_rates),
         "all_m0_named_forks_from_same_checkpoint": all(
             config.get("mode") == "no_skill"
             and provenance.get("resume_forked") is True
@@ -123,7 +130,7 @@ def compare(
         ),
         "effective_learning_rate_verified_every_update": all(
             math.isclose(float(row.get("actor/lr", -1)), rate, rel_tol=1e-9)
-            for rate, branch in zip(EXPECTED_RATES, rows, strict=True)
+            for rate, branch in zip(expected_rates, rows, strict=True)
             for row in branch.values()
         ),
         "all_updates_finite": all(
@@ -176,7 +183,7 @@ def compare(
     for step in range(start + 1, end + 1):
         control_trace = _read_training_trace(train_runs[0], step)
         workload[str(step)] = {}
-        for rate, run in zip(EXPECTED_RATES[1:], train_runs[1:], strict=True):
+        for rate, run in zip(expected_rates[1:], train_runs[1:], strict=True):
             workload[str(step)][f"{rate:.0e}"] = _compare_training_trace_workload(
                 control_trace,
                 _read_training_trace(run, step),
@@ -195,7 +202,7 @@ def compare(
     branches: dict[str, dict] = {}
     control_tasks = task_results[0]
     for rate, train, evaluation, training, tasks in zip(
-        EXPECTED_RATES,
+        expected_rates,
         train_runs,
         eval_runs,
         rows,
@@ -271,8 +278,14 @@ def compare(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source_checkpoint", type=Path)
-    parser.add_argument("--train-runs", nargs=3, required=True, type=Path)
-    parser.add_argument("--eval-runs", nargs=3, required=True, type=Path)
+    parser.add_argument("--train-runs", nargs="+", required=True, type=Path)
+    parser.add_argument("--eval-runs", nargs="+", required=True, type=Path)
+    parser.add_argument(
+        "--expected-learning-rates",
+        nargs="+",
+        type=float,
+        default=list(EXPECTED_RATES),
+    )
     parser.add_argument("--expected-task-count", type=int, default=140)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -281,6 +294,7 @@ def main() -> int:
         args.train_runs,
         args.eval_runs,
         expected_task_count=args.expected_task_count,
+        expected_rates=tuple(args.expected_learning_rates),
     )
     args.output.write_text(
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
