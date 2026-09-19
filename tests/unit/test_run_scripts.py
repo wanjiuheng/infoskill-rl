@@ -40,6 +40,27 @@ class RunScriptTests(unittest.TestCase):
             script,
         )
 
+    def test_actor_imitation_pipeline_is_fail_closed_before_m1(self) -> None:
+        script = Path(
+            "scripts/run_actor_imitation_to_m1_pipeline.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("wait_for_imitation", script)
+        self.assertIn("finalize_handoff", script)
+        self.assertIn("run_update0_evaluation", script)
+        self.assertIn("run_m1", script)
+        self.assertLess(
+            script.rindex("run_update0_evaluation"),
+            script.rindex("run_m1"),
+        )
+        self.assertIn('summary.get("evaluated") == 140', script)
+        self.assertIn('loaded.get("status") == "loaded"', script)
+        self.assertIn("len(reports) == 3", script)
+        self.assertIn('report.get("lora_state_loaded") is True', script)
+        self.assertIn("require_free_disk", script)
+        self.assertIn("wait_for_idle_gpus", script)
+        self.assertIn("flock -n 9", script)
+
     def test_m1_isolation_entry_is_three_gpu_and_audit_only(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
         isolation = script.split("  m1-lora-isolation|m1-lora-boundary)\n", 1)[1].split("    ;;", 1)[0]
