@@ -18,8 +18,10 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--skill-bank", required=True)
     prepare.add_argument("--validation-fraction", type=float, default=0.02)
     prepare.add_argument("--split-seed", type=int, default=0)
+    prepare.add_argument("--expected-trajectories", type=int, default=3521)
     train = commands.add_parser("train")
     train.add_argument("--model", required=True)
+    train.add_argument("--base-model-id", required=True)
     train.add_argument("--data", required=True)
     train.add_argument("--output", required=True)
     train.add_argument("--learning-rate", type=float, default=1e-4)
@@ -50,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
             output_directory=output,
             validation_fraction=args.validation_fraction,
             split_seed=args.split_seed,
+            expected_trajectory_count=args.expected_trajectories,
         )
         print(json.dumps({"skill_bank": bank, "grounding": derived, "imitation": manifest}, indent=2))
         return 0
@@ -59,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         data = Path(args.data)
         train_actor_imitation(
             model_path=args.model,
+            base_model_id=args.base_model_id,
             train_file=data / "train.jsonl",
             validation_file=data / "validation.jsonl",
             output_directory=args.output,

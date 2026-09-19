@@ -16,6 +16,7 @@ def prepare_alfworld_imitation_data(
     output_directory: str | Path,
     validation_fraction: float = 0.02,
     split_seed: int = 0,
+    expected_trajectory_count: int | None = None,
 ) -> dict[str, object]:
     """Convert successful planner trajectories into step-level SFT pairs.
 
@@ -28,6 +29,14 @@ def prepare_alfworld_imitation_data(
     if split_seed < 0:
         raise ValueError("split_seed must be non-negative")
     source = GroundingDataset.load(grounding_directory)
+    if (
+        expected_trajectory_count is not None
+        and source.game_count != expected_trajectory_count
+    ):
+        raise ValueError(
+            "planner trajectory count differs from the registered protocol: "
+            f"expected {expected_trajectory_count}, got {source.game_count}"
+        )
     destination = Path(output_directory)
     destination.mkdir(parents=True, exist_ok=False)
     task_ids = sorted(source.samples_by_game)
@@ -54,16 +63,27 @@ def prepare_alfworld_imitation_data(
         raise ValueError("trajectory split produced an empty train or validation set")
     for split, payloads in rows.items():
         _atomic_write_jsonl(destination / f"{split}.jsonl", payloads)
+    source_checksums = source.manifest.get("source_checksums", {})
+    parent_samples_sha256 = (
+        source_checksums.get("parent_grounding_samples")
+        if isinstance(source_checksums, dict)
+        else None
+    )
+    source_samples_sha256 = sha256_file(source.root / "grounding_samples.jsonl")
     manifest: dict[str, object] = {
         "schema_version": 1,
         "provider": "alfworld_verified_planner_grounding",
         "source_split": "train",
         "source_grounding_root": str(source.root),
         "source_grounding_manifest_sha256": source.manifest_sha256,
-        "source_grounding_samples_sha256": sha256_file(
-            source.root / "grounding_samples.jsonl"
+        "source_grounding_samples_sha256": source_samples_sha256,
+        "source_planner_samples_sha256": (
+            parent_samples_sha256
+            if isinstance(parent_samples_sha256, str)
+            else source_samples_sha256
         ),
         "trajectory_count": source.game_count,
+        "expected_trajectory_count": expected_trajectory_count,
         "sample_count": source.sample_count,
         "train_trajectory_count": len(task_ids) - len(validation_ids),
         "validation_trajectory_count": len(validation_ids),

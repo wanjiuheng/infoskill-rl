@@ -8,17 +8,17 @@ ALFWorld 的新主线不再从原始 Qwen2.5-7B-Instruct 直接开始 GRPO。先
 
 ## 数据和技能边界
 
-- ALFWorld provider 只接受 train split、verified planner、formal gate passed 的正式 grounding。prepare 同时生成 `alfworld-imitation-data-grounding`，将旧 candidate IDs 改写为新 bank IDs；新 M1 必须使用这份派生 grounding。
+- ALFWorld provider 只接受 train split、verified planner、formal gate passed 的正式 grounding，并默认强制正好 3,521 条成功 trajectory。prepare 同时生成 `alfworld-imitation-data-grounding`，将旧 candidate IDs 改写为新 bank IDs；新 M1 必须使用这份派生 grounding。
 - 先按完整 trajectory/task ID 划分，再展开为逐步 SFT 样本，防止相邻状态泄漏。
 - SFT prompt 复用线上 `render_policy_message`；loss 只覆盖 `<think>…</think><action>…</action>` response。
 - planner skill bank 使用六个原生 task type。PickTwo 包含 first object、first delivery、second object、second delivery 四阶段，并记录停止条件和防循环规则。
-- WebShop 与 Search 不复用 ALFWorld planner，而由各自 demonstration provider 产生成功轨迹。
+- WebShop 与 Search 不复用 ALFWorld planner，分别由 `WebShopDemonstrationProvider` 与 `SearchDemonstrationProvider` 接收各自环境产生的成功轨迹；在相应环境 adapter 完成前不阻塞 ALFWorld 主线。
 
 ## Handoff 语义
 
-`m1-handoff` 包含 adapter 权重/配置、SFT 训练清单、数据清单、skill bank 及其 provenance manifest、`m1-handoff.json` 和 `checkpoint.complete.json`。清单绑定 base model ID、LoRA rank/alpha、训练协议和所有内容的 SHA-256；目录存在时拒绝覆盖。
+`m1-handoff` 包含 adapter 权重/配置、SFT 训练清单、数据清单、skill bank 及其 provenance manifest、`m1-handoff.json` 和 `checkpoint.complete.json`。SFT 启动时会计算并核对实际 base model 权重指纹；handoff 清单绑定 base model ID 与 SHA-256、LoRA rank/alpha、训练协议和所有内容的 SHA-256；目录存在时拒绝覆盖。
 
-加载时只恢复 actor LoRA。GRPO optimizer/scheduler 和所有 M1 模块均重新初始化。`--warmstart-handoff` 与 `--resume` / `--policy-checkpoint` 互斥。
+加载时只恢复 actor LoRA。GRPO optimizer/scheduler 和所有 M1 模块均重新初始化。`--warmstart-handoff` 与 `--resume` / `--policy-checkpoint` 互斥。同一 handoff 也可在以后作为 no-skill M0 的 actor 初始化，从而形成公平对照。
 
 ## 服务器执行顺序
 

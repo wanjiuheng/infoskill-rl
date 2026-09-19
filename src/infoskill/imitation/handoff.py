@@ -5,6 +5,11 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import Mapping
+
+from infoskill.persistence.model_identity import (
+    provenance_matches_pinned_model,
+)
 
 
 def create_handoff(
@@ -32,6 +37,12 @@ def create_handoff(
         or training_payload.get("status") != "complete"
     ):
         raise ValueError("actor imitation training manifest is not complete")
+    if not provenance_matches_pinned_model(
+        training_payload,
+        model_id=base_model_id,
+    ):
+        raise ValueError("actor imitation base model identity is not content-bound")
+    policy_model = training_payload["policy_model"]
     config = json.loads(required[1].read_text(encoding="utf-8"))
     rank = int(config.get("r", 0))
     alpha = int(config.get("lora_alpha", 0))
@@ -55,6 +66,24 @@ def create_handoff(
         raise FileNotFoundError("imitation manifest and planner skill bank are required")
     if not skills_manifest_path.is_file():
         raise FileNotFoundError("planner skill bank provenance manifest is missing")
+    data_payload = json.loads(data_path.read_text(encoding="utf-8"))
+    skills_payload = json.loads(skills_manifest_path.read_text(encoding="utf-8"))
+    trajectory_count = data_payload.get("trajectory_count")
+    if (
+        not isinstance(trajectory_count, int)
+        or trajectory_count <= 0
+        or data_payload.get("expected_trajectory_count") != trajectory_count
+        or skills_payload.get("trajectory_count") != trajectory_count
+    ):
+        raise ValueError("imitation data and planner skill bank trajectory counts differ")
+    if data_payload.get("source_planner_samples_sha256") != skills_payload.get(
+        "source_samples_sha256"
+    ):
+        raise ValueError("imitation data and skill bank come from different planner data")
+    for field in ("train_file_sha256", "validation_file_sha256"):
+        value = training_payload.get(field)
+        if not isinstance(value, str) or len(value) != 64:
+            raise ValueError(f"actor imitation training manifest has no {field}")
     destination.mkdir(parents=True, exist_ok=False)
     for source_path in required:
         shutil.copy2(source_path, destination / source_path.name)
@@ -67,6 +96,8 @@ def create_handoff(
         "status": "complete",
         "kind": "actor_imitation_m1_handoff",
         "base_model_id": base_model_id,
+        "base_model_sha256": policy_model["sha256"],
+        "policy_model": policy_model,
         "lora_rank": rank,
         "lora_alpha": alpha,
         "adapter_model_sha256": _sha256(destination / required[0].name),
@@ -78,6 +109,11 @@ def create_handoff(
         "source_imitation_manifest": str(data_path),
         "imitation_manifest": "imitation-manifest.json",
         "imitation_manifest_sha256": _sha256(destination / "imitation-manifest.json"),
+        "imitation_train_sha256": training_payload["train_file_sha256"],
+        "imitation_validation_sha256": training_payload[
+            "validation_file_sha256"
+        ],
+        "imitation_trajectory_count": trajectory_count,
         "source_skill_bank": str(skills_path),
         "skill_bank": "skill-bank.json",
         "skill_bank_sha256": _sha256(destination / "skill-bank.json"),
@@ -132,7 +168,56 @@ def load_handoff(directory: str | Path) -> dict[str, object]:
     )
     if training.get("status") != "complete":
         raise ValueError("m1-handoff imitation training is incomplete")
+    if training.get("policy_model") != manifest.get("policy_model"):
+        raise ValueError("m1-handoff base model identity differs from training")
+    policy_model = manifest.get("policy_model")
+    if (
+        not isinstance(policy_model, dict)
+        or manifest.get("base_model_sha256") != policy_model.get("sha256")
+    ):
+        raise ValueError("m1-handoff base model checksum is inconsistent")
+    if not provenance_matches_pinned_model(
+        {"policy_model": manifest.get("policy_model")},
+        model_id=str(manifest.get("base_model_id", "")),
+    ):
+        raise ValueError("m1-handoff base model identity is not registered")
     return manifest
+
+
+def validate_handoff_for_runtime(
+    directory: str | Path,
+    *,
+    policy_model_identity: Mapping[str, object],
+    skill_bank: str | Path | None = None,
+    skill_bank_manifest: str | Path | None = None,
+) -> tuple[dict[str, object], str]:
+    """Validate one handoff against the active base model and optional M1 bank."""
+
+    manifest = load_handoff(directory)
+    expected = manifest.get("policy_model")
+    if not isinstance(expected, dict):
+        raise ValueError("m1-handoff has no policy model identity")
+    identity_fields = ("algorithm", "model_id", "revision", "sha256")
+    if any(
+        expected.get(field) != policy_model_identity.get(field)
+        for field in identity_fields
+    ):
+        raise ValueError("m1-handoff base model identity differs from runtime")
+    root = Path(directory).expanduser().resolve()
+    if (skill_bank is None) != (skill_bank_manifest is None):
+        raise ValueError("skill bank and manifest must be validated together")
+    if skill_bank is not None:
+        if (root / str(manifest["skill_bank"])).resolve() != Path(
+            skill_bank
+        ).expanduser().resolve():
+            raise ValueError("m1-handoff skill bank differs from configured M1 bank")
+        if (root / str(manifest["skill_bank_manifest"])).resolve() != Path(
+            skill_bank_manifest
+        ).expanduser().resolve():
+            raise ValueError(
+                "m1-handoff skill bank manifest differs from configured M1 manifest"
+            )
+    return manifest, str(root)
 
 
 def _sha256(path: Path) -> str:

@@ -30,6 +30,7 @@ case "${ACTION}" in
     IFS=',' read -r -a GPU_IDS <<< "${GPUS}"
     TRAIN_ARGS=(
       --model "${POLICY_MODEL}"
+      --base-model-id "${BASE_MODEL_ID}"
       --data "${PREPARED_DATA}"
       --output "${SFT_OUTPUT}"
       --learning-rate "${IMITATION_LEARNING_RATE:-1e-4}"

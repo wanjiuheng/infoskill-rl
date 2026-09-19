@@ -103,4 +103,3 @@ SkillRL 表 1 报告 Qwen2.5-7B-Instruct 原始 PickTwo 成功率 3.2%，纯 GRP
 - [成功轨迹蒸馏代码](https://github.com/aiming-lab/SkillRL/blob/8e66726ed866a4e0a7f053586a41022798192e6c/examples/sft_data_generation/distillation/distill_alfworld.py#L274-L329)
 - [GiGPO 论文（纯 GRPO 基线来源）](https://arxiv.org/abs/2505.10978)
 - [GiGPO / verl-agent 官方仓库](https://github.com/langfengQ/verl-agent)
-

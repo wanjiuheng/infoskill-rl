@@ -68,7 +68,10 @@ def build_planner_skill_bank(
         "skill_bank_sha256": hashlib.sha256(canonical).hexdigest(),
         "source_split": "train",
         "trajectory_count": len(trajectories),
-        "generation_method": "deterministic phase extraction from verified planner grounding",
+        "generation_method": (
+            "fixed task phase schema with deterministic action grammar extraction "
+            "from verified planner grounding"
+        ),
         "source_samples_sha256": _sha256(source),
     }
     _atomic_json(destination.with_suffix(".manifest.json"), provenance)

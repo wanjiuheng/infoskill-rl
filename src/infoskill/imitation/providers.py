@@ -84,6 +84,20 @@ class JsonlDemonstrationProvider:
         return tuple(result)
 
 
+class WebShopDemonstrationProvider(JsonlDemonstrationProvider):
+    """Consume successful demonstrations emitted by the WebShop adapter."""
+
+    def __init__(self, path: str | Path) -> None:
+        super().__init__(path, environment="webshop")
+
+
+class SearchDemonstrationProvider(JsonlDemonstrationProvider):
+    """Consume successful demonstrations emitted by the Search adapter."""
+
+    def __init__(self, path: str | Path) -> None:
+        super().__init__(path, environment="search")
+
+
 def _nonempty(payload: object, field: str, line_number: int) -> str:
     if not isinstance(payload, dict):
         raise ValueError(f"demonstration step must be an object at line {line_number}")

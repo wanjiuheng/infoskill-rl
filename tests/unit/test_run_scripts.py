@@ -24,6 +24,7 @@ class RunScriptTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"${PYTHON_BIN}" -m torch.distributed.run', imitation)
+        self.assertIn('--base-model-id "${BASE_MODEL_ID}"', imitation)
         self.assertIn('--resume-from-checkpoint "${IMITATION_RESUME}"', imitation)
 
     def test_entrypoint_honors_explicit_python_for_eval_and_train(self) -> None:

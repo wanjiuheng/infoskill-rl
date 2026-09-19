@@ -431,7 +431,7 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--resume")
     train.add_argument(
         "--warmstart-handoff",
-        help="immutable actor-imitation handoff used only for a fresh M1 run",
+        help="immutable actor-imitation handoff for a fresh M0 or M1 run",
     )
     train.add_argument("--skill-bank")
     train.add_argument("--skill-bank-manifest")
@@ -804,30 +804,14 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         )
     if args.warmstart_handoff is not None and args.policy_checkpoint is not None:
         raise ValueError("warmstart_handoff and policy_checkpoint are mutually exclusive")
-    if args.warmstart_handoff is not None and (
-        mode is not SkillMode.INFO_SKILL or args.backend != "verl"
-    ):
-        raise ValueError("warmstart_handoff evaluation requires infoskill backend=verl")
-    handoff_manifest = None
+    if args.warmstart_handoff is not None and args.backend != "verl":
+        raise ValueError("warmstart_handoff evaluation requires backend=verl")
+    if args.warmstart_handoff is not None and mode not in {
+        SkillMode.NO_SKILL,
+        SkillMode.INFO_SKILL,
+    }:
+        raise ValueError("warmstart_handoff evaluation is registered only for M0/M1")
     handoff_directory = None
-    if args.warmstart_handoff is not None:
-        from infoskill.imitation.handoff import load_handoff
-
-        handoff_manifest = load_handoff(args.warmstart_handoff)
-        if handoff_manifest.get("base_model_id") != config.policy_model_id:
-            raise ValueError("m1-handoff base model identity differs from config")
-        handoff_root = Path(args.warmstart_handoff).expanduser().resolve()
-        if (handoff_root / str(handoff_manifest["skill_bank"])).resolve() != Path(
-            config.paths.skill_bank
-        ).resolve():
-            raise ValueError("m1-handoff skill bank differs from configured M1 bank")
-        if (
-            handoff_root / str(handoff_manifest["skill_bank_manifest"])
-        ).resolve() != Path(config.paths.skill_bank_manifest).resolve():
-            raise ValueError(
-                "m1-handoff skill bank manifest differs from configured M1 manifest"
-            )
-        handoff_directory = str(handoff_root)
     if args.num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
     if args.checkpoint_step < 0:
@@ -982,6 +966,23 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             config.paths.policy_model,
             model_id=config.policy_model_id,
         )
+        if args.warmstart_handoff is not None:
+            from infoskill.imitation.handoff import validate_handoff_for_runtime
+
+            _, handoff_directory = validate_handoff_for_runtime(
+                args.warmstart_handoff,
+                policy_model_identity=policy_identity.as_dict(),
+                skill_bank=(
+                    config.paths.skill_bank
+                    if mode is SkillMode.INFO_SKILL
+                    else None
+                ),
+                skill_bank_manifest=(
+                    config.paths.skill_bank_manifest
+                    if mode is SkillMode.INFO_SKILL
+                    else None
+                ),
+            )
         if checkpoint is not None:
             provenance_path = checkpoint.directory / "provenance.json"
             if not provenance_path.is_file():

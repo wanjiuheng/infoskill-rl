@@ -5,7 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from infoskill.imitation.providers import JsonlDemonstrationProvider
+from infoskill.imitation.providers import (
+    SearchDemonstrationProvider,
+    WebShopDemonstrationProvider,
+)
 
 
 class DemonstrationProviderTests(unittest.TestCase):
@@ -21,11 +24,11 @@ class DemonstrationProviderTests(unittest.TestCase):
                 }) + "\n",
                 encoding="utf-8",
             )
-            provider = JsonlDemonstrationProvider(path, environment="webshop")
+            provider = WebShopDemonstrationProvider(path)
             self.assertEqual(provider.trajectories()[0].environment, "webshop")
 
             with self.assertRaisesRegex(ValueError, "environment"):
-                JsonlDemonstrationProvider(path, environment="search").trajectories()
+                SearchDemonstrationProvider(path).trajectories()
 
 
 if __name__ == "__main__":

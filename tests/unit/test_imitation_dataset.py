@@ -74,6 +74,39 @@ class ImitationDatasetTests(unittest.TestCase):
                 self.assertIn("Your task is to:", row["prompt"])
                 self.assertRegex(row["response"], r"^<think>.+</think>\n<action>.+</action>$")
 
+    def test_preparation_rejects_the_wrong_registered_trajectory_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "grounding"
+            source.mkdir()
+            (source / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 2,
+                        "source_split": "train",
+                        "successful_games": 2,
+                        "expert_type": "planner",
+                        "expert_identity_gate_passed": True,
+                        "formal_gate_passed": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rows = [
+                _row("task-a", "pick_two_obj_and_place", 0, "look"),
+                _row("task-b", "pick_and_place_simple", 0, "look"),
+            ]
+            (source / "grounding_samples.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "expected 3521"):
+                prepare_alfworld_imitation_data(
+                    grounding_directory=source,
+                    output_directory=root / "prepared",
+                    expected_trajectory_count=3521,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

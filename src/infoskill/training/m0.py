@@ -183,33 +183,14 @@ def run_policy_training(
         raise ValueError("actor_learning_rate must be finite and positive")
     if warmstart_handoff is not None and resume is not None:
         raise ValueError("warmstart_handoff and resume are mutually exclusive")
-    if warmstart_handoff is not None and mode is not SkillMode.INFO_SKILL:
-        raise ValueError("actor imitation handoff is registered only for infoskill")
+    if warmstart_handoff is not None and mode not in {
+        SkillMode.NO_SKILL,
+        SkillMode.INFO_SKILL,
+    }:
+        raise ValueError("actor imitation handoff is registered only for M0/M1")
 
     handoff_manifest: dict[str, object] | None = None
     handoff_directory: str | None = None
-    if warmstart_handoff is not None:
-        from infoskill.imitation.handoff import load_handoff
-
-        handoff_manifest = load_handoff(warmstart_handoff)
-        if handoff_manifest.get("base_model_id") != config.policy_model_id:
-            raise ValueError("m1-handoff base model identity differs from config")
-        handoff_root = Path(warmstart_handoff).expanduser().resolve()
-        handoff_skill_bank = (
-            handoff_root / str(handoff_manifest["skill_bank"])
-        ).resolve()
-        if handoff_skill_bank != Path(config.paths.skill_bank).resolve():
-            raise ValueError("m1-handoff skill bank differs from configured M1 bank")
-        handoff_skill_manifest = (
-            handoff_root / str(handoff_manifest["skill_bank_manifest"])
-        ).resolve()
-        if handoff_skill_manifest != Path(
-            config.paths.skill_bank_manifest
-        ).resolve():
-            raise ValueError(
-                "m1-handoff skill bank manifest differs from configured M1 manifest"
-            )
-        handoff_directory = str(handoff_root)
 
     if config.paths.policy_adapter is not None:
         raise ValueError(
@@ -275,6 +256,23 @@ def run_policy_training(
         config.paths.policy_model,
         model_id=config.policy_model_id,
     )
+    if warmstart_handoff is not None:
+        from infoskill.imitation.handoff import validate_handoff_for_runtime
+
+        handoff_manifest, handoff_directory = validate_handoff_for_runtime(
+            warmstart_handoff,
+            policy_model_identity=policy_model_identity.as_dict(),
+            skill_bank=(
+                config.paths.skill_bank
+                if mode is SkillMode.INFO_SKILL
+                else None
+            ),
+            skill_bank_manifest=(
+                config.paths.skill_bank_manifest
+                if mode is SkillMode.INFO_SKILL
+                else None
+            ),
+        )
 
     all_train_tasks = discover_tasks(config.paths.alfworld_data, split="train")
     if len(all_train_tasks) != EXPECTED_TRAIN_TASKS:

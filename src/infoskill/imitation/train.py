@@ -10,6 +10,7 @@ from typing import Any
 def train_actor_imitation(
     *,
     model_path: str,
+    base_model_id: str,
     train_file: str | Path,
     validation_file: str | Path,
     output_directory: str | Path,
@@ -41,6 +42,12 @@ def train_actor_imitation(
             "actor imitation requires torch, transformers, peft, and accelerate"
         ) from error
 
+    from infoskill.persistence.model_identity import verify_policy_model_identity
+
+    policy_model_identity = verify_policy_model_identity(
+        model_path,
+        model_id=base_model_id,
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -156,6 +163,7 @@ def train_actor_imitation(
                 "status": "complete",
                 "kind": "actor_imitation_lora_sft",
                 "model_path": str(Path(model_path).expanduser().resolve()),
+                "policy_model": policy_model_identity.as_dict(),
                 "train_file_sha256": _sha256(Path(train_file)),
                 "validation_file_sha256": _sha256(Path(validation_file)),
                 "learning_rate": learning_rate,
