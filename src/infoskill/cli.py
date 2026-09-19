@@ -93,6 +93,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--num-gpus", type=int, default=1)
     evaluate.add_argument("--policy-checkpoint")
+    evaluate.add_argument("--warmstart-handoff")
+    evaluate.add_argument("--skill-bank")
+    evaluate.add_argument("--skill-bank-manifest")
     evaluate.add_argument(
         "--environment-backend",
         choices=("individual", "native_batch"),
@@ -427,6 +430,12 @@ def _parser() -> argparse.ArgumentParser:
     train.add_argument("--run-name")
     train.add_argument("--resume")
     train.add_argument(
+        "--warmstart-handoff",
+        help="immutable actor-imitation handoff used only for a fresh M1 run",
+    )
+    train.add_argument("--skill-bank")
+    train.add_argument("--skill-bank-manifest")
+    train.add_argument(
         "--segment-end-update",
         type=int,
         help=(
@@ -572,6 +581,18 @@ def _add_raw_skill_prompt_format_argument(parser: argparse.ArgumentParser) -> No
 
 def _train(config: AppConfig, args: argparse.Namespace) -> int:
     mode = SkillMode(args.mode)
+    if args.skill_bank is not None:
+        config = replace(config, paths=replace(config.paths, skill_bank=args.skill_bank))
+    if args.skill_bank_manifest is not None:
+        config = replace(
+            config,
+            paths=replace(
+                config.paths,
+                skill_bank_manifest=args.skill_bank_manifest,
+            ),
+        )
+    if args.warmstart_handoff is not None and args.resume is not None:
+        raise ValueError("warmstart_handoff and resume are mutually exclusive")
     if args.eval_batch_size is not None:
         if args.eval_batch_size <= 0:
             raise ValueError("eval_batch_size must be positive")
@@ -716,6 +737,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                         args.policy_gradient_clip_mode
                     ),
                     "resume": args.resume,
+                    "warmstart_handoff": args.warmstart_handoff,
                     "resume_forked": bool(args.resume and args.run_name),
                     "segment_end_update": args.segment_end_update,
                     "checkpoint_keep_recent": args.checkpoint_keep_recent,
@@ -763,12 +785,49 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         checkpoint_keep_recent=args.checkpoint_keep_recent,
         checkpoint_keep_best_valid=args.checkpoint_keep_best_valid,
         actor_learning_rate=args.actor_learning_rate,
+        warmstart_handoff=args.warmstart_handoff,
     )
 
 
 def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     evaluation_started = time.perf_counter()
     mode = SkillMode(args.mode)
+    if args.skill_bank is not None:
+        config = replace(config, paths=replace(config.paths, skill_bank=args.skill_bank))
+    if args.skill_bank_manifest is not None:
+        config = replace(
+            config,
+            paths=replace(
+                config.paths,
+                skill_bank_manifest=args.skill_bank_manifest,
+            ),
+        )
+    if args.warmstart_handoff is not None and args.policy_checkpoint is not None:
+        raise ValueError("warmstart_handoff and policy_checkpoint are mutually exclusive")
+    if args.warmstart_handoff is not None and (
+        mode is not SkillMode.INFO_SKILL or args.backend != "verl"
+    ):
+        raise ValueError("warmstart_handoff evaluation requires infoskill backend=verl")
+    handoff_manifest = None
+    handoff_directory = None
+    if args.warmstart_handoff is not None:
+        from infoskill.imitation.handoff import load_handoff
+
+        handoff_manifest = load_handoff(args.warmstart_handoff)
+        if handoff_manifest.get("base_model_id") != config.policy_model_id:
+            raise ValueError("m1-handoff base model identity differs from config")
+        handoff_root = Path(args.warmstart_handoff).expanduser().resolve()
+        if (handoff_root / str(handoff_manifest["skill_bank"])).resolve() != Path(
+            config.paths.skill_bank
+        ).resolve():
+            raise ValueError("m1-handoff skill bank differs from configured M1 bank")
+        if (
+            handoff_root / str(handoff_manifest["skill_bank_manifest"])
+        ).resolve() != Path(config.paths.skill_bank_manifest).resolve():
+            raise ValueError(
+                "m1-handoff skill bank manifest differs from configured M1 manifest"
+            )
+        handoff_directory = str(handoff_root)
     if args.num_gpus <= 0:
         raise ValueError("num_gpus must be positive")
     if args.checkpoint_step < 0:
@@ -991,6 +1050,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "policy_checkpoint": (
             str(checkpoint.directory) if checkpoint is not None else None
         ),
+        "warmstart_handoff": handoff_directory,
         "checkpoint_step": evaluation_step,
     }
     evaluation_manifest = {
@@ -1032,14 +1092,20 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         ),
     )
     checkpoint_path = (
-        str(checkpoint.directory) if checkpoint is not None else None
+        str(checkpoint.directory)
+        if checkpoint is not None
+        else handoff_directory
     )
     write_checkpoint_load(
         run_directory,
         backend=args.backend,
         checkpoint=checkpoint_path,
         checkpoint_step=evaluation_step,
-        status=("pending" if checkpoint is not None else "not_requested"),
+        status=(
+            "pending"
+            if checkpoint is not None or handoff_directory is not None
+            else "not_requested"
+        ),
     )
 
     timing_seconds = {
@@ -1100,12 +1166,23 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     ),
                     enable_infoskill_auxiliary=False,
                     infoskill_history_length=config.history_length,
+                    actor_warmstart_directory=handoff_directory,
                 )
             )
             timing_seconds["backend_initialize_seconds"] = (
                 time.perf_counter() - stage_started
             )
-            if checkpoint is not None:
+            if handoff_directory is not None:
+                reports = tuple(runtime.warmstart_load_reports)
+                write_checkpoint_load(
+                    run_directory,
+                    backend=args.backend,
+                    checkpoint=handoff_directory,
+                    checkpoint_step=0,
+                    status="loaded",
+                    worker_reports=reports,
+                )
+            elif checkpoint is not None:
                 stage_started = time.perf_counter()
                 try:
                     worker_reports = (

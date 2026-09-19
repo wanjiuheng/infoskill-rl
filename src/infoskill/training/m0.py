@@ -163,6 +163,7 @@ def run_policy_training(
     checkpoint_keep_best_valid: bool = False,
     actor_learning_rate: float = 1e-6,
     segment_end_update: int | None = None,
+    warmstart_handoff: str | None = None,
 ) -> int:
     """Run one registered policy mode through the pinned VERL runtime."""
 
@@ -180,6 +181,35 @@ def run_policy_training(
         raise ValueError("checkpoint_keep_recent must be positive")
     if not math.isfinite(actor_learning_rate) or actor_learning_rate <= 0:
         raise ValueError("actor_learning_rate must be finite and positive")
+    if warmstart_handoff is not None and resume is not None:
+        raise ValueError("warmstart_handoff and resume are mutually exclusive")
+    if warmstart_handoff is not None and mode is not SkillMode.INFO_SKILL:
+        raise ValueError("actor imitation handoff is registered only for infoskill")
+
+    handoff_manifest: dict[str, object] | None = None
+    handoff_directory: str | None = None
+    if warmstart_handoff is not None:
+        from infoskill.imitation.handoff import load_handoff
+
+        handoff_manifest = load_handoff(warmstart_handoff)
+        if handoff_manifest.get("base_model_id") != config.policy_model_id:
+            raise ValueError("m1-handoff base model identity differs from config")
+        handoff_root = Path(warmstart_handoff).expanduser().resolve()
+        handoff_skill_bank = (
+            handoff_root / str(handoff_manifest["skill_bank"])
+        ).resolve()
+        if handoff_skill_bank != Path(config.paths.skill_bank).resolve():
+            raise ValueError("m1-handoff skill bank differs from configured M1 bank")
+        handoff_skill_manifest = (
+            handoff_root / str(handoff_manifest["skill_bank_manifest"])
+        ).resolve()
+        if handoff_skill_manifest != Path(
+            config.paths.skill_bank_manifest
+        ).resolve():
+            raise ValueError(
+                "m1-handoff skill bank manifest differs from configured M1 manifest"
+            )
+        handoff_directory = str(handoff_root)
 
     if config.paths.policy_adapter is not None:
         raise ValueError(
@@ -322,8 +352,22 @@ def run_policy_training(
             training_conditioner: SkillConditioner | None = skill_setup.conditioner
         else:
             from infoskill.integrations.alfworld import GroundingDataset
+            from infoskill.integrations.alfworld.grounding_io import sha256_file
 
             grounding = GroundingDataset.load(config.paths.grounding_data)
+            source_checksums = grounding.manifest.get("source_checksums", {})
+            if not isinstance(source_checksums, dict):
+                raise ValueError("grounding source_checksums must be an object")
+            expected_skill_bank = source_checksums.get("skill_bank")
+            actual_skill_bank = sha256_file(config.paths.skill_bank)
+            if (
+                grounding.manifest.get("derived_candidate_skill_ids") is True
+                and expected_skill_bank != actual_skill_bank
+            ):
+                raise ValueError(
+                    "grounding candidate skill IDs are not bound to the configured "
+                    "skill bank"
+                )
             grounding_provenance = {
                 "root": str(grounding.root),
                 "manifest_sha256": grounding.manifest_sha256,
@@ -333,6 +377,7 @@ def run_policy_training(
                 "formal_gate_passed": grounding.manifest.get(
                     "formal_gate_passed"
                 ),
+                "skill_bank_sha256": actual_skill_bank,
             }
             skill_provenance = {
                 **skill_setup.provenance,
@@ -395,6 +440,7 @@ def run_policy_training(
             "checkpoint_keep_recent": checkpoint_keep_recent,
             "checkpoint_keep_best_valid": checkpoint_keep_best_valid,
             "actor_learning_rate": actor_learning_rate,
+            "warmstart_handoff": handoff_directory,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
             "infoskill_auxiliary_micro_batch_size": (
                 8 if mode is SkillMode.INFO_SKILL else None
@@ -524,6 +570,14 @@ def run_policy_training(
             "rate_weight": 0.001,
             "grounding_weight": 0.1,
         }
+    if handoff_manifest is not None:
+        provenance["actor_imitation_warmstart"] = {
+            "directory": handoff_directory,
+            "handoff_sha256": handoff_manifest["handoff_sha256"],
+            "adapter_model_sha256": handoff_manifest["adapter_model_sha256"],
+            "optimizer_state_loaded": False,
+            "infoskill_state_loaded": False,
+        }
     if checkpoint_to_load is not None:
         provenance.update(
             {
@@ -615,6 +669,7 @@ def run_policy_training(
                 else None
             ),
             enable_infoskill_auxiliary=mode is SkillMode.INFO_SKILL,
+            actor_warmstart_directory=handoff_directory,
             grounding_data_path=(
                 config.paths.grounding_data
                 if mode is SkillMode.INFO_SKILL
@@ -623,6 +678,17 @@ def run_policy_training(
             infoskill_history_length=config.history_length,
         )
     )
+    if handoff_directory is not None:
+        _write_json(
+            run_directory / "warmstart-load.json",
+            {
+                "schema_version": 1,
+                "status": "loaded",
+                "handoff": handoff_directory,
+                "handoff_sha256": handoff_manifest["handoff_sha256"],
+                "worker_reports": list(runtime.warmstart_load_reports),
+            },
+        )
     logger.info("Runtime ready in %.1f seconds", time.perf_counter() - runtime_started)
     trainer: InfoSkillTrainer | None = None
     pause_requested = False

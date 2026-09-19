@@ -12,6 +12,25 @@ from infoskill.cli import _parser, main
 
 
 class TrainingCliTests(unittest.TestCase):
+    def test_warmstart_and_resume_are_explicit_and_mutually_exclusive(self) -> None:
+        parsed = _parser().parse_args(
+            self._arguments()
+            + [
+                "--warmstart-handoff",
+                "/handoff",
+                "--skill-bank",
+                "/handoff/skill-bank.json",
+                "--skill-bank-manifest",
+                "/handoff/skill-bank-manifest.json",
+            ]
+        )
+        self.assertEqual(parsed.warmstart_handoff, "/handoff")
+        self.assertEqual(parsed.skill_bank, "/handoff/skill-bank.json")
+        self.assertEqual(
+            parsed.skill_bank_manifest,
+            "/handoff/skill-bank-manifest.json",
+        )
+
     def test_eval_batch_diagnostic_controls_are_explicit(self) -> None:
         default = _parser().parse_args(
             [

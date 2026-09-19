@@ -98,9 +98,9 @@ _Avoid_: trainable retrieval encoder、different semantic encoders per policy ba
 `semantic_token` 状态与候选技能先投影到 256 维；两层、8 头 cross-attention 以状态 token 为 query、带技能类别与边界信息的技能 token 为 key/value，并严格 mask padding。attention pooling 后分别输出 32 维 `mu` 与 `logvar`，其中 `logvar` clamp 到 `[-10, 4]`；重参数采样得到 latent。两层 `Linear -> SiLU -> Linear` projector 将 latent 映射为 5 个、宽度等于当前策略 hidden size 的向量，再经 RMSNorm 与初始值 0.01 的可学习标量 gate 形成 soft prefix；projector 使用小方差初始化，并记录 gate/prefix RMS/最大值，越界时报警而非静默裁剪。正式默认固定 `latent_dim=32`、`soft_prefix_length=5`、`cross_attention_layers=2`；`latent_dim={16,32,64}`、prefix `{1,5,10}`、层数 `{1,2,4}` 只作为显式消融，不在首轮联合搜索。
 _Avoid_: unbounded log-variance、single unmasked skill sequence、silent hyperparameter sweep
 
-**No Grounding Warm-Start**:
-正式 M1 先离线生成 train-only 专家 grounding 数据，但不单独预训练 compressor 或 projector；GRPO、fidelity、rate 与 grounding 从 update 1 起联合执行，以免额外 imitation-learning 阶段混淆与 M0 的归因。Grounding 梯度仍只进入 compressor/prior/grounding head，`grounding_weight=0` 是必做消融；近零 prefix gate 用于稳定随机初始化而非额外预训练。
-_Avoid_: expert-action pretraining before GRPO、unreported imitation warm-start、missing no-grounding ablation
+**Registered Actor-Imitation Recovery Branch**:
+历史 M0/M1 保持“No Grounding Warm-Start”定义。时间受限的恢复主线另行注册：只用 train-only、verified-planner、formal-gate-passed 的成功轨迹预训练 actor LoRA，再从内容绑定的 `m1-handoff` 启动全新的 M1；compressor/projector/prior/grounding head 以及 GRPO optimizer/scheduler 仍从头初始化。该分支必须单独报告 initialization，且以后从同一 handoff 补 M0 对照，不能与原始 Qwen 初始化结果混报。具体协议见 `ACTOR_IMITATION_WARMSTART.md`。
+_Avoid_: unreported imitation warm-start、validation leakage、restoring SFT optimizer state into GRPO、missing same-handoff M0 control
 
 **Latent Sampling Mode**:
 训练 rollout 对同一任务的 G 条独立轨迹分别执行重参数采样；训练重算必须使用 Rollout Replay Record 中保存的原 latent，不能再次采样。正式单次评测默认 `latent_mode=mean`，直接使用 posterior `mu`，并配合策略确定性解码以保证复现。可选 `latent_mode=sample` 评测必须记录种子并明确标记 stochastic evaluation。常规日志只保存 `mu/logvar` 汇总统计和 KL，不输出完整 latent 张量。

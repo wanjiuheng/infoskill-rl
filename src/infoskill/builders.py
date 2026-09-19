@@ -563,16 +563,25 @@ def _load_skill_library_provenance(
         raise RuntimeError(
             "skill library provenance manifest does not match the configured bank"
         )
-    if payload.get("source_split") != "train" or payload.get(
-        "trajectory_count"
+    metadata = dict(library.metadata)
+    planner_derived = (
+        metadata.get("source") == "verified_alfworld_planner_grounding"
+        and metadata.get("category_gate") is True
+    )
+    if payload.get("source_split") != "train":
+        raise RuntimeError("ALFWorld skill library provenance must be train-only")
+    if planner_derived:
+        if payload.get("schema_version") != 2 or payload.get(
+            "trajectory_count"
+        ) != metadata.get("source_successful_trajectories"):
+            raise RuntimeError(
+                "planner-derived skill provenance does not match its grounding trajectories"
+            )
+    elif payload.get("trajectory_count") != 223 or metadata.get(
+        "total_memories_analyzed"
     ) != 223:
         raise RuntimeError(
-            "ALFWorld skill library provenance must identify 223 train trajectories"
-        )
-    metadata = dict(library.metadata)
-    if metadata.get("total_memories_analyzed") != 223:
-        raise RuntimeError(
-            "skill bank metadata does not identify 223 analyzed trajectories"
+            "legacy SkillRL skill provenance must identify 223 train trajectories"
         )
     normalized = {**payload, "embedded_metadata": metadata}
     identity_payload = dict(normalized)

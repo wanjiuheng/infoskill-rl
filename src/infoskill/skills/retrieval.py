@@ -101,6 +101,7 @@ class EmbeddingRetriever:
         self._general_top_k = general_top_k
         self._task_top_k = task_top_k
         self._mistake_count = mistake_count
+        self._category_gate = library.metadata.get("category_gate") is True
         ranked_pool = library.general + library.task_specific
         self._pool = ranked_pool
         self._embeddings = tuple(_unit(vector) for vector in encoder.encode([item.text for item in ranked_pool]))
@@ -118,6 +119,9 @@ class EmbeddingRetriever:
             general_top_k=self._general_top_k,
             task_top_k=self._task_top_k,
             mistake_count=self._mistake_count,
+            task_category=(
+                _detect_alfworld_category(query) if self._category_gate else None
+            ),
         )
 
 
@@ -164,6 +168,11 @@ class PrecomputedEmbeddingRetriever:
                 general_top_k=general_top_k,
                 task_top_k=task_top_k,
                 mistake_count=mistake_count,
+                task_category=(
+                    _detect_alfworld_category(query)
+                    if library.metadata.get("category_gate") is True
+                    else None
+                ),
             )
             for query, query_vector in zip(unique_queries, query_embeddings)
         }
@@ -199,6 +208,13 @@ class TemplateRetriever:
             for item in self._library.task_specific
             if item.category == category
         )[: self._task_count]
+        if not task:
+            legacy_category = _detect_legacy_alfworld_category(query)
+            task = tuple(
+                RetrievedSkill(item, None)
+                for item in self._library.task_specific
+                if item.category == legacy_category
+            )[: self._task_count]
         mistakes = tuple(RetrievedSkill(item, None) for item in self._library.mistakes[: self._mistake_count])
         return RetrievalResult("template", query, general + task + mistakes)
 
@@ -231,6 +247,7 @@ def _embedding_result(
     general_top_k: int,
     task_top_k: int,
     mistake_count: int,
+    task_category: str | None = None,
 ) -> RetrievalResult:
     scored = [
         (
@@ -241,7 +258,12 @@ def _embedding_result(
         for index, (record, vector) in enumerate(zip(pool, embeddings))
     ]
     general = _top_kind(scored, "general", general_top_k)
-    task = _top_kind(scored, "task_specific", task_top_k)
+    task_scored = (
+        [item for item in scored if item[2].category == task_category]
+        if task_category is not None
+        else scored
+    )
+    task = _top_kind(task_scored, "task_specific", task_top_k)
     selected_mistakes = tuple(
         RetrievedSkill(record, None) for record in mistakes[:mistake_count]
     )
@@ -253,6 +275,23 @@ def _embedding_result(
 
 
 def _detect_alfworld_category(goal: str) -> str:
+    normalized = goal.lower()
+    if "look at" in normalized and "under" in normalized:
+        return "look_at_obj_in_light"
+    if any(token in normalized for token in ("two ", "2 ", "two of")):
+        return "pick_two_obj_and_place"
+    if "clean" in normalized:
+        return "pick_clean_then_place_in_recep"
+    if "heat" in normalized:
+        return "pick_heat_then_place_in_recep"
+    if "cool" in normalized:
+        return "pick_cool_then_place_in_recep"
+    if "examine" in normalized or "find" in normalized:
+        return "examine"
+    return "pick_and_place_simple"
+
+
+def _detect_legacy_alfworld_category(goal: str) -> str:
     normalized = goal.lower()
     if "look at" in normalized and "under" in normalized:
         return "look_at_obj_in_light"

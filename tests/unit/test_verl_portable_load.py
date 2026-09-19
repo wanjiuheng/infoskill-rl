@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from infoskill.integrations.verl.portable_load import (
+    load_actor_warmstart_after_base_sync,
     load_portable_state_after_base_sync,
 )
 
@@ -28,8 +29,29 @@ class _WorkerGroup:
         )
         return self.load_reports
 
+    def load_actor_warmstart_adapter(self, path: str):
+        self.events.append(f"warmstart:{Path(path).name}")
+        return self.load_reports
+
 
 class VerlPortableLoadTests(unittest.TestCase):
+    def test_warmstart_loads_only_lora_after_base_sync(self) -> None:
+        workers = _WorkerGroup(
+            [{"rank": 0, "base_sync_done_after": True}],
+            [{
+                "rank": 0,
+                "lora_state_loaded": True,
+                "optimizer_state_loaded": False,
+                "infoskill_state_loaded": False,
+            }],
+        )
+        reports = load_actor_warmstart_after_base_sync(
+            worker_group=workers,
+            adapter_directory=Path("handoffs/m1"),
+        )
+        self.assertEqual(workers.events, ["prepare-base", "warmstart:m1"])
+        self.assertFalse(reports[0]["optimizer_state_loaded"])
+
     def test_base_sync_must_complete_before_portable_actor_load(self) -> None:
         workers = _WorkerGroup(
             [

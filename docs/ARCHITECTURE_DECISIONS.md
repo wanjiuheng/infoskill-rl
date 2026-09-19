@@ -2,6 +2,10 @@
 
 本文按编号集中记录 INFO-SKILL 已确认、难以逆转且会跨模块影响实现或论文实验定义的架构决策。具体实验参数见 [`EXPERIMENT_SPEC.md`](EXPERIMENT_SPEC.md)，统一术语见 [`../CONTEXT.md`](../CONTEXT.md)。后续若替代某项决定，应保留原条目并标记 `Superseded by Dxxx`，不要静默改写历史。
 
+## D018：Actor imitation 是内容绑定的初始化，不是续训
+
+ALFWorld 的时间受限恢复分支允许从 verified planner demonstrations 生成不可变 `m1-handoff`。加载时只恢复 actor LoRA，禁止恢复 SFT optimizer/scheduler 或 INFO-SKILL 模块，并与 checkpoint resume 互斥。handoff 用 SHA-256 绑定 base model、imitation dataset 和 planner-derived skill bank。WebShop/Search 使用各自 environment-specific demonstration provider，不复用 ALFWorld planner。历史 original-Qwen 分支不被静默改写，未来 M0 对照必须从同一个 handoff 起步。
+
 ## D001：研究层与训练运行时分离
 
 INFO-SKILL 保持为独立项目，自有方法模块、训练编排、环境适配、配置、测试和入口；首版固定由 SkillRL commit `8e66726ed866a4e0a7f053586a41022798192e6c` 中包名为 `verl` 的代码提供分布式 GRPO、Ray/FSDP、rollout 与 checkpoint runtime，并且只能通过 `infoskill/integrations/verl/` 使用。不复制或整体修改 SkillRL，也不依赖其技能生成和动态技能库；若连续 soft-prefix 注入无法通过稳定扩展点实现，只允许维护从固定 vLLM 0.8.4 源码与 checksum 可重复构建的最小 patch wheel，禁止直接修改 `site-packages`。这样既复用与参考实验最接近的基础设施，又把来源耦合限制在可替换适配边界内。

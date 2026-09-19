@@ -113,7 +113,20 @@ def _parse_skill(item: object, *, kind: str, category: str | None) -> SkillRecor
     fields = _string_fields(item)
     skill_id = fields.get("skill_id", "")
     title = fields.get("title", "")
-    components = [fields.get(name, "") for name in ("title", "principle", "when_to_apply")]
+    components = [
+        fields.get(name, "")
+        for name in (
+            "title",
+            "phase",
+            "principle",
+            "when_to_apply",
+            "preconditions",
+            "state_transition",
+            "stop_condition",
+            "anti_loop_rule",
+            "action_templates",
+        )
+    ]
     text = ". ".join(component for component in components if component)
     if not skill_id or not text:
         raise ValueError("skill entries require skill_id and semantic text")

@@ -5,6 +5,27 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_warmstart_handoff_is_forwarded_to_train_and_eval(self) -> None:
+        script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
+        eval_case = script.split("  eval)\n", 1)[1].split("  raw-skill-ab|", 1)[0]
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+        self.assertIn('--warmstart-handoff "${WARMSTART_HANDOFF}"', eval_case)
+        self.assertIn('--warmstart-handoff "${WARMSTART_HANDOFF}"', train_case)
+        self.assertIn('--skill-bank "${SKILL_BANK}"', eval_case)
+        self.assertIn('--skill-bank "${SKILL_BANK}"', train_case)
+        self.assertIn(
+            '--skill-bank-manifest "${SKILL_BANK_MANIFEST}"', eval_case
+        )
+        self.assertIn(
+            '--skill-bank-manifest "${SKILL_BANK_MANIFEST}"', train_case
+        )
+
+        imitation = Path("scripts/run_actor_imitation.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"${PYTHON_BIN}" -m torch.distributed.run', imitation)
+        self.assertIn('--resume-from-checkpoint "${IMITATION_RESUME}"', imitation)
+
     def test_entrypoint_honors_explicit_python_for_eval_and_train(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
 

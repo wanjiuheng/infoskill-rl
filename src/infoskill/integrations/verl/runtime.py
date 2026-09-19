@@ -35,7 +35,10 @@ from .memory_metrics import (
     summarize_cuda_memory_snapshots,
     summarize_rank_token_load,
 )
-from .portable_load import load_portable_state_after_base_sync
+from .portable_load import (
+    load_actor_warmstart_after_base_sync,
+    load_portable_state_after_base_sync,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +90,7 @@ class VerlRuntimeConfig:
     infoskill_rate_weight: float = 0.001
     infoskill_grounding_weight: float = 0.1
     infoskill_auxiliary_max_grad_norm: float = 1.0
+    actor_warmstart_directory: str | None = None
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.actor_learning_rate) or self.actor_learning_rate <= 0:
@@ -133,6 +137,10 @@ class VerlRuntimeConfig:
             )
         if self.soft_prefix_length <= 0:
             raise ValueError("soft prefix length must be positive")
+        if self.actor_warmstart_directory is not None:
+            source = Path(self.actor_warmstart_directory)
+            if not (source / "m1-handoff.json").is_file():
+                raise ValueError("actor warm-start requires a complete m1-handoff")
         if self.enable_infoskill_auxiliary and not self.enable_infoskill_modules:
             raise ValueError(
                 "INFO-SKILL auxiliary training requires INFO-SKILL modules"
@@ -212,6 +220,7 @@ class VerlRuntime:
             Mapping[str, object], ...
         ] = ()
         self._grounding_dataset = None
+        self.warmstart_load_reports: tuple[Mapping[str, object], ...] = ()
         if config.enable_infoskill_auxiliary:
             from infoskill.integrations.alfworld import GroundingDataset
 
@@ -274,6 +283,12 @@ class VerlRuntime:
             )
             worker_group = group.spawn(prefix_set=classes.keys())["actor_rollout"]
             worker_group.init_model()
+            warmstart_reports: tuple[Mapping[str, object], ...] = ()
+            if config.actor_warmstart_directory is not None:
+                warmstart_reports = load_actor_warmstart_after_base_sync(
+                    worker_group=worker_group,
+                    adapter_directory=Path(config.actor_warmstart_directory),
+                )
             tokenizer = hf_tokenizer(config.model_path, trust_remote_code=True)
             codec = VerlBatchCodec(
                 tokenizer,
@@ -281,7 +296,9 @@ class VerlRuntime:
                 max_response_tokens=config.max_response_tokens,
                 max_soft_prefix_length=config.soft_prefix_length,
             )
-            return cls(worker_group=worker_group, codec=codec, config=config)
+            runtime = cls(worker_group=worker_group, codec=codec, config=config)
+            runtime.warmstart_load_reports = warmstart_reports
+            return runtime
         except Exception:
             if started_ray and ray.is_initialized():
                 ray.shutdown()

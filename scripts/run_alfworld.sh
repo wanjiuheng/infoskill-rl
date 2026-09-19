@@ -14,6 +14,9 @@ RUN_NAME="${RUN_NAME:-}"
 CHECKPOINT_STEP="${CHECKPOINT_STEP:-0}"
 EVAL_BACKEND="${EVAL_BACKEND:-transformers}" # transformers | verl
 POLICY_CHECKPOINT="${POLICY_CHECKPOINT:-}"
+WARMSTART_HANDOFF="${WARMSTART_HANDOFF:-}"
+SKILL_BANK="${SKILL_BANK:-}"
+SKILL_BANK_MANIFEST="${SKILL_BANK_MANIFEST:-}"
 CHECKPOINT_EFFECT_MAX_NEW_TOKENS="${CHECKPOINT_EFFECT_MAX_NEW_TOKENS:-64}"
 # Four-runtime M1 fingerprint/generation probe; intentionally capped at the
 # three built-in ALFWorld-shaped requests to keep the diagnosis short.
@@ -366,6 +369,15 @@ case "${ACTION}" in
     fi
     if [[ -n "${POLICY_CHECKPOINT}" ]]; then
       EVAL_ARGS+=(--policy-checkpoint "${POLICY_CHECKPOINT}")
+    fi
+    if [[ -n "${WARMSTART_HANDOFF}" ]]; then
+      EVAL_ARGS+=(--warmstart-handoff "${WARMSTART_HANDOFF}")
+    fi
+    if [[ -n "${SKILL_BANK}" ]]; then
+      EVAL_ARGS+=(--skill-bank "${SKILL_BANK}")
+    fi
+    if [[ -n "${SKILL_BANK_MANIFEST}" ]]; then
+      EVAL_ARGS+=(--skill-bank-manifest "${SKILL_BANK_MANIFEST}")
     fi
     if [[ -n "${EVAL_TASK_MANIFEST}" ]]; then
       EVAL_ARGS+=(--diagnostic-task-manifest "${EVAL_TASK_MANIFEST}")
@@ -760,6 +772,15 @@ case "${ACTION}" in
     fi
     if [[ -n "${RESUME}" ]]; then
       TRAIN_ARGS+=(--resume "${RESUME}")
+    fi
+    if [[ -n "${WARMSTART_HANDOFF}" ]]; then
+      TRAIN_ARGS+=(--warmstart-handoff "${WARMSTART_HANDOFF}")
+    fi
+    if [[ -n "${SKILL_BANK}" ]]; then
+      TRAIN_ARGS+=(--skill-bank "${SKILL_BANK}")
+    fi
+    if [[ -n "${SKILL_BANK_MANIFEST}" ]]; then
+      TRAIN_ARGS+=(--skill-bank-manifest "${SKILL_BANK_MANIFEST}")
     fi
     if [[ -n "${SEGMENT_END_UPDATE}" ]]; then
       TRAIN_ARGS+=(--segment-end-update "${SEGMENT_END_UPDATE}")

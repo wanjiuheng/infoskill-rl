@@ -52,6 +52,40 @@ def load_portable_state_after_base_sync(
     )
 
 
+def load_actor_warmstart_after_base_sync(
+    *, worker_group: object, adapter_directory: Path
+) -> tuple[Mapping[str, object], ...]:
+    """Load an imitation LoRA while deliberately retaining fresh RL state."""
+
+    reports = tuple(
+        worker_group.prepare_infoskill_portable_checkpoint_load()  # type: ignore[attr-defined]
+    )
+    if not reports or any(
+        report.get("base_sync_done_after") is not True for report in reports
+    ):
+        raise RuntimeError("vLLM base synchronization failed before actor warm-start")
+    loaded = tuple(
+        worker_group.load_actor_warmstart_adapter(  # type: ignore[attr-defined]
+            str(adapter_directory)
+        )
+    )
+    prepared_by_rank = _reports_by_rank(reports, stage="warm-start preparation")
+    loaded_by_rank = _reports_by_rank(loaded, stage="warm-start load")
+    if set(prepared_by_rank) != set(loaded_by_rank):
+        raise RuntimeError("actor warm-start preparation/load rank set differs")
+    if any(
+        report.get("lora_state_loaded") is not True
+        or report.get("optimizer_state_loaded") is not False
+        or report.get("infoskill_state_loaded") is not False
+        for report in loaded
+    ):
+        raise RuntimeError("actor warm-start loaded forbidden RL or M1 state")
+    return tuple(
+        {**prepared_by_rank[rank], **loaded_by_rank[rank]}
+        for rank in sorted(prepared_by_rank)
+    )
+
+
 def _reports_by_rank(
     reports: tuple[Mapping[str, object], ...],
     *,

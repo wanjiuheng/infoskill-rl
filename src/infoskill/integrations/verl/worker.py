@@ -1039,6 +1039,33 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             ),
         }
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def load_actor_warmstart_adapter(self, directory: str) -> dict[str, object]:
+        """Load only actor LoRA weights; keep fresh GRPO optimizer/scheduler state."""
+
+        if not self._is_actor or not self._is_lora or not isinstance(self.actor_module, PeftModel):
+            raise RuntimeError("actor warm-start requires a LoRA actor")
+        source = Path(directory)
+        adapter_path = source / "adapter_model.safetensors"
+        if not adapter_path.is_file():
+            raise RuntimeError(f"warm-start adapter is incomplete: {source}")
+        adapter_state = load_file(str(adapter_path), device="cpu")
+        result = load_peft_adapter_under_full_fsdp_state(
+            fsdp_model=self.actor_module_fsdp,
+            peft_model=self.actor_module,
+            adapter_state=adapter_state,
+        )
+        if getattr(result, "unexpected_keys", None):
+            raise RuntimeError(f"unexpected warm-start LoRA keys: {result.unexpected_keys}")
+        dist.barrier()
+        return {
+            "rank": dist.get_rank(),
+            "lora_state_loaded": True,
+            "optimizer_state_loaded": False,
+            "scheduler_state_loaded": False,
+            "infoskill_state_loaded": False,
+        }
+
     def _infoskill_modules(self) -> dict[str, torch.nn.Module]:
         return {
             "compressor": self._infoskill_compressor,
