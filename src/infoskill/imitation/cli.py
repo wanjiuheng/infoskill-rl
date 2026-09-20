@@ -4,6 +4,12 @@ import argparse
 import json
 from pathlib import Path
 
+from infoskill.integrations.webshop import (
+    REGISTERED_HUMAN_DEMONSTRATIONS_SHA256,
+    REGISTERED_HUMAN_GOALS_SHA256,
+    REGISTERED_TRAIN_TRAJECTORY_COUNT,
+)
+
 from .dataset import (
     prepare_alfworld_imitation_data,
     prepare_demonstration_imitation_data,
@@ -28,7 +34,19 @@ def main(argv: list[str] | None = None) -> int:
     webshop.add_argument("--output", required=True)
     webshop.add_argument("--validation-fraction", type=float, default=0.02)
     webshop.add_argument("--split-seed", type=int, default=0)
-    webshop.add_argument("--expected-trajectories", type=int, default=1012)
+    webshop.add_argument(
+        "--expected-trajectories",
+        type=int,
+        default=REGISTERED_TRAIN_TRAJECTORY_COUNT,
+    )
+    webshop.add_argument(
+        "--expected-demonstrations-sha256",
+        default=REGISTERED_HUMAN_DEMONSTRATIONS_SHA256,
+    )
+    webshop.add_argument(
+        "--expected-human-goals-sha256",
+        default=REGISTERED_HUMAN_GOALS_SHA256,
+    )
     train = commands.add_parser("train")
     train.add_argument("--model", required=True)
     train.add_argument("--base-model-id", required=True)
@@ -63,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
             validation_fraction=args.validation_fraction,
             split_seed=args.split_seed,
             expected_trajectory_count=args.expected_trajectories,
+            expected_source_checksums={
+                "human_demonstrations": args.expected_demonstrations_sha256,
+                "human_goals": args.expected_human_goals_sha256,
+            },
         )
         print(json.dumps({"skill_bank": bank, "grounding": derived, "imitation": manifest}, indent=2))
         return 0

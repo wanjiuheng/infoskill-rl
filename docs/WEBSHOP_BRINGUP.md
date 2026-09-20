@@ -119,7 +119,9 @@ PYTHON_BIN=/path/to/webshop/python \
 bash scripts/run_webshop_imitation.sh prepare
 ```
 
-入口默认要求恰好 1,012 条 train human trajectories；数量不符会拒绝继续。输出
+入口默认要求恰好 1,010 条 train human trajectories；该数量由官方 baseline 的
+`process_goal`、`human_goals.index` 和 `[1500, 12087)` 划分在锁定数据快照上重新审计得到。
+入口还会校验 `human_goals.json` 与 IL JSONL 的注册 SHA-256；数量或源身份不符都会拒绝继续。输出
 `artifacts/webshop-imitation-data/manifest.json` 会记录两个源文件 SHA-256、轨迹 ID
 SHA-256、train/validation 轨迹数和步骤样本数。
 

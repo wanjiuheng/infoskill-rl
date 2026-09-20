@@ -9,6 +9,15 @@ from .policy import render_webshop_policy_message
 from .splits import WebShopSplit, split_for_goal_index
 
 
+REGISTERED_TRAIN_TRAJECTORY_COUNT = 1010
+REGISTERED_HUMAN_DEMONSTRATIONS_SHA256 = (
+    "0f3ef1890245a283f8116b7abcabebd4acdf355d773edd99977e8ed6de63ec6c"
+)
+REGISTERED_HUMAN_GOALS_SHA256 = (
+    "b68746ed66cd31fdc5f70eb3f5831a46b38163563b57a66ddcab8fd60ee0cbdc"
+)
+
+
 class OfficialWebShopHumanDemonstrationProvider:
     """Adapt official WebShop human IL trajectories to InfoSkill SFT rows."""
 

@@ -14,6 +14,9 @@ PREPARED_DATA=${PREPARED_DATA:-${WEBSHOP_DATA_ROOT}/processed/imitation-data}
 SFT_OUTPUT=${SFT_OUTPUT:-${PROJECT_ROOT}/runs/webshop-actor-imitation-warmstart}
 MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct}
 BASE_MODEL_ID=${BASE_MODEL_ID:-qwen2.5-7b-instruct}
+EXPECTED_TRAJECTORIES=${EXPECTED_TRAJECTORIES:-1010}
+EXPECTED_DEMONSTRATIONS_SHA256=${EXPECTED_DEMONSTRATIONS_SHA256:-0f3ef1890245a283f8116b7abcabebd4acdf355d773edd99977e8ed6de63ec6c}
+EXPECTED_HUMAN_GOALS_SHA256=${EXPECTED_HUMAN_GOALS_SHA256:-b68746ed66cd31fdc5f70eb3f5831a46b38163563b57a66ddcab8fd60ee0cbdc}
 
 case "${ACTION}" in
   audit-archive)
@@ -46,7 +49,9 @@ case "${ACTION}" in
       --demonstrations "${DEMONSTRATIONS}" \
       --human-goals "${HUMAN_GOALS}" \
       --output "${PREPARED_DATA}" \
-      --expected-trajectories "${EXPECTED_TRAJECTORIES:-1012}"
+      --expected-trajectories "${EXPECTED_TRAJECTORIES}" \
+      --expected-demonstrations-sha256 "${EXPECTED_DEMONSTRATIONS_SHA256}" \
+      --expected-human-goals-sha256 "${EXPECTED_HUMAN_GOALS_SHA256}"
     ;;
   train)
     [[ -f "${PREPARED_DATA}/manifest.json" ]] || {

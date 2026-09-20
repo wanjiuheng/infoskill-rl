@@ -5,6 +5,16 @@ from pathlib import Path
 
 
 class RunScriptTests(unittest.TestCase):
+    def test_webshop_prepare_locks_verified_human_snapshot(self) -> None:
+        script = Path("scripts/run_webshop_imitation.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("EXPECTED_TRAJECTORIES=${EXPECTED_TRAJECTORIES:-1010}", script)
+        self.assertIn("EXPECTED_DEMONSTRATIONS_SHA256=", script)
+        self.assertIn("EXPECTED_HUMAN_GOALS_SHA256=", script)
+        self.assertIn("--expected-demonstrations-sha256", script)
+        self.assertIn("--expected-human-goals-sha256", script)
+
     def test_warmstart_handoff_is_forwarded_to_train_and_eval(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
         eval_case = script.split("  eval)\n", 1)[1].split("  raw-skill-ab|", 1)[0]

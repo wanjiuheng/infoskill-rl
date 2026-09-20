@@ -108,6 +108,7 @@ def prepare_demonstration_imitation_data(
     validation_fraction: float = 0.02,
     split_seed: int = 0,
     expected_trajectory_count: int | None = None,
+    expected_source_checksums: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Prepare environment-native demonstrations without trajectory leakage."""
 
@@ -115,6 +116,14 @@ def prepare_demonstration_imitation_data(
         raise ValueError("validation_fraction must be between zero and one")
     if split_seed < 0:
         raise ValueError("split_seed must be non-negative")
+    source_files = _provider_source_files(provider)
+    source_checksums = {
+        name: sha256_file(path) for name, path in sorted(source_files.items())
+    }
+    _validate_source_checksums(
+        source_checksums,
+        expected_source_checksums or {},
+    )
     trajectories = provider.trajectories()
     if (
         expected_trajectory_count is not None
@@ -147,10 +156,6 @@ def prepare_demonstration_imitation_data(
         if not payloads:
             raise ValueError(f"imitation {split} split is empty")
         _atomic_write_jsonl(destination / f"{split}.jsonl", payloads)
-    source_files = _provider_source_files(provider)
-    source_checksums = {
-        name: sha256_file(path) for name, path in sorted(source_files.items())
-    }
     manifest: dict[str, object] = {
         "schema_version": 1,
         "provider": type(provider).__name__,
@@ -173,6 +178,23 @@ def prepare_demonstration_imitation_data(
     }
     _atomic_write_json(destination / "manifest.json", manifest)
     return manifest
+
+
+def _validate_source_checksums(
+    actual: dict[str, str],
+    expected: dict[str, str],
+) -> None:
+    for name, expected_digest in sorted(expected.items()):
+        actual_digest = actual.get(name)
+        if actual_digest is None:
+            raise ValueError(
+                f"expected imitation source checksum has no source file: {name}"
+            )
+        if actual_digest != expected_digest:
+            raise ValueError(
+                "imitation source checksum differs from the registered protocol: "
+                f"{name} expected {expected_digest}, got {actual_digest}"
+            )
 
 
 def _sft_row(state: CanonicalAgentState, action: str) -> dict[str, object]:
