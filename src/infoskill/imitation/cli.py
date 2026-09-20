@@ -81,10 +81,6 @@ def main(argv: list[str] | None = None) -> int:
             validation_fraction=args.validation_fraction,
             split_seed=args.split_seed,
             expected_trajectory_count=args.expected_trajectories,
-            expected_source_checksums={
-                "human_demonstrations": args.expected_demonstrations_sha256,
-                "human_goals": args.expected_human_goals_sha256,
-            },
         )
         print(json.dumps({"skill_bank": bank, "grounding": derived, "imitation": manifest}, indent=2))
         return 0
@@ -102,6 +98,10 @@ def main(argv: list[str] | None = None) -> int:
             validation_fraction=args.validation_fraction,
             split_seed=args.split_seed,
             expected_trajectory_count=args.expected_trajectories,
+            expected_source_checksums={
+                "human_demonstrations": args.expected_demonstrations_sha256,
+                "human_goals": args.expected_human_goals_sha256,
+            },
         )
         print(json.dumps(manifest, indent=2))
         return 0

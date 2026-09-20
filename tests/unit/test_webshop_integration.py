@@ -4,7 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from infoskill.imitation.cli import main as imitation_main
 from infoskill.imitation.dataset import prepare_demonstration_imitation_data
 from infoskill.integrations.webshop import (
     OfficialWebShopHumanDemonstrationProvider,
@@ -36,6 +38,41 @@ def _demo(goal: str, item: str, *, price: str = "40.00") -> dict[str, object]:
 
 
 class WebShopIntegrationTests(unittest.TestCase):
+    def test_prepare_webshop_cli_forwards_registered_snapshot_gate(self) -> None:
+        provider = object()
+        with patch(
+            "infoskill.integrations.webshop.OfficialWebShopHumanDemonstrationProvider",
+            return_value=provider,
+        ), patch(
+            "infoskill.imitation.cli.prepare_demonstration_imitation_data",
+            return_value={"trajectory_count": 1010},
+        ) as prepare:
+            result = imitation_main(
+                [
+                    "prepare-webshop",
+                    "--demonstrations",
+                    "demos.jsonl",
+                    "--human-goals",
+                    "goals.json",
+                    "--output",
+                    "prepared",
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(prepare.call_args.kwargs["provider"], provider)
+        self.assertEqual(
+            prepare.call_args.kwargs["expected_trajectory_count"],
+            REGISTERED_TRAIN_TRAJECTORY_COUNT,
+        )
+        self.assertEqual(
+            prepare.call_args.kwargs["expected_source_checksums"],
+            {
+                "human_demonstrations": REGISTERED_HUMAN_DEMONSTRATIONS_SHA256,
+                "human_goals": REGISTERED_HUMAN_GOALS_SHA256,
+            },
+        )
+
     def test_registered_human_demonstration_snapshot_is_pinned(self) -> None:
         self.assertEqual(REGISTERED_TRAIN_TRAJECTORY_COUNT, 1010)
         self.assertEqual(
