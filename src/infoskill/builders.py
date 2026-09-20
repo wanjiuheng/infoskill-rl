@@ -180,6 +180,7 @@ def build_raw_skill_setup(
     skill_library_provenance = _load_skill_library_provenance(
         library,
         manifest_path=config.paths.skill_bank_manifest,
+        environment=config.environment,
     )
     semantic_model_identity = (
         _semantic_model_identity(config.paths.semantic_model)
@@ -304,6 +305,7 @@ def build_skillrl_grpo_prompt_setup(config: AppConfig) -> RawSkillSetup:
     skill_library_provenance = _load_skill_library_provenance(
         library,
         manifest_path=config.paths.skill_bank_manifest,
+        environment=config.environment,
     )
     retriever = TemplateRetriever(
         library,
@@ -399,6 +401,7 @@ def build_skillrl_sft_prompt_setup(config: AppConfig) -> RawSkillSetup:
     skill_library_provenance = _load_skill_library_provenance(
         library,
         manifest_path=config.paths.skill_bank_manifest,
+        environment=config.environment,
     )
     retriever = TemplateRetriever(
         library,
@@ -493,6 +496,7 @@ def build_skillrl_sft_no_skills_prompt_setup(config: AppConfig) -> RawSkillSetup
     skill_library_provenance = _load_skill_library_provenance(
         library,
         manifest_path=config.paths.skill_bank_manifest,
+        environment=config.environment,
     )
     return RawSkillSetup(
         conditioner=SkillRlSftNoSkillsPromptConditioner(history_length=5),
@@ -542,6 +546,7 @@ def _load_skill_library_provenance(
     library: FixedSkillLibrary,
     *,
     manifest_path: str | None,
+    environment: str = "alfworld",
 ) -> dict[str, object]:
     resolved_manifest = (
         Path(manifest_path).expanduser().resolve()
@@ -569,20 +574,32 @@ def _load_skill_library_provenance(
         and metadata.get("category_gate") is True
     )
     if payload.get("source_split") != "train":
-        raise RuntimeError("ALFWorld skill library provenance must be train-only")
-    if planner_derived:
-        if payload.get("schema_version") != 2 or payload.get(
-            "trajectory_count"
-        ) != metadata.get("source_successful_trajectories"):
+        raise RuntimeError(f"{environment} skill library provenance must be train-only")
+    if environment == "alfworld":
+        if planner_derived:
+            if payload.get("schema_version") != 2 or payload.get(
+                "trajectory_count"
+            ) != metadata.get("source_successful_trajectories"):
+                raise RuntimeError(
+                    "planner-derived skill provenance does not match its grounding trajectories"
+                )
+        elif payload.get("trajectory_count") != 223 or metadata.get(
+            "total_memories_analyzed"
+        ) != 223:
             raise RuntimeError(
-                "planner-derived skill provenance does not match its grounding trajectories"
+                "legacy SkillRL skill provenance must identify 223 train trajectories"
             )
-    elif payload.get("trajectory_count") != 223 or metadata.get(
-        "total_memories_analyzed"
-    ) != 223:
-        raise RuntimeError(
-            "legacy SkillRL skill provenance must identify 223 train trajectories"
-        )
+    elif environment == "webshop":
+        if payload.get("environment") != "webshop":
+            raise RuntimeError("WebShop skill provenance has the wrong environment")
+        if payload.get("trajectory_count") != metadata.get(
+            "total_memories_analyzed"
+        ):
+            raise RuntimeError(
+                "WebShop skill provenance does not match the analyzed trajectories"
+            )
+    elif payload.get("environment") != environment:
+        raise RuntimeError("skill provenance has the wrong environment")
     normalized = {**payload, "embedded_metadata": metadata}
     identity_payload = dict(normalized)
     identity_payload.pop("provenance_id", None)

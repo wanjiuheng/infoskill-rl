@@ -12,19 +12,24 @@ class RuntimePaths:
     policy_adapter: str | None
     semantic_model: str
     skillrl_source: str
-    alfworld_source: str
-    alfworld_data: str
-    alfworld_config: str
     skill_bank: str
     output_root: str
-    infoskill_checkpoint: str | None
+    infoskill_checkpoint: str | None = None
     skill_bank_manifest: str | None = None
     grounding_data: str | None = None
+    alfworld_source: str | None = None
+    alfworld_data: str | None = None
+    alfworld_config: str | None = None
+    webshop_source: str | None = None
+    webshop_data: str | None = None
+    webshop_human_demonstrations: str | None = None
+    webshop_human_goals: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     paths: RuntimePaths
+    environment: str = "alfworld"
     policy_model_id: str | None = None
     max_steps: int = 30
     history_length: int = 2
@@ -54,6 +59,8 @@ class AppConfig:
         return config
 
     def validate(self) -> None:
+        if self.environment not in {"alfworld", "webshop", "search"}:
+            raise ValueError("environment must be alfworld, webshop, or search")
         if self.retrieval_mode not in {"embedding", "template"}:
             raise ValueError("retrieval_mode must be embedding or template")
         if min(self.max_steps, self.max_prompt_tokens, self.max_response_tokens, self.eval_batch_size) <= 0:
@@ -65,6 +72,17 @@ class AppConfig:
                 raise ValueError("policy_model_id cannot be empty")
             if self.policy_model_id != self.policy_model_id.strip():
                 raise ValueError("policy_model_id cannot have surrounding whitespace")
+        if self.environment == "alfworld":
+            self._require_paths("alfworld_source", "alfworld_data", "alfworld_config")
+        if self.environment == "webshop":
+            self._require_paths("webshop_source", "webshop_data")
+
+    def _require_paths(self, *names: str) -> None:
+        missing = [name for name in names if not getattr(self.paths, name)]
+        if missing:
+            raise ValueError(
+                f"{self.environment} config requires paths: {', '.join(missing)}"
+            )
 
     def as_dict(self) -> dict[str, object]:
         from dataclasses import asdict

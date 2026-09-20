@@ -9,6 +9,8 @@ from infoskill.domain.state import CanonicalAgentState, render_policy_message
 from infoskill.integrations.alfworld import GroundingDataset
 from infoskill.integrations.alfworld.grounding_io import sha256_file
 
+from .providers import DemonstrationProvider, DemonstrationTrajectory
+
 
 def prepare_alfworld_imitation_data(
     *,
@@ -99,6 +101,80 @@ def prepare_alfworld_imitation_data(
     return manifest
 
 
+def prepare_demonstration_imitation_data(
+    *,
+    provider: DemonstrationProvider,
+    output_directory: str | Path,
+    validation_fraction: float = 0.02,
+    split_seed: int = 0,
+    expected_trajectory_count: int | None = None,
+) -> dict[str, object]:
+    """Prepare environment-native demonstrations without trajectory leakage."""
+
+    if not 0 < validation_fraction < 1:
+        raise ValueError("validation_fraction must be between zero and one")
+    if split_seed < 0:
+        raise ValueError("split_seed must be non-negative")
+    trajectories = provider.trajectories()
+    if (
+        expected_trajectory_count is not None
+        and len(trajectories) != expected_trajectory_count
+    ):
+        raise ValueError(
+            "demonstration trajectory count differs from the registered protocol: "
+            f"expected {expected_trajectory_count}, got {len(trajectories)}"
+        )
+    environments = {item.environment for item in trajectories}
+    if len(environments) != 1:
+        raise ValueError("imitation corpus must contain exactly one environment")
+    destination = Path(output_directory)
+    destination.mkdir(parents=True, exist_ok=False)
+    ranked = sorted(
+        trajectories,
+        key=lambda item: hashlib.sha256(
+            f"{split_seed}:{item.trajectory_id}".encode("utf-8")
+        ).digest(),
+    )
+    validation_count = max(1, round(len(ranked) * validation_fraction))
+    if validation_count >= len(ranked):
+        raise ValueError("trajectory split produced an empty training set")
+    validation_ids = {item.trajectory_id for item in ranked[:validation_count]}
+    rows: dict[str, list[dict[str, object]]] = {"train": [], "validation": []}
+    for trajectory in sorted(trajectories, key=lambda item: item.trajectory_id):
+        split = "validation" if trajectory.trajectory_id in validation_ids else "train"
+        rows[split].extend(_demonstration_rows(trajectory))
+    for split, payloads in rows.items():
+        if not payloads:
+            raise ValueError(f"imitation {split} split is empty")
+        _atomic_write_jsonl(destination / f"{split}.jsonl", payloads)
+    source_files = _provider_source_files(provider)
+    source_checksums = {
+        name: sha256_file(path) for name, path in sorted(source_files.items())
+    }
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "provider": type(provider).__name__,
+        "environment": next(iter(environments)),
+        "source_split": getattr(provider, "source_split", "train"),
+        "source_files": {name: str(path) for name, path in sorted(source_files.items())},
+        "source_checksums": source_checksums,
+        "trajectory_count": len(trajectories),
+        "expected_trajectory_count": expected_trajectory_count,
+        "sample_count": sum(len(item.steps) for item in trajectories),
+        "train_trajectory_count": len(trajectories) - len(validation_ids),
+        "validation_trajectory_count": len(validation_ids),
+        "train_sample_count": len(rows["train"]),
+        "validation_sample_count": len(rows["validation"]),
+        "validation_fraction": validation_fraction,
+        "split_seed": split_seed,
+        "trajectory_id_sha256": _trajectory_id_sha256(trajectories),
+        "prompt_contract": "environment_online_policy_message_v1",
+        "response_contract": "think_action_v1",
+    }
+    _atomic_write_json(destination / "manifest.json", manifest)
+    return manifest
+
+
 def _sft_row(state: CanonicalAgentState, action: str) -> dict[str, object]:
     return {
         "task_id": state.task_id,
@@ -124,6 +200,57 @@ def _rationale(state: CanonicalAgentState) -> str:
         f"Follow the verified {state.task_type} plan and advance only with an "
         "admissible action."
     )
+
+
+def _demonstration_rows(
+    trajectory: DemonstrationTrajectory,
+) -> list[dict[str, object]]:
+    return [
+        {
+            "task_id": trajectory.trajectory_id,
+            "task_type": trajectory.environment,
+            "step_index": step_index,
+            "prompt": step.prompt,
+            "response": (
+                f"<think>{_environment_rationale(step.action)}</think>\n"
+                f"<action>{step.action}</action>"
+            ),
+        }
+        for step_index, step in enumerate(trajectory.steps)
+    ]
+
+
+def _environment_rationale(action: str) -> str:
+    if action.startswith("search["):
+        return "Use a focused query containing the instruction's discriminating attributes."
+    if action.lower() == "click[buy now]":
+        return "The selected product and required options satisfy the instruction, so purchase it."
+    if action.startswith("click["):
+        return "Inspect or select the demonstrated admissible choice that advances the shopping goal."
+    return "Follow the successful environment-native demonstration."
+
+
+def _provider_source_files(provider: DemonstrationProvider) -> dict[str, Path]:
+    method = getattr(provider, "source_files", None)
+    if not callable(method):
+        return {}
+    payload = method()
+    if not isinstance(payload, dict):
+        raise ValueError("demonstration provider source_files must return a mapping")
+    result: dict[str, Path] = {}
+    for name, value in payload.items():
+        path = Path(value)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        result[str(name)] = path
+    return result
+
+
+def _trajectory_id_sha256(
+    trajectories: tuple[DemonstrationTrajectory, ...],
+) -> str:
+    content = "\n".join(sorted(item.trajectory_id for item in trajectories)) + "\n"
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _atomic_write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:

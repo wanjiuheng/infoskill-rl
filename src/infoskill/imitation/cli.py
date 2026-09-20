@@ -4,7 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
-from .dataset import prepare_alfworld_imitation_data
+from .dataset import (
+    prepare_alfworld_imitation_data,
+    prepare_demonstration_imitation_data,
+)
 from .handoff import create_handoff
 from .skill_bank import build_planner_skill_bank, rewrite_grounding_skill_ids
 
@@ -19,6 +22,13 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--validation-fraction", type=float, default=0.02)
     prepare.add_argument("--split-seed", type=int, default=0)
     prepare.add_argument("--expected-trajectories", type=int, default=3521)
+    webshop = commands.add_parser("prepare-webshop")
+    webshop.add_argument("--demonstrations", required=True)
+    webshop.add_argument("--human-goals", required=True)
+    webshop.add_argument("--output", required=True)
+    webshop.add_argument("--validation-fraction", type=float, default=0.02)
+    webshop.add_argument("--split-seed", type=int, default=0)
+    webshop.add_argument("--expected-trajectories", type=int, default=1012)
     train = commands.add_parser("train")
     train.add_argument("--model", required=True)
     train.add_argument("--base-model-id", required=True)
@@ -55,6 +65,23 @@ def main(argv: list[str] | None = None) -> int:
             expected_trajectory_count=args.expected_trajectories,
         )
         print(json.dumps({"skill_bank": bank, "grounding": derived, "imitation": manifest}, indent=2))
+        return 0
+    if args.command == "prepare-webshop":
+        from infoskill.integrations.webshop import (
+            OfficialWebShopHumanDemonstrationProvider,
+        )
+
+        manifest = prepare_demonstration_imitation_data(
+            provider=OfficialWebShopHumanDemonstrationProvider(
+                args.demonstrations,
+                args.human_goals,
+            ),
+            output_directory=args.output,
+            validation_fraction=args.validation_fraction,
+            split_seed=args.split_seed,
+            expected_trajectory_count=args.expected_trajectories,
+        )
+        print(json.dumps(manifest, indent=2))
         return 0
     if args.command == "train":
         from .train import train_actor_imitation
