@@ -32,6 +32,11 @@ class WebShopAssetDoctorTests(unittest.TestCase):
         self.assertFalse(status["source_present"])
         self.assertFalse(status["importable"])
 
+    def test_existing_parent_supports_an_uncreated_data_root(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        missing = root / "not-created" / "webshop" / "raw"
+        self.assertEqual(self.doctor._existing_parent(missing), root)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,8 @@ set -euo pipefail
 
 PYTHON_BASE=${PYTHON_BASE:-/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python}
 TOOLS_VENV=${TOOLS_VENV:-/root/autodl-tmp/wjh/webshop-tools}
-ASSET_STAGING=${ASSET_STAGING:-/root/autodl-tmp/wjh/webshop-assets}
+WEBSHOP_DATA_ROOT=${WEBSHOP_DATA_ROOT:-/root/autodl-tmp/wjh/data/webshop}
+ASSET_STAGING=${ASSET_STAGING:-${WEBSHOP_DATA_ROOT}/raw}
 MINIMUM_FREE_GB=${MINIMUM_FREE_GB:-30}
 OFFICIAL_ARCHIVE_ID=1GWC8UlUzfT9PRTRxgYOwuKSJp4hyV1dp
 ARCHIVE=${ASSET_STAGING}/all_trajs.zip

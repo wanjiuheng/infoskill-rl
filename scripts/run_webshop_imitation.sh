@@ -4,10 +4,11 @@ set -euo pipefail
 PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 ACTION=${1:-}
 PYTHON_BIN=${PYTHON_BIN:-python}
-WEBSHOP_ROOT=${WEBSHOP_ROOT:-${PROJECT_ROOT}/../SkillRL/agent_system/environments/env_package/webshop/webshop}
-DEMONSTRATIONS=${DEMONSTRATIONS:-${WEBSHOP_ROOT}/baseline_models/data/il_trajs_finalized_images.jsonl}
-HUMAN_GOALS=${HUMAN_GOALS:-${WEBSHOP_ROOT}/baseline_models/data/human_goals.json}
-PREPARED_DATA=${PREPARED_DATA:-${PROJECT_ROOT}/artifacts/webshop-imitation-data}
+WEBSHOP_SOURCE=${WEBSHOP_SOURCE:-${WEBSHOP_ROOT:-${PROJECT_ROOT}/../SkillRL/agent_system/environments/env_package/webshop/webshop}}
+WEBSHOP_DATA_ROOT=${WEBSHOP_DATA_ROOT:-/root/autodl-tmp/wjh/data/webshop}
+DEMONSTRATIONS=${DEMONSTRATIONS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/il_trajs_finalized_images.jsonl}
+HUMAN_GOALS=${HUMAN_GOALS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/human_goals.json}
+PREPARED_DATA=${PREPARED_DATA:-${WEBSHOP_DATA_ROOT}/processed/imitation-data}
 SFT_OUTPUT=${SFT_OUTPUT:-${PROJECT_ROOT}/runs/webshop-actor-imitation-warmstart}
 MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct}
 BASE_MODEL_ID=${BASE_MODEL_ID:-qwen2.5-7b-instruct}
@@ -15,7 +16,8 @@ BASE_MODEL_ID=${BASE_MODEL_ID:-qwen2.5-7b-instruct}
 case "${ACTION}" in
   doctor)
     exec "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/webshop_asset_doctor.py" \
-      --webshop-root "${WEBSHOP_ROOT}" \
+      --webshop-root "${WEBSHOP_SOURCE}" \
+      --webshop-data-root "${WEBSHOP_DATA_ROOT}" \
       --output "${PROJECT_ROOT}/webshop-asset-doctor.json"
     ;;
   prepare)

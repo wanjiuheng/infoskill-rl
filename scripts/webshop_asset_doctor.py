@@ -46,14 +46,20 @@ MINIMUM_FREE_DISK_BYTES = 15 * 1024**3
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--webshop-root", required=True)
+    parser.add_argument("--webshop-data-root")
     parser.add_argument("--output")
     args = parser.parse_args(argv)
     root = Path(args.webshop_root).expanduser().resolve()
+    data_root = (
+        Path(args.webshop_data_root).expanduser().resolve()
+        if args.webshop_data_root
+        else root
+    )
     files = {
-        name: _file_status(root / relative)
+        name: _file_status(data_root / relative)
         for name, relative in REQUIRED_FILES.items()
     }
-    index_root = root / "search_engine/indexes"
+    index_root = data_root / "search_engine/indexes"
     index_files = (
         tuple(path for path in index_root.rglob("*") if path.is_file())
         if index_root.is_dir()
@@ -72,10 +78,12 @@ def main(argv: list[str] | None = None) -> int:
     }
     web_agent_site = _web_agent_site_status(root)
     java = _java_status()
-    disk = shutil.disk_usage(root if root.exists() else root.parent)
+    disk_probe = data_root if data_root.exists() else _existing_parent(data_root)
+    disk = shutil.disk_usage(disk_probe)
     report = {
         "schema_version": 1,
         "webshop_root": str(root),
+        "webshop_data_root": str(data_root),
         "python": sys.executable,
         "files": files,
         "search_index": {
@@ -126,6 +134,13 @@ def _file_status(path: Path) -> dict[str, object]:
         "present": present,
         "bytes": path.stat().st_size if present else None,
     }
+
+
+def _existing_parent(path: Path) -> Path:
+    candidate = path
+    while not candidate.exists() and candidate != candidate.parent:
+        candidate = candidate.parent
+    return candidate
 
 
 def _java_status() -> dict[str, object]:

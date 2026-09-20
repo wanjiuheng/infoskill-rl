@@ -35,16 +35,22 @@ demonstrations；不能把 ALFWorld planner 接到 WebShop 上。
 warm-start provider 默认只接收 train demonstrations，再从这些训练轨迹内部按 trajectory
 ID 做确定性 98/2 SFT train/validation 切分。官方 validation/test 不进入 SFT。
 
-## 资产位置
+## 代码与数据位置
 
-默认 WebShop 根目录：
+锁定的 WebShop 代码根目录保持只读：
 
 ```text
 /root/autodl-tmp/wjh/alfworld_eval/SkillRL/
   agent_system/environments/env_package/webshop/webshop
 ```
 
-正式运行要求：
+WebShop 数据不写入上述代码树，统一放在：
+
+```text
+/root/autodl-tmp/wjh/data/webshop
+```
+
+正式运行要求的数据布局：
 
 ```text
 data/items_shuffle.json
@@ -79,7 +85,8 @@ bash scripts/stage_webshop_human_archive.sh
 ```
 
 脚本把下载工具放在独立的 `/root/autodl-tmp/wjh/webshop-tools`，把归档放在
-`/root/autodl-tmp/wjh/webshop-assets`。它不修改 InfoSkill Python 环境，也不使用 GPU；
+`/root/autodl-tmp/wjh/data/webshop/raw/all_trajs.zip`。前者不是数据集目录；它不修改
+InfoSkill Python 环境，也不使用 GPU；
 可用空间低于 30 GiB 时会拒绝下载。取得归档清单与 SHA-256 后，再实现并验证从官方
 原始 session logs 到 imitation provider 的转换，不能静默改用未登记的第三方预处理数据。
 

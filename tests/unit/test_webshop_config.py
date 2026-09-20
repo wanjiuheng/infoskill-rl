@@ -14,6 +14,15 @@ class WebShopConfigTests(unittest.TestCase):
         config = AppConfig.load(root / "configs/webshop_qwen25_7b.yaml")
         self.assertEqual(config.environment, "webshop")
         self.assertIsNone(config.paths.alfworld_data)
+        self.assertEqual(
+            config.paths.webshop_data,
+            "/root/autodl-tmp/wjh/data/webshop/data",
+        )
+        self.assertTrue(
+            config.paths.webshop_human_demonstrations.startswith(
+                "/root/autodl-tmp/wjh/data/webshop/"
+            )
+        )
 
         skill_bank = root.parent / "SkillRL/memory_data/webshop/claude_style_skills.json"
         library = FixedSkillLibrary.load(skill_bank)

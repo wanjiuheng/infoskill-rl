@@ -6,9 +6,9 @@ paths:
   semantic_model: /root/autodl-tmp/wjh/models/Qwen/Qwen3-Embedding-0.6B
   skillrl_source: /root/autodl-tmp/wjh/alfworld_eval/SkillRL
   webshop_source: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/agent_system/environments/env_package/webshop/webshop
-  webshop_data: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/agent_system/environments/env_package/webshop/webshop/data
-  webshop_human_demonstrations: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/agent_system/environments/env_package/webshop/webshop/baseline_models/data/il_trajs_finalized_images.jsonl
-  webshop_human_goals: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/agent_system/environments/env_package/webshop/webshop/baseline_models/data/human_goals.json
+  webshop_data: /root/autodl-tmp/wjh/data/webshop/data
+  webshop_human_demonstrations: /root/autodl-tmp/wjh/data/webshop/baseline_models/data/il_trajs_finalized_images.jsonl
+  webshop_human_goals: /root/autodl-tmp/wjh/data/webshop/baseline_models/data/human_goals.json
   skill_bank: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/memory_data/webshop/claude_style_skills.json
   skill_bank_manifest: configs/webshop_skill_bank_manifest.json
   output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
