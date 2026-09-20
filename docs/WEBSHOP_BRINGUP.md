@@ -90,6 +90,18 @@ InfoSkill Python 环境，也不使用 GPU；
 可用空间低于 30 GiB 时会拒绝下载。取得归档清单与 SHA-256 后，再实现并验证从官方
 原始 session logs 到 imitation provider 的转换，不能静默改用未登记的第三方预处理数据。
 
+归档上传并通过 ZIP 校验后，先执行不解压、不输出原始 instruction 的结构审计：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+PYTHON_BIN=/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python \
+bash scripts/run_webshop_imitation.sh audit-archive
+```
+
+报告写入 `/root/autodl-tmp/wjh/data/webshop/raw/all_trajs.audit.json`，用于决定哪些
+session 可直接恢复 goal 索引，以及环境重放需要支持哪些页面转移。原始网页日志不能
+绕过重放直接伪装成已经包含状态和 admissible actions 的 baseline IL 数据。
+
 ## 环境隔离
 
 WebShop 官方栈依赖较旧的 Gym/Flask/Pyserini，并需要 Java 11。不要在正在使用的

@@ -6,6 +6,8 @@ ACTION=${1:-}
 PYTHON_BIN=${PYTHON_BIN:-python}
 WEBSHOP_SOURCE=${WEBSHOP_SOURCE:-${WEBSHOP_ROOT:-${PROJECT_ROOT}/../SkillRL/agent_system/environments/env_package/webshop/webshop}}
 WEBSHOP_DATA_ROOT=${WEBSHOP_DATA_ROOT:-/root/autodl-tmp/wjh/data/webshop}
+HUMAN_ARCHIVE=${HUMAN_ARCHIVE:-${WEBSHOP_DATA_ROOT}/raw/all_trajs.zip}
+ARCHIVE_AUDIT=${ARCHIVE_AUDIT:-${WEBSHOP_DATA_ROOT}/raw/all_trajs.audit.json}
 DEMONSTRATIONS=${DEMONSTRATIONS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/il_trajs_finalized_images.jsonl}
 HUMAN_GOALS=${HUMAN_GOALS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/human_goals.json}
 PREPARED_DATA=${PREPARED_DATA:-${WEBSHOP_DATA_ROOT}/processed/imitation-data}
@@ -14,6 +16,16 @@ MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct}
 BASE_MODEL_ID=${BASE_MODEL_ID:-qwen2.5-7b-instruct}
 
 case "${ACTION}" in
+  audit-archive)
+    [[ -f "${HUMAN_ARCHIVE}" ]] || {
+      echo "missing WebShop human archive: ${HUMAN_ARCHIVE}" >&2
+      exit 2
+    }
+    exec env PYTHONPATH="${PROJECT_ROOT}/src" "${PYTHON_BIN}" \
+      "${PROJECT_ROOT}/scripts/audit_webshop_human_archive.py" \
+      --archive "${HUMAN_ARCHIVE}" \
+      --output "${ARCHIVE_AUDIT}"
+    ;;
   doctor)
     exec "${PYTHON_BIN}" "${PROJECT_ROOT}/scripts/webshop_asset_doctor.py" \
       --webshop-root "${WEBSHOP_SOURCE}" \
@@ -57,7 +69,7 @@ case "${ACTION}" in
       --max-length "${IMITATION_MAX_LENGTH:-4352}"
     ;;
   *)
-    echo "usage: bash scripts/run_webshop_imitation.sh doctor|prepare|train" >&2
+    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|prepare|train" >&2
     exit 2
     ;;
 esac
