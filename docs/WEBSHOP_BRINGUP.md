@@ -64,6 +64,24 @@ bash scripts/run_webshop_imitation.sh doctor
 ```
 
 `formal_ready=false` 时不要启动长训练。doctor 返回 2 是 fail-closed，不会修改数据。
+正式门还要求 Java 11、锁定的 Python 包版本、`en_core_web_sm`、可导入的
+`web_agent_site`、非空 Lucene 索引，以及至少 15 GiB 剩余空间。
+
+## 分阶段取得官方 human trajectories
+
+不要先运行上游 `setup.sh -d all`；它会连续安装依赖、下载全量产品、生成四套中间
+resources/索引，峰值空间不可控。先单独下载 WebShop README 链接的官方
+`all_trajs.zip`，校验 ZIP 后只保存文件清单，不立即解压：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+bash scripts/stage_webshop_human_archive.sh
+```
+
+脚本把下载工具放在独立的 `/root/autodl-tmp/wjh/webshop-tools`，把归档放在
+`/root/autodl-tmp/wjh/webshop-assets`。它不修改 InfoSkill Python 环境，也不使用 GPU；
+可用空间低于 30 GiB 时会拒绝下载。取得归档清单与 SHA-256 后，再实现并验证从官方
+原始 session logs 到 imitation provider 的转换，不能静默改用未登记的第三方预处理数据。
 
 ## 环境隔离
 

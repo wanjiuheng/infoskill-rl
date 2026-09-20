@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+from importlib import metadata
 from pathlib import Path
 
 
@@ -28,6 +29,19 @@ REQUIRED_MODULES = (
     "thefuzz",
 )
 
+EXPECTED_VERSIONS = {
+    "beautifulsoup4": "4.11.1",
+    "Flask": "2.1.2",
+    "gym": "0.24.0",
+    "pyserini": "0.17.0",
+    "rank-bm25": "0.2.2",
+    "spacy": "3.7.2",
+    "thefuzz": "0.19.0",
+    "Werkzeug": "2.1.0",
+}
+
+MINIMUM_FREE_DISK_BYTES = 15 * 1024**3
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
@@ -48,8 +62,15 @@ def main(argv: list[str] | None = None) -> int:
     modules = {
         name: importlib.util.find_spec(name) is not None for name in REQUIRED_MODULES
     }
-    web_agent_site = root / "web_agent_site"
-    modules["web_agent_site"] = web_agent_site.is_dir()
+    modules["en_core_web_sm"] = importlib.util.find_spec("en_core_web_sm") is not None
+    package_versions = {
+        name: _package_version(name) for name in EXPECTED_VERSIONS
+    }
+    version_matches = {
+        name: package_versions[name] == expected
+        for name, expected in EXPECTED_VERSIONS.items()
+    }
+    web_agent_site = _web_agent_site_status(root)
     java = _java_status()
     disk = shutil.disk_usage(root if root.exists() else root.parent)
     report = {
@@ -63,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
             "file_count": len(index_files),
         },
         "python_modules": modules,
+        "python_package_versions": package_versions,
+        "python_package_version_matches": version_matches,
+        "web_agent_site": web_agent_site,
         "java": java,
         "disk": {
             "total_bytes": disk.total,
@@ -71,10 +95,19 @@ def main(argv: list[str] | None = None) -> int:
         },
     }
     report["data_ready"] = all(item["present"] for item in files.values())
+    report["disk_ready"] = disk.free >= MINIMUM_FREE_DISK_BYTES
     report["runtime_ready"] = (
-        all(modules.values()) and java["present"] and bool(index_files)
+        all(modules.values())
+        and all(version_matches.values())
+        and web_agent_site["importable"]
+        and java["compatible"]
+        and bool(index_files)
     )
-    report["formal_ready"] = report["data_ready"] and report["runtime_ready"]
+    report["formal_ready"] = (
+        report["data_ready"]
+        and report["runtime_ready"]
+        and report["disk_ready"]
+    )
     text = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     if args.output:
         output = Path(args.output)
@@ -98,7 +131,12 @@ def _file_status(path: Path) -> dict[str, object]:
 def _java_status() -> dict[str, object]:
     executable = shutil.which("java")
     if executable is None:
-        return {"present": False, "executable": None, "version": None}
+        return {
+            "present": False,
+            "compatible": False,
+            "executable": None,
+            "version": None,
+        }
     completed = subprocess.run(
         [executable, "-version"],
         check=False,
@@ -109,8 +147,65 @@ def _java_status() -> dict[str, object]:
     version = (completed.stderr or completed.stdout).splitlines()
     return {
         "present": completed.returncode == 0,
+        "compatible": (
+            completed.returncode == 0
+            and bool(version)
+            and _is_java_11(version[0])
+        ),
         "executable": executable,
         "version": version[0] if version else None,
+    }
+
+
+def _is_java_11(version_line: str) -> bool:
+    lowered = version_line.lower()
+    return 'version "11.' in lowered or "openjdk 11." in lowered
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def _web_agent_site_status(root: Path) -> dict[str, object]:
+    source = root / "web_agent_site"
+    if not source.is_dir():
+        return {
+            "source_present": False,
+            "importable": False,
+            "error": "source directory is missing",
+        }
+    environment = dict(os.environ)
+    previous = environment.get("PYTHONPATH")
+    environment["PYTHONPATH"] = (
+        str(root) if not previous else f"{root}{os.pathsep}{previous}"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from web_agent_site.envs.web_agent_text_env import WebAgentTextEnv",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=environment,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "source_present": True,
+            "importable": False,
+            "error": "import timed out after 30 seconds",
+        }
+    error = (completed.stderr or completed.stdout).strip()
+    return {
+        "source_present": True,
+        "importable": completed.returncode == 0,
+        "error": error[-2000:] if error else None,
     }
 
 
