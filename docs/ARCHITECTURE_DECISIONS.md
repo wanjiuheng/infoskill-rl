@@ -531,3 +531,17 @@ group 的 `lr/initial_lr`、scheduler `base_lrs/_last_lr`，并要求每个 rank
 指标中的 `actor/lr` 必须在每个 update 与目标一致，否则整次门禁无效。LR 改动只允许 named
 fork；原地 resume 继续严格拒绝配置变化。自动脚本支持复用已完成的 train/eval cell，失败时打包
 已有诊断，但不会删除 checkpoint 或修改正在运行的训练。
+
+## D036：WebShop warm-start 数据与技能库在 GPU 训练前 fail closed
+
+锁定 WebShop human demonstration 快照按官方 baseline 的目标归一化和 goal-index 划分得到
+1,010 条 train trajectories；准备入口同时固定 IL JSONL 与 `human_goals.json` SHA-256，不能只用
+轨迹数量判断来源身份。SFT 内部 validation 按完整 trajectory 确定性抽取，官方 validation/test
+不进入 warm-start。
+
+GPU 训练前必须用实际策略 tokenizer 审计完整 prompt+response 长度，并验证 manifest 计数、跨 split
+轨迹隔离、step 连续性、think/action 合同和当前 admissible action 一致性。任一门失败都写出报告并
+返回非零状态。GPU 训练和 skill bank 构建必须再次核对审计通过状态、三份输入 SHA-256；训练还需
+绑定相同 tokenizer 与 `max_length`。WebShop 阶段化 skill bank 只读取 SFT train rows；示范用于来源证明和动作族统计，
+技能正文固定覆盖 query、结果筛选、商品核验、选项选择、回退和购买，不记录商品名、ASIN 或具体
+选项值，避免把实例答案伪装成可泛化技能。

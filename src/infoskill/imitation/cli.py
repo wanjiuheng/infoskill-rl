@@ -10,12 +10,20 @@ from infoskill.integrations.webshop import (
     REGISTERED_TRAIN_TRAJECTORY_COUNT,
 )
 
+from .audit import (
+    audit_prepared_imitation_data,
+    validate_webshop_audit_report,
+)
 from .dataset import (
     prepare_alfworld_imitation_data,
     prepare_demonstration_imitation_data,
 )
 from .handoff import create_handoff
-from .skill_bank import build_planner_skill_bank, rewrite_grounding_skill_ids
+from .skill_bank import (
+    build_planner_skill_bank,
+    build_webshop_skill_bank,
+    rewrite_grounding_skill_ids,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,6 +55,20 @@ def main(argv: list[str] | None = None) -> int:
         "--expected-human-goals-sha256",
         default=REGISTERED_HUMAN_GOALS_SHA256,
     )
+    audit_webshop = commands.add_parser("audit-webshop")
+    audit_webshop.add_argument("--data", required=True)
+    audit_webshop.add_argument("--model", required=True)
+    audit_webshop.add_argument("--output", required=True)
+    audit_webshop.add_argument("--max-length", type=int, default=4352)
+    verify_webshop = commands.add_parser("verify-webshop-audit")
+    verify_webshop.add_argument("--data", required=True)
+    verify_webshop.add_argument("--audit", required=True)
+    verify_webshop.add_argument("--model", required=True)
+    verify_webshop.add_argument("--max-length", type=int, default=4352)
+    build_webshop_bank = commands.add_parser("build-webshop-skill-bank")
+    build_webshop_bank.add_argument("--data", required=True)
+    build_webshop_bank.add_argument("--audit", required=True)
+    build_webshop_bank.add_argument("--output", required=True)
     train = commands.add_parser("train")
     train.add_argument("--model", required=True)
     train.add_argument("--base-model-id", required=True)
@@ -58,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     train.add_argument("--gradient-accumulation-steps", type=int, default=8)
     train.add_argument("--max-length", type=int, default=4352)
     train.add_argument("--resume-from-checkpoint")
+    train.add_argument("--audit")
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--adapter", required=True)
     finalize.add_argument("--imitation-manifest", required=True)
@@ -105,10 +128,88 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(manifest, indent=2))
         return 0
+    if args.command == "audit-webshop":
+        try:
+            from transformers import AutoTokenizer
+        except ImportError as error:
+            raise RuntimeError(
+                "WebShop token audit requires transformers"
+            ) from error
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.model,
+            trust_remote_code=True,
+        )
+        report = audit_prepared_imitation_data(
+            args.data,
+            tokenizer=tokenizer,
+            max_length=args.max_length,
+            output_path=args.output,
+        )
+        print(json.dumps(report, indent=2))
+        return 0 if report["passed"] else 1
+    if args.command == "verify-webshop-audit":
+        data = Path(args.data).expanduser().resolve()
+        report = json.loads(Path(args.audit).read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            raise ValueError("WebShop imitation audit report must be an object")
+        source_checksums = {
+            name: _sha256_file(data / filename)
+            for name, filename in (
+                ("manifest", "manifest.json"),
+                ("train", "train.jsonl"),
+                ("validation", "validation.jsonl"),
+            )
+        }
+        validate_webshop_audit_report(
+            report,
+            data_directory=data,
+            source_checksums=source_checksums,
+            expected_tokenizer=args.model,
+            expected_max_length=args.max_length,
+        )
+        print(
+            json.dumps(
+                {"passed": True, "audit": str(Path(args.audit).resolve())},
+                indent=2,
+            )
+        )
+        return 0
+    if args.command == "build-webshop-skill-bank":
+        report = build_webshop_skill_bank(args.data, args.output, args.audit)
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "train":
         from .train import train_actor_imitation
 
-        data = Path(args.data)
+        data = Path(args.data).expanduser().resolve()
+        data_manifest = json.loads(
+            (data / "manifest.json").read_text(encoding="utf-8")
+        )
+        if data_manifest.get("environment") == "webshop":
+            if not args.audit:
+                raise ValueError(
+                    "WebShop imitation training requires a passed audit report"
+                )
+            audit_report = json.loads(
+                Path(args.audit).read_text(encoding="utf-8")
+            )
+            if not isinstance(audit_report, dict):
+                raise ValueError("WebShop imitation audit report must be an object")
+            source_checksums = {
+                name: _sha256_file(data / filename)
+                for name, filename in (
+                    ("manifest", "manifest.json"),
+                    ("train", "train.jsonl"),
+                    ("validation", "validation.jsonl"),
+                )
+            }
+            validate_webshop_audit_report(
+                audit_report,
+                data_directory=data,
+                source_checksums=source_checksums,
+                expected_tokenizer=args.model,
+                expected_max_length=args.max_length,
+            )
         train_actor_imitation(
             model_path=args.model,
             base_model_id=args.base_model_id,
@@ -121,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             max_length=args.max_length,
             resume_from_checkpoint=args.resume_from_checkpoint,
+            audit_report=args.audit,
         )
         return 0
     manifest = create_handoff(
@@ -132,6 +234,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(json.dumps(manifest, indent=2))
     return 0
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 if __name__ == "__main__":

@@ -15,6 +15,18 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("--expected-demonstrations-sha256", script)
         self.assertIn("--expected-human-goals-sha256", script)
 
+    def test_webshop_cpu_audit_and_skill_bank_actions_are_exposed(self) -> None:
+        script = Path("scripts/run_webshop_imitation.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("  audit)", script)
+        self.assertIn("audit-webshop", script)
+        self.assertIn("--max-length", script)
+        self.assertIn("  build-skill-bank)", script)
+        self.assertIn("build-webshop-skill-bank", script)
+        self.assertIn("verify-webshop-audit", script)
+        self.assertIn('--audit "${DATA_AUDIT}"', script)
+
     def test_warmstart_handoff_is_forwarded_to_train_and_eval(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
         eval_case = script.split("  eval)\n", 1)[1].split("  raw-skill-ab|", 1)[0]

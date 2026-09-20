@@ -11,6 +11,8 @@ ARCHIVE_AUDIT=${ARCHIVE_AUDIT:-${WEBSHOP_DATA_ROOT}/raw/all_trajs.audit.json}
 DEMONSTRATIONS=${DEMONSTRATIONS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/il_trajs_finalized_images.jsonl}
 HUMAN_GOALS=${HUMAN_GOALS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/human_goals.json}
 PREPARED_DATA=${PREPARED_DATA:-${WEBSHOP_DATA_ROOT}/processed/imitation-data}
+DATA_AUDIT=${DATA_AUDIT:-${WEBSHOP_DATA_ROOT}/processed/imitation-data-audit.json}
+SKILL_BANK=${SKILL_BANK:-${WEBSHOP_DATA_ROOT}/processed/webshop-skill-bank.json}
 SFT_OUTPUT=${SFT_OUTPUT:-${PROJECT_ROOT}/runs/webshop-actor-imitation-warmstart}
 MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct}
 BASE_MODEL_ID=${BASE_MODEL_ID:-qwen2.5-7b-instruct}
@@ -53,11 +55,48 @@ case "${ACTION}" in
       --expected-demonstrations-sha256 "${EXPECTED_DEMONSTRATIONS_SHA256}" \
       --expected-human-goals-sha256 "${EXPECTED_HUMAN_GOALS_SHA256}"
     ;;
+  audit)
+    [[ -f "${PREPARED_DATA}/manifest.json" ]] || {
+      echo "prepared WebShop imitation data is missing" >&2
+      exit 2
+    }
+    exec env PYTHONPATH="${PROJECT_ROOT}/src" "${PYTHON_BIN}" \
+      -m infoskill.imitation.cli audit-webshop \
+      --data "${PREPARED_DATA}" \
+      --model "${MODEL_PATH}" \
+      --output "${DATA_AUDIT}" \
+      --max-length "${IMITATION_MAX_LENGTH:-4352}"
+    ;;
+  build-skill-bank)
+    [[ -f "${PREPARED_DATA}/manifest.json" ]] || {
+      echo "prepared WebShop imitation data is missing" >&2
+      exit 2
+    }
+    [[ -f "${DATA_AUDIT}" ]] || {
+      echo "passed WebShop imitation audit is missing: ${DATA_AUDIT}" >&2
+      exit 2
+    }
+    exec env PYTHONPATH="${PROJECT_ROOT}/src" "${PYTHON_BIN}" \
+      -m infoskill.imitation.cli build-webshop-skill-bank \
+      --data "${PREPARED_DATA}" \
+      --audit "${DATA_AUDIT}" \
+      --output "${SKILL_BANK}"
+    ;;
   train)
     [[ -f "${PREPARED_DATA}/manifest.json" ]] || {
       echo "prepared WebShop imitation data is missing" >&2
       exit 2
     }
+    [[ -f "${DATA_AUDIT}" ]] || {
+      echo "passed WebShop imitation audit is missing: ${DATA_AUDIT}" >&2
+      exit 2
+    }
+    env PYTHONPATH="${PROJECT_ROOT}/src" "${PYTHON_BIN}" \
+      -m infoskill.imitation.cli verify-webshop-audit \
+      --data "${PREPARED_DATA}" \
+      --audit "${DATA_AUDIT}" \
+      --model "${MODEL_PATH}" \
+      --max-length "${IMITATION_MAX_LENGTH:-4352}"
     exec env PYTHONPATH="${PROJECT_ROOT}/src" "${PYTHON_BIN}" \
       -m torch.distributed.run \
       --standalone \
@@ -66,6 +105,7 @@ case "${ACTION}" in
       --model "${MODEL_PATH}" \
       --base-model-id "${BASE_MODEL_ID}" \
       --data "${PREPARED_DATA}" \
+      --audit "${DATA_AUDIT}" \
       --output "${SFT_OUTPUT}" \
       --learning-rate "${IMITATION_LEARNING_RATE:-1e-4}" \
       --epochs "${IMITATION_EPOCHS:-2.0}" \
@@ -74,7 +114,7 @@ case "${ACTION}" in
       --max-length "${IMITATION_MAX_LENGTH:-4352}"
     ;;
   *)
-    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|prepare|train" >&2
+    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|prepare|audit|build-skill-bank|train" >&2
     exit 2
     ;;
 esac

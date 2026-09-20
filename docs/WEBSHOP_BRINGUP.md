@@ -12,6 +12,8 @@ demonstrations；不能把 ALFWorld planner 接到 WebShop 上。
 - `OfficialWebShopHumanDemonstrationProvider`：官方 IL JSONL 到统一成功轨迹；
 - `render_webshop_policy_message`：warm-start 与在线 WebShop prompt 的共同合同；
 - `prepare-webshop`：按整条轨迹切分后生成 response-only SFT 数据；
+- `audit-webshop`：逐样本验证格式、动作可执行性、轨迹切分与真实 tokenizer 长度；
+- `build-webshop-skill-bank`：从 train demonstrations 生成阶段化、无商品实例泄漏的技能库；
 - `webshop_asset_doctor.py`：不加载模型的资产/依赖/索引预检；
 - WebShop skill bank 的固定 SHA-256 provenance；
 - InfoSkill 自有分区合同固定从索引 1500 开始训练，防止 validation 500--1499 泄漏。
@@ -124,6 +126,30 @@ bash scripts/run_webshop_imitation.sh prepare
 入口还会校验 `human_goals.json` 与 IL JSONL 的注册 SHA-256；数量或源身份不符都会拒绝继续。输出
 `artifacts/webshop-imitation-data/manifest.json` 会记录两个源文件 SHA-256、轨迹 ID
 SHA-256、train/validation 轨迹数和步骤样本数。
+
+准备完成后先运行 CPU 审计和技能库生成；这两步不加载 7B 模型权重，不占用 GPU：
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+PYTHON_BIN=/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python \
+bash scripts/run_webshop_imitation.sh audit
+PYTHON_BIN=/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python \
+bash scripts/run_webshop_imitation.sh build-skill-bank
+```
+
+审计默认以 Qwen2.5-7B tokenizer 和训练 `max_length=4352` 计算完整 chat-template
+token 长度；轨迹跨 split 泄漏、步骤不连续、response 合同错误、示范动作不在当前动作空间、
+manifest 计数不一致或样本超长都会令 `passed=false` 并返回非零状态。报告默认写入
+`/root/autodl-tmp/wjh/data/webshop/processed/imitation-data-audit.json`。
+
+技能库只读取 `train.jsonl`，不读取内部 SFT validation。它固定覆盖 query、结果筛选、商品
+核验、选项选择、回退和购买六个阶段；示范只用于登记动作族数量和来源校验，不把商品名、
+ASIN 或具体选项写进技能文本。技能库与 provenance manifest 默认写入
+`/root/autodl-tmp/wjh/data/webshop/processed/webshop-skill-bank.json` 及同名
+`.manifest.json`。技能库生成和 GPU warm-start 都会重新核对审计报告的 `passed`、数据目录、
+三份输入 SHA-256；warm-start 还要求 tokenizer 路径与 `max_length` 完全一致。数据或训练配置
+在审计后发生变化时会拒绝启动，必须重新运行 `audit`。训练完成后的 adapter manifest 会记录
+审计报告路径与 SHA-256，供 `m1-handoff` 继续追溯。
 
 在 prompt parity gate 通过前，不启动正式 warm-start。通过后可用：
 

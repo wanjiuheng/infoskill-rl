@@ -218,6 +218,16 @@ _Avoid_: unrelated baseline、different evaluation pipeline
 训练和评测期间只读、带可审计来源版本的技能集合；首阶段不允许在线增删改查。
 _Avoid_: evolving library、dynamic skill bank
 
+**WebShop Imitation Audit**:
+在 GPU warm-start 前用真实策略 tokenizer 对已准备 WebShop SFT 数据执行的 fail-closed 审计；统一检查
+轨迹隔离、步骤连续性、动作可执行性、response 合同、manifest 计数和序列长度。
+_Avoid_: character-length estimate、sample-only inspection、post-training validation
+
+**WebShop Phased Skill Library**:
+只从 train human demonstrations 登记来源和动作族、正文按 query 到 purchase 六阶段固定生成且不含
+商品实例答案的 WebShop 技能库。
+_Avoid_: ASIN memory、validation-derived skill、ALFWorld planner skill reuse
+
 **Episode-Level Candidate Retrieval**:
 仅依据任务目标在 episode 开始时检索一次候选技能，并由同一任务组的所有轨迹共享候选集合。
 _Avoid_: per-step retrieval、rollout-specific candidates

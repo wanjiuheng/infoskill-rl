@@ -21,6 +21,7 @@ def train_actor_imitation(
     gradient_accumulation_steps: int = 8,
     max_length: int = 4352,
     resume_from_checkpoint: str | Path | None = None,
+    audit_report: str | Path | None = None,
 ) -> None:
     """LoRA SFT with prompt tokens masked from the language-model loss."""
 
@@ -28,6 +29,13 @@ def train_actor_imitation(
         raise ValueError("learning rate and epochs must be positive")
     if min(per_device_batch_size, gradient_accumulation_steps, max_length) <= 0:
         raise ValueError("batch and sequence settings must be positive")
+    audit_provenance: dict[str, str] | None = None
+    if audit_report is not None:
+        audit_path = Path(audit_report).expanduser().resolve()
+        audit_provenance = {
+            "imitation_audit": str(audit_path),
+            "imitation_audit_sha256": _sha256(audit_path),
+        }
     try:
         import torch
         from peft import LoraConfig, get_peft_model
@@ -157,32 +165,35 @@ def train_actor_imitation(
     trainer.save_model(str(final_adapter))
     if trainer.is_world_process_zero():
         tokenizer.save_pretrained(str(final_adapter))
+        training_manifest: dict[str, object] = {
+            "schema_version": 1,
+            "status": "complete",
+            "kind": "actor_imitation_lora_sft",
+            "model_path": str(Path(model_path).expanduser().resolve()),
+            "policy_model": policy_model_identity.as_dict(),
+            "train_file_sha256": _sha256(Path(train_file)),
+            "validation_file_sha256": _sha256(Path(validation_file)),
+            "learning_rate": learning_rate,
+            "epochs": epochs,
+            "per_device_batch_size": per_device_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "world_size": int(os.environ.get("WORLD_SIZE", "1")),
+            "effective_batch_size": (
+                per_device_batch_size
+                * gradient_accumulation_steps
+                * int(os.environ.get("WORLD_SIZE", "1"))
+            ),
+            "max_length": max_length,
+            "prompt_encoding": "qwen-chat-template-add-generation-prompt",
+            "response_loss": "response-only",
+            "seed": 0,
+            "global_step": int(trainer.state.global_step),
+        }
+        if audit_provenance is not None:
+            training_manifest.update(audit_provenance)
         _write_training_manifest(
             final_adapter / "imitation-training-manifest.json",
-            {
-                "schema_version": 1,
-                "status": "complete",
-                "kind": "actor_imitation_lora_sft",
-                "model_path": str(Path(model_path).expanduser().resolve()),
-                "policy_model": policy_model_identity.as_dict(),
-                "train_file_sha256": _sha256(Path(train_file)),
-                "validation_file_sha256": _sha256(Path(validation_file)),
-                "learning_rate": learning_rate,
-                "epochs": epochs,
-                "per_device_batch_size": per_device_batch_size,
-                "gradient_accumulation_steps": gradient_accumulation_steps,
-                "world_size": int(os.environ.get("WORLD_SIZE", "1")),
-                "effective_batch_size": (
-                    per_device_batch_size
-                    * gradient_accumulation_steps
-                    * int(os.environ.get("WORLD_SIZE", "1"))
-                ),
-                "max_length": max_length,
-                "prompt_encoding": "qwen-chat-template-add-generation-prompt",
-                "response_loss": "response-only",
-                "seed": 0,
-                "global_step": int(trainer.state.global_step),
-            },
+            training_manifest,
         )
 
 
