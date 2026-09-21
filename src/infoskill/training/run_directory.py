@@ -11,6 +11,9 @@ from infoskill.persistence.model_identity import provenance_matches_pinned_model
 
 _RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _POLICY_WARMUP_RATIO = 0.03
+_MISSING = object()
+_MAX_REPORTED_CONFIG_DIFFERENCES = 20
+_MAX_REPORTED_VALUE_CHARACTERS = 240
 
 
 def resolve_training_run_directory(
@@ -72,12 +75,70 @@ def validate_resume_config(
     previous_without_gpus.pop("num_gpus", None)
     current_without_gpus.pop("num_gpus", None)
     if previous_without_gpus != current_without_gpus:
-        raise RuntimeError("resume configuration differs from the original run")
+        differences = _configuration_differences(
+            previous_without_gpus,
+            current_without_gpus,
+        )
+        displayed = differences[:_MAX_REPORTED_CONFIG_DIFFERENCES]
+        details = "; ".join(
+            f"{path}: previous={_format_config_value(previous_value)}, "
+            f"current={_format_config_value(current_value)}"
+            for path, previous_value, current_value in displayed
+        )
+        if len(differences) > len(displayed):
+            details += (
+                f"; ... and {len(differences) - len(displayed)} more "
+                "difference(s)"
+            )
+        raise RuntimeError(
+            "resume configuration differs from the original run: " + details
+        )
     if previous_gpus != current_gpus and not allow_gpu_change:
         raise RuntimeError(
             "changing GPU count during resume requires a new run_name"
         )
     return previous_gpus
+
+
+def _configuration_differences(
+    previous: object,
+    current: object,
+    *,
+    path: str = "<root>",
+) -> list[tuple[str, object, object]]:
+    """Return stable leaf-level differences for a rejected resume config."""
+    if isinstance(previous, Mapping) and isinstance(current, Mapping):
+        differences: list[tuple[str, object, object]] = []
+        keys = sorted(set(previous) | set(current), key=str)
+        for key in keys:
+            child_path = str(key) if path == "<root>" else f"{path}.{key}"
+            previous_value = previous.get(key, _MISSING)
+            current_value = current.get(key, _MISSING)
+            if previous_value is _MISSING or current_value is _MISSING:
+                differences.append(
+                    (child_path, previous_value, current_value)
+                )
+                continue
+            differences.extend(
+                _configuration_differences(
+                    previous_value,
+                    current_value,
+                    path=child_path,
+                )
+            )
+        return differences
+    if previous != current:
+        return [(path, previous, current)]
+    return []
+
+
+def _format_config_value(value: object) -> str:
+    if value is _MISSING:
+        return "<missing>"
+    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if len(rendered) <= _MAX_REPORTED_VALUE_CHARACTERS:
+        return rendered
+    return rendered[: _MAX_REPORTED_VALUE_CHARACTERS - 3] + "..."
 
 
 def _normalize_extendable_training_target(

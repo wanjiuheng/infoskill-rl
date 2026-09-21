@@ -12,6 +12,30 @@ from infoskill.training.run_directory import (
 
 
 class ResumeRunDirectoryTests(unittest.TestCase):
+    def test_resume_config_mismatch_reports_exact_field_and_values(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000175"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {"environment_workers": 1},
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {"environment_workers": 2},
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"runtime_options\.environment_workers: previous=1, current=2",
+            ):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_legacy_alfworld_checkpoint_accepts_explicit_environment_defaults(
         self,
     ) -> None:
