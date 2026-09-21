@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Mapping
 
 
+_WORKSPACE_PATH_PREFIX = "@workspace/"
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimePaths:
     policy_model: str
@@ -52,7 +55,9 @@ class AppConfig:
         payload = yaml.safe_load(source.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or not isinstance(payload.get("paths"), dict):
             raise ValueError("config requires a paths mapping")
-        path_values = dict(payload.pop("paths"))
+        path_values = _expand_workspace_paths(
+            dict(payload.pop("paths")), source=source
+        )
         paths = RuntimePaths(**path_values)
         config = cls(paths=paths, **payload)
         config.validate()
@@ -88,3 +93,40 @@ class AppConfig:
         from dataclasses import asdict
 
         return asdict(self)
+
+
+def _expand_workspace_paths(
+    values: dict[str, object], *, source: Path
+) -> dict[str, object]:
+    """Anchor portable config paths to the workspace containing this config."""
+
+    if not any(
+        isinstance(value, str) and value.startswith(_WORKSPACE_PATH_PREFIX)
+        for value in values.values()
+    ):
+        return values
+    resolved_source = source.resolve()
+    project = resolved_source.parent.parent
+    if (
+        resolved_source.parent.name != "configs"
+        or project.name != "infoskill"
+        or project.parent.name != "alfworld_eval"
+    ):
+        raise ValueError(
+            "@workspace paths require alfworld_eval/infoskill/configs"
+        )
+    workspace = project.parent.parent
+    expanded = dict(values)
+    for key, value in values.items():
+        if not isinstance(value, str) or not value.startswith(
+            _WORKSPACE_PATH_PREFIX
+        ):
+            continue
+        relative = value[len(_WORKSPACE_PATH_PREFIX) :]
+        if not relative or ".." in Path(relative).parts:
+            raise ValueError(f"unsafe @workspace path: {key}")
+        candidate = (workspace / relative).resolve()
+        if not candidate.is_relative_to(workspace):
+            raise ValueError(f"@workspace path escapes workspace: {key}")
+        expanded[key] = str(candidate)
+    return expanded

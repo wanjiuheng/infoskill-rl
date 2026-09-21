@@ -55,6 +55,11 @@ def validate_resume_config(
     previous_without_gpus = _with_runtime_defaults(previous)
     current_without_gpus = _with_runtime_defaults(current)
     previous_without_gpus, current_without_gpus = (
+        _normalize_workspace_relocation(
+            previous_without_gpus, current_without_gpus
+        )
+    )
+    previous_without_gpus, current_without_gpus = (
         _normalize_extendable_training_target(
             previous_without_gpus,
             current_without_gpus,
@@ -175,6 +180,68 @@ def _normalize_extendable_training_target(
 
 def _warmup_steps(max_updates: int) -> int:
     return int(max_updates * _POLICY_WARMUP_RATIO)
+
+
+def _normalize_workspace_relocation(
+    previous: Mapping[str, object],
+    current: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Compare relocated workspaces by relative path, not machine mount point."""
+
+    previous_root = _workspace_root_from_output(previous)
+    current_root = _workspace_root_from_output(current)
+    if previous_root is None or current_root is None or previous_root == current_root:
+        return dict(previous), dict(current)
+    return (
+        _workspace_relative_values(previous, previous_root),
+        _workspace_relative_values(current, current_root),
+    )
+
+
+def _workspace_root_from_output(config: Mapping[str, object]) -> str | None:
+    app_config = config.get("app_config")
+    if not isinstance(app_config, Mapping):
+        return None
+    paths = app_config.get("paths")
+    if not isinstance(paths, Mapping):
+        return None
+    output = paths.get("output_root")
+    if not isinstance(output, str):
+        return None
+    suffix = "/alfworld_eval/infoskill/runs"
+    normalized = output.replace("\\", "/").rstrip("/")
+    if not normalized.endswith(suffix):
+        return None
+    root = normalized[: -len(suffix)]
+    return root if root.startswith("/") and root != "/" else None
+
+
+def _workspace_relative_values(value: object, root: str) -> object:
+    if isinstance(value, Mapping):
+        return {
+            key: _workspace_relative_values(item, root)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_workspace_relative_values(item, root) for item in value]
+    if isinstance(value, str):
+        normalized = value.replace("\\", "/")
+        if normalized == root:
+            return "@workspace"
+        if normalized.startswith(root + "/"):
+            return "@workspace/" + normalized[len(root) + 1 :]
+        # The current machine may expose the same directory through a symlink
+        # (for example /models -> /opt/cfs). Only normalize an existing target
+        # when its resolved path remains inside the declared workspace.
+        if normalized.startswith("/"):
+            candidate = Path(value)
+            if candidate.exists():
+                resolved = candidate.resolve().as_posix()
+                if resolved == root:
+                    return "@workspace"
+                if resolved.startswith(root + "/"):
+                    return "@workspace/" + resolved[len(root) + 1 :]
+    return value
 
 
 def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:

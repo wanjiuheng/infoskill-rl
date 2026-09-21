@@ -12,6 +12,50 @@ from infoskill.training.run_directory import (
 
 
 class ResumeRunDirectoryTests(unittest.TestCase):
+    def test_relocated_workspace_keeps_resume_identity_checks(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000175"
+        old_root = "/root/autodl-tmp/wjh"
+        new_root = "/opt/cfs/model/model/model_h20/wanjh2/data/wjh"
+        previous = {
+            "num_gpus": 3,
+            "app_config": {
+                "paths": {
+                    "output_root": old_root + "/alfworld_eval/infoskill/runs",
+                    "semantic_model": old_root + "/models/Qwen/embedding",
+                    "grounding_data": old_root + "/alfworld_eval/infoskill/artifacts/grounding",
+                }
+            },
+            "grounding_data": {
+                "root": old_root + "/alfworld_eval/infoskill/artifacts/grounding",
+                "manifest_sha256": "same-content",
+            },
+        }
+        current = json.loads(
+            json.dumps(previous).replace(old_root, new_root)
+        )
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            self.assertEqual(
+                validate_resume_config(
+                    checkpoint, current, allow_gpu_change=False
+                ),
+                3,
+            )
+            changed_content = json.loads(json.dumps(current))
+            changed_content["grounding_data"]["manifest_sha256"] = "changed"
+            with self.assertRaisesRegex(RuntimeError, "manifest_sha256"):
+                validate_resume_config(
+                    checkpoint, changed_content, allow_gpu_change=False
+                )
+            changed_path = json.loads(json.dumps(current))
+            changed_path["app_config"]["paths"]["grounding_data"] += "-different"
+            with self.assertRaisesRegex(RuntimeError, "grounding_data"):
+                validate_resume_config(
+                    checkpoint, changed_path, allow_gpu_change=False
+                )
+
     def test_resume_config_mismatch_reports_exact_field_and_values(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000175"
         previous = {

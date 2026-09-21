@@ -108,7 +108,10 @@ class PolicyModelIdentityTests(unittest.TestCase):
         self.assertEqual(config.policy_model_id, "qwen2.5-7b-instruct")
         self.assertEqual(
             config.paths.policy_model,
-            "/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct",
+            str(
+                Path("configs/alfworld_qwen25_7b.yaml").resolve().parents[3]
+                / "models/Qwen/Qwen2.5-7B-Instruct"
+            ),
         )
 
     def test_sft_comparison_config_remains_registered(self) -> None:

@@ -1,15 +1,15 @@
 paths:
   # Main 7B protocol starts from the registered original instruct model.
-  policy_model: /root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct
+  policy_model: "@workspace/models/Qwen/Qwen2.5-7B-Instruct"
   policy_adapter: null
-  semantic_model: /root/autodl-tmp/wjh/models/Qwen/Qwen3-Embedding-0.6B
-  skillrl_source: /root/autodl-tmp/wjh/alfworld_eval/SkillRL
-  alfworld_source: /root/autodl-tmp/wjh/alfworld_eval/alfworld-master
-  alfworld_data: /root/autodl-tmp/wjh/data/alfworld/alfworld
-  alfworld_config: /root/autodl-tmp/wjh/alfworld_eval/alfworld-master/configs/base_config.yaml
-  skill_bank: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/memory_data/alfworld/claude_style_skills.json
+  semantic_model: "@workspace/models/Qwen/Qwen3-Embedding-0.6B"
+  skillrl_source: "@workspace/alfworld_eval/SkillRL"
+  alfworld_source: "@workspace/alfworld_eval/alfworld-master"
+  alfworld_data: "@workspace/data/alfworld/alfworld"
+  alfworld_config: "@workspace/alfworld_eval/alfworld-master/configs/base_config.yaml"
+  skill_bank: "@workspace/alfworld_eval/SkillRL/memory_data/alfworld/claude_style_skills.json"
   skill_bank_manifest: configs/alfworld_skill_bank_manifest.json
-  output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
+  output_root: "@workspace/alfworld_eval/infoskill/runs"
   # Legacy Transformers-only field; VERL M1 eval loads POLICY_CHECKPOINT instead.
   infoskill_checkpoint: null
   # Required for M1 training; GROUNDING_DATA may override it at launch time.
