@@ -159,6 +159,7 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         normalized_options.setdefault("checkpoint_keep_recent", 2)
         normalized_options.setdefault("checkpoint_keep_best_valid", False)
         normalized_options.setdefault("actor_learning_rate", 1e-6)
+        normalized_options.setdefault("training_drift_guard", None)
         normalized["runtime_options"] = normalized_options
     return normalized
 
@@ -199,6 +200,12 @@ def _without_performance_candidates(
     # learning rate.  The checkpoint loader reapplies it after restoring the
     # optimizer/scheduler state; in-place resumes remain strict.
     normalized_options.pop("actor_learning_rate", None)
+    # Once the actor state is inside a portable GRPO checkpoint, a named
+    # resume fork no longer reloads the original imitation handoff directly.
+    normalized_options.pop("warmstart_handoff", None)
+    # A named fork may add or tune a run-local safety pause without changing
+    # model semantics or mutating the source checkpoint directory.
+    normalized_options.pop("training_drift_guard", None)
     normalized["runtime_options"] = normalized_options
     return normalized
 

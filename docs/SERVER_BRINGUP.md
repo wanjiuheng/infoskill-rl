@@ -2110,6 +2110,29 @@ bash scripts/run_m1_splitk1_fresh_runtime_matrix.sh
 `controls_valid` 和 `classification` 为准，并自动打包三个子报告、resolved config 与日志。
 该任务预计 35–55 分钟，主要耗时是 12 次全新 runtime 初始化，不会产生新 checkpoint。
 
+### 从 M1 step 175 启动低学习率恢复线
+
+`run_m1_u175_recovery.sh` 会在启动前验证源 run 的 step 175/195/200、grounding、skill bank、
+空闲进程与至少 15 GiB 磁盘。它只创建新的命名 run，不修改源 checkpoint；默认以 `1e-6`
+训练至总目标 445，并启用最近 5 个 + best + final 与连续两次联合漂移暂停门。
+
+```bash
+cd /root/autodl-tmp/wjh/alfworld_eval/infoskill
+mkdir -p logs
+STAMP=$(date +%Y%m%d_%H%M%S)
+LOG="$PWD/logs/m1-u175-recovery-${STAMP}.log"
+nohup bash scripts/run_m1_u175_recovery.sh >"$LOG" 2>&1 &
+PID=$!
+printf '%s\n' "$PID" >"${LOG}.pid"
+echo "PID=$PID"
+echo "LOG=$LOG"
+tail -f "$LOG"
+```
+
+若 `training-drift-guard.json` 的 `triggered` 为 true，训练已经在完整 update 的新 checkpoint
+边界安全暂停；先分析该文件、`training_summary.json`、`metrics.jsonl` 和对应 trace，再决定是否
+继续，不能绕过安全门直接原地启动。
+
 结束后先看精简报告。只有 `derived_formal_gate_passed: true` 才能把该 run 用作 M1 的
 `GROUNDING_DATA`：
 

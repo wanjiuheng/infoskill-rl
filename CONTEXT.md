@@ -591,3 +591,7 @@ _Avoid_: bitwise cross-world-size identity、restart-from-scratch equivalence
 **Actor Learning-Rate Fork**:
 从同一 portable checkpoint 创建的命名短程分支；保留 LoRA optimizer moments、scheduler 进度、任务游标和随机状态，只在恢复完成后显式覆盖 actor optimizer/scheduler 的目标学习率。固定 `1e-6 / 3e-6 / 1e-5` 分支必须使用相同训练工作负载和同一 140 条评测协议。
 _Avoid_: in-place LR mutation、optimizer reset、config-only LR change
+
+**Training Drift Guard**:
+训练 update 完整提交后，根据多个训练指标的联合、连续越界条件锁存安全暂停；触发时必须先保存可恢复 checkpoint，并把阈值、连续次数、观测值和暂停原因写入产物。
+_Avoid_: single-metric spike stop、mid-update termination、silent early exit

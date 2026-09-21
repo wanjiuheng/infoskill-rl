@@ -459,6 +459,28 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--drift-guard-ppo-kl-threshold",
+        type=float,
+        help=(
+            "pause after sustained simultaneous PPO KL and invalid-action "
+            "drift; both thresholds must be supplied"
+        ),
+    )
+    train.add_argument(
+        "--drift-guard-invalid-action-rate-threshold",
+        type=float,
+        help=(
+            "invalid-action half of the optional training drift guard; both "
+            "thresholds must be supplied"
+        ),
+    )
+    train.add_argument(
+        "--drift-guard-consecutive-updates",
+        type=int,
+        default=2,
+        help="simultaneous threshold breaches required before a safe pause",
+    )
+    train.add_argument(
         "--checkpoint-keep-best-valid",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -621,6 +643,21 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("checkpoint_keep_recent must be positive")
     if not math.isfinite(args.actor_learning_rate) or args.actor_learning_rate <= 0:
         raise ValueError("actor_learning_rate must be finite and positive")
+    drift_guard_thresholds = (
+        args.drift_guard_ppo_kl_threshold,
+        args.drift_guard_invalid_action_rate_threshold,
+    )
+    if sum(value is not None for value in drift_guard_thresholds) == 1:
+        raise ValueError(
+            "drift guard thresholds must be configured together"
+        )
+    if any(
+        value is not None and (not math.isfinite(value) or value < 0)
+        for value in drift_guard_thresholds
+    ):
+        raise ValueError("drift guard thresholds must be finite and non-negative")
+    if args.drift_guard_consecutive_updates <= 0:
+        raise ValueError("drift_guard_consecutive_updates must be positive")
     minimum_token_budget = config.max_prompt_tokens + config.max_response_tokens
     if args.policy_max_tokens_per_gpu < minimum_token_budget:
         raise ValueError(
@@ -742,6 +779,15 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "segment_end_update": args.segment_end_update,
                     "checkpoint_keep_recent": args.checkpoint_keep_recent,
                     "actor_learning_rate": args.actor_learning_rate,
+                    "drift_guard_ppo_kl_threshold": (
+                        args.drift_guard_ppo_kl_threshold
+                    ),
+                    "drift_guard_invalid_action_rate_threshold": (
+                        args.drift_guard_invalid_action_rate_threshold
+                    ),
+                    "drift_guard_consecutive_updates": (
+                        args.drift_guard_consecutive_updates
+                    ),
                     "checkpoint_keep_best_valid": (
                         args.checkpoint_keep_best_valid
                     ),
@@ -785,6 +831,15 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         checkpoint_keep_recent=args.checkpoint_keep_recent,
         checkpoint_keep_best_valid=args.checkpoint_keep_best_valid,
         actor_learning_rate=args.actor_learning_rate,
+        drift_guard_ppo_kl_threshold=(
+            args.drift_guard_ppo_kl_threshold
+        ),
+        drift_guard_invalid_action_rate_threshold=(
+            args.drift_guard_invalid_action_rate_threshold
+        ),
+        drift_guard_consecutive_updates=(
+            args.drift_guard_consecutive_updates
+        ),
         warmstart_handoff=args.warmstart_handoff,
     )
 

@@ -559,3 +559,17 @@ validation。跨 split 内容重复继续作为硬失败；同一 split 的官�
 包含 response 与 EOS 后最大为 16,305。不得截断 observation、删除整条成功轨迹或让 response
 loss 静默消失；WebShop warm-start 注册上限改为 16,384，并以每卡 batch 1、梯度累积 16 保持
 原有效 batch、降低长序列峰值显存。GPU 训练仍必须绑定使用相同上限通过的新审计报告。
+
+## D038：M1 从最佳 step-175 命名恢复，并以联合漂移门 fail closed
+
+warm-start M1 在固定评测协议下于 step 175 达到当前最佳，随后 step 195/200 的成功率下降且
+invalid action rate 明显上升。恢复线因此只能从不可变 `step-000175` 创建新的命名 run，actor
+学习率降为 `1e-6`；源 run 的 step 175/195/200 均作为证据保留，新的 checkpoint retention
+仅作用于恢复 run，固定为最近 5 个 + best valid + final。
+
+恢复线显式启用联合漂移门：只有 `actor/ppo_kl > 0.02` 与
+`rollout/invalid_action_rate > 0.05` 在同一 update 同时成立且连续两次，才锁存触发。触发发生在
+完整 update 结束后，训练器先提交该 update 的 portable checkpoint，再以
+`pause_reason=training_drift_guard` 正常暂停；门的配置、逐次判定和触发点分别写入 resolved
+config、metrics、`training-drift-guard.json`、training control 与 summary。历史训练默认不启用，
+命名 fork 可新增或调整该安全门，原地 resume 仍要求配置完全一致。

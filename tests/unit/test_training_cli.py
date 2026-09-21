@@ -242,6 +242,58 @@ class TrainingCliTests(unittest.TestCase):
                     + ["--checkpoint-keep-recent", "0"]
                 )
 
+    def test_training_drift_guard_is_explicit_and_auditable(self) -> None:
+        default = _parser().parse_args(self._arguments())
+        guarded = _parser().parse_args(
+            self._arguments()
+            + [
+                "--drift-guard-ppo-kl-threshold",
+                "0.02",
+                "--drift-guard-invalid-action-rate-threshold",
+                "0.05",
+                "--drift-guard-consecutive-updates",
+                "2",
+            ]
+        )
+
+        self.assertIsNone(default.drift_guard_ppo_kl_threshold)
+        self.assertIsNone(default.drift_guard_invalid_action_rate_threshold)
+        self.assertEqual(default.drift_guard_consecutive_updates, 2)
+        self.assertEqual(guarded.drift_guard_ppo_kl_threshold, 0.02)
+        self.assertEqual(
+            guarded.drift_guard_invalid_action_rate_threshold,
+            0.05,
+        )
+
+        output = io.StringIO()
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(
+                    self._arguments()
+                    + [
+                        "--drift-guard-ppo-kl-threshold",
+                        "0.02",
+                        "--drift-guard-invalid-action-rate-threshold",
+                        "0.05",
+                    ]
+                )
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertEqual(payload["drift_guard_ppo_kl_threshold"], 0.02)
+        self.assertEqual(
+            payload["drift_guard_invalid_action_rate_threshold"],
+            0.05,
+        )
+        self.assertEqual(payload["drift_guard_consecutive_updates"], 2)
+
+        with patch("pathlib.Path.exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "must be configured together"):
+                main(
+                    self._arguments()
+                    + ["--drift-guard-ppo-kl-threshold", "0.02"]
+                )
+
     def test_grounding_accepts_explicit_resume_and_inactivity_timeout(self) -> None:
         arguments = _parser().parse_args(
             [

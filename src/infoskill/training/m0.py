@@ -43,6 +43,7 @@ from infoskill.persistence import (
 from infoskill.persistence.model_identity import verify_policy_model_identity
 from infoskill.rollout import GenerationParameters, PromptLengthError
 
+from .drift_guard import TrainingDriftGuard
 from .plan import TrainingPlan, TrainingProfile
 from .rollout_curve import (
     load_training_rollout_step_scores,
@@ -162,6 +163,9 @@ def run_policy_training(
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
     actor_learning_rate: float = 1e-6,
+    drift_guard_ppo_kl_threshold: float | None = None,
+    drift_guard_invalid_action_rate_threshold: float | None = None,
+    drift_guard_consecutive_updates: int = 2,
     segment_end_update: int | None = None,
     warmstart_handoff: str | None = None,
 ) -> int:
@@ -181,6 +185,37 @@ def run_policy_training(
         raise ValueError("checkpoint_keep_recent must be positive")
     if not math.isfinite(actor_learning_rate) or actor_learning_rate <= 0:
         raise ValueError("actor_learning_rate must be finite and positive")
+    drift_guard_thresholds = (
+        drift_guard_ppo_kl_threshold,
+        drift_guard_invalid_action_rate_threshold,
+    )
+    if sum(value is not None for value in drift_guard_thresholds) == 1:
+        raise ValueError("drift guard thresholds must be configured together")
+    if drift_guard_consecutive_updates <= 0:
+        raise ValueError("drift_guard_consecutive_updates must be positive")
+    drift_guard = (
+        TrainingDriftGuard(
+            ppo_kl_threshold=float(drift_guard_ppo_kl_threshold),
+            invalid_action_rate_threshold=float(
+                drift_guard_invalid_action_rate_threshold
+            ),
+            consecutive_updates=drift_guard_consecutive_updates,
+        )
+        if drift_guard_ppo_kl_threshold is not None
+        and drift_guard_invalid_action_rate_threshold is not None
+        else None
+    )
+    drift_guard_config = (
+        {
+            "ppo_kl_threshold": drift_guard_ppo_kl_threshold,
+            "invalid_action_rate_threshold": (
+                drift_guard_invalid_action_rate_threshold
+            ),
+            "consecutive_updates": drift_guard_consecutive_updates,
+        }
+        if drift_guard is not None
+        else None
+    )
     if warmstart_handoff is not None and resume is not None:
         raise ValueError("warmstart_handoff and resume are mutually exclusive")
     if warmstart_handoff is not None and mode not in {
@@ -438,6 +473,7 @@ def run_policy_training(
             "checkpoint_keep_recent": checkpoint_keep_recent,
             "checkpoint_keep_best_valid": checkpoint_keep_best_valid,
             "actor_learning_rate": actor_learning_rate,
+            "training_drift_guard": drift_guard_config,
             "warmstart_handoff": handoff_directory,
             "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
             "infoskill_auxiliary_micro_batch_size": (
@@ -525,6 +561,7 @@ def run_policy_training(
             "segment_start_update": initial_global_update,
             "segment_end_update": segment_end_update,
             "actor_learning_rate": actor_learning_rate,
+            "training_drift_guard": drift_guard_config,
         },
         "checkpoint_retention": {
             "schema_version": 1,
@@ -692,11 +729,28 @@ def run_policy_training(
     pause_requested = False
     final_control_status: str | None = None
     control_path = run_directory / "training-control.json"
+    drift_guard_path = run_directory / "training-drift-guard.json"
     previous_signal_handlers: dict[int, object] = {}
+
+    if drift_guard is not None:
+        _write_json(drift_guard_path, drift_guard.as_dict())
 
     def request_pause(signal_number: int, _frame: object) -> None:
         nonlocal pause_requested
         pause_requested = True
+
+    def pause_reason() -> str | None:
+        if pause_requested:
+            return "signal"
+        if drift_guard is not None and drift_guard.triggered:
+            return "training_drift_guard"
+        if (
+            segment_end_update is not None
+            and trainer is not None
+            and trainer.global_update >= segment_end_update
+        ):
+            return "segment_end_update"
+        return None
 
     def write_training_control(status: str) -> None:
         _write_json(
@@ -710,6 +764,10 @@ def run_policy_training(
                 ),
                 "checkpoint_every": plan.checkpoint_every,
                 "pause_signal": "SIGINT or SIGTERM",
+                "pause_reason": pause_reason(),
+                "training_drift_guard": (
+                    drift_guard.as_dict() if drift_guard is not None else None
+                ),
                 "resume_from": (
                     str(checkpoint_to_load)
                     if checkpoint_to_load is not None
@@ -836,6 +894,30 @@ def run_policy_training(
             groups: tuple,
         ) -> None:
             _require_finite_metrics(update.values)
+            guard_was_triggered = (
+                drift_guard.triggered if drift_guard is not None else False
+            )
+            guard_observation = (
+                drift_guard.observe(update)
+                if drift_guard is not None
+                else None
+            )
+            if drift_guard is not None:
+                _write_json(drift_guard_path, drift_guard.as_dict())
+            if (
+                guard_observation is not None
+                and guard_observation.triggered
+                and not guard_was_triggered
+            ):
+                logger.warning(
+                    "Training drift guard triggered at update=%d: "
+                    "ppo_kl=%.6f invalid=%.6f consecutive=%d; "
+                    "committing a recovery checkpoint before pause",
+                    update.global_update,
+                    guard_observation.ppo_kl,
+                    guard_observation.invalid_action_rate,
+                    guard_observation.consecutive_breaches,
+                )
             advantages = tuple(
                 group_relative_advantages(
                     [trajectory.reward for trajectory in group.trajectories]
@@ -858,6 +940,19 @@ def run_policy_training(
             values["schedule/cursor"] = schedule.cursor
             values["schedule/total"] = schedule.total
             values["trace"] = str(trace_path)
+            if guard_observation is not None:
+                values.update(
+                    {
+                        "drift_guard/breached": guard_observation.breached,
+                        "drift_guard/consecutive_breaches": (
+                            guard_observation.consecutive_breaches
+                        ),
+                        "drift_guard/triggered": guard_observation.triggered,
+                        "drift_guard/trigger_update": (
+                            guard_observation.trigger_update
+                        ),
+                    }
+                )
             values.update(
                 {
                     f"task_outcomes/{key}": value
@@ -880,7 +975,9 @@ def run_policy_training(
                 update.values.get("rollout/invalid_action_rate", float("nan")),
             )
             progress.update(1)
-            write_training_control("pause_requested" if pause_requested else "running")
+            write_training_control(
+                "pause_requested" if pause_reason() is not None else "running"
+            )
 
         evaluate = _evaluation_callback(
             config=config,
@@ -901,11 +998,7 @@ def run_policy_training(
         )
 
         def should_pause() -> bool:
-            return pause_requested or (
-                segment_end_update is not None
-                and trainer is not None
-                and trainer.global_update >= segment_end_update
-            )
+            return pause_reason() is not None
 
         trainer = InfoSkillTrainer(
             collector=training_collector,
@@ -948,13 +1041,21 @@ def run_policy_training(
             "global_update": trainer.global_update,
             "task_cursor": schedule.cursor,
             "max_updates": plan.max_updates,
+            "pause_reason": pause_reason() if trainer.paused else None,
+            "training_drift_guard": (
+                drift_guard.as_dict() if drift_guard is not None else None
+            ),
         }
+        if drift_guard is not None:
+            _write_json(drift_guard_path, drift_guard.as_dict())
         _write_json(run_directory / "training_summary.json", summary)
         final_control_status = str(summary["status"])
         if trainer.paused:
             logger.info(
-                "Pause completed at update=%d; resume from checkpoints/step-%06d",
+                "Pause completed at update=%d reason=%s; "
+                "resume from checkpoints/step-%06d",
                 trainer.global_update,
+                pause_reason(),
                 trainer.global_update,
             )
         logger.info("Policy training segment complete: %s", json.dumps(summary))

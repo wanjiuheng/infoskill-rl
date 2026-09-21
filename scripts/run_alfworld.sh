@@ -35,6 +35,9 @@ SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"
 CHECKPOINT_KEEP_RECENT="${CHECKPOINT_KEEP_RECENT:-2}"
 CHECKPOINT_KEEP_BEST_VALID="${CHECKPOINT_KEEP_BEST_VALID:-0}"
 ACTOR_LEARNING_RATE="${ACTOR_LEARNING_RATE:-1e-6}"
+DRIFT_GUARD_PPO_KL_THRESHOLD="${DRIFT_GUARD_PPO_KL_THRESHOLD:-}"
+DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD="${DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD:-}"
+DRIFT_GUARD_CONSECUTIVE_UPDATES="${DRIFT_GUARD_CONSECUTIVE_UPDATES:-2}"
 GROUNDING_DATA="${GROUNDING_DATA:-}"          # M1: completed train-only grounding run
 # Short-lived process boundary for TextWorld/Fast Downward resource cleanup.
 GROUNDING_WORKER_BATCH_SIZE="${GROUNDING_WORKER_BATCH_SIZE:-64}"
@@ -191,6 +194,17 @@ then
 fi
 if [[ "${CHECKPOINT_KEEP_BEST_VALID}" != "0" && "${CHECKPOINT_KEEP_BEST_VALID}" != "1" ]]; then
   echo "CHECKPOINT_KEEP_BEST_VALID must be 0 or 1" >&2
+  exit 2
+fi
+if { [[ -n "${DRIFT_GUARD_PPO_KL_THRESHOLD}" ]] \
+      && [[ -z "${DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD}" ]]; } \
+  || { [[ -z "${DRIFT_GUARD_PPO_KL_THRESHOLD}" ]] \
+      && [[ -n "${DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD}" ]]; }; then
+  echo "both drift guard thresholds must be configured together" >&2
+  exit 2
+fi
+if [[ ! "${DRIFT_GUARD_CONSECUTIVE_UPDATES}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "DRIFT_GUARD_CONSECUTIVE_UPDATES must be a positive integer" >&2
   exit 2
 fi
 if [[ "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" != "0" && "${SKIP_UNUSED_OLD_LOGPROB_ENTROPY}" != "1" ]]; then
@@ -790,6 +804,13 @@ case "${ACTION}" in
     fi
     if [[ -n "${EVAL_BATCH_SIZE}" ]]; then
       TRAIN_ARGS+=(--eval-batch-size "${EVAL_BATCH_SIZE}")
+    fi
+    if [[ -n "${DRIFT_GUARD_PPO_KL_THRESHOLD}" ]]; then
+      TRAIN_ARGS+=(
+        --drift-guard-ppo-kl-threshold "${DRIFT_GUARD_PPO_KL_THRESHOLD}"
+        --drift-guard-invalid-action-rate-threshold "${DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD}"
+        --drift-guard-consecutive-updates "${DRIFT_GUARD_CONSECUTIVE_UPDATES}"
+      )
     fi
     if [[ "${DRY_RUN}" == "1" ]]; then
       TRAIN_ARGS+=(--dry-run)

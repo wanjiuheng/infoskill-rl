@@ -191,6 +191,43 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertIn("--checkpoint-keep-best-valid", train_case)
 
+    def test_training_forwards_drift_guard_controls(self) -> None:
+        script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+
+        self.assertIn(
+            'DRIFT_GUARD_PPO_KL_THRESHOLD="${DRIFT_GUARD_PPO_KL_THRESHOLD:-}"',
+            script,
+        )
+        self.assertIn(
+            'DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD="${DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD:-}"',
+            script,
+        )
+        self.assertIn(
+            '--drift-guard-ppo-kl-threshold "${DRIFT_GUARD_PPO_KL_THRESHOLD}"',
+            train_case,
+        )
+        self.assertIn(
+            '--drift-guard-invalid-action-rate-threshold "${DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD}"',
+            train_case,
+        )
+
+    def test_m1_u175_recovery_recipe_is_fail_closed_and_preserves_source(self) -> None:
+        script = Path("scripts/run_m1_u175_recovery.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("checkpoints/step-000175", script)
+        self.assertIn("checkpoints/step-000195", script)
+        self.assertIn("checkpoints/step-000200", script)
+        self.assertIn("ACTOR_LEARNING_RATE=1e-6", script)
+        self.assertIn("CHECKPOINT_KEEP_RECENT=5", script)
+        self.assertIn("CHECKPOINT_KEEP_BEST_VALID=1", script)
+        self.assertIn("DRIFT_GUARD_PPO_KL_THRESHOLD=0.02", script)
+        self.assertIn("DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD=0.05", script)
+        self.assertIn("DRIFT_GUARD_CONSECUTIVE_UPDATES=2", script)
+        self.assertNotIn("rm ", script)
+
     def test_deep_m1_candidates_are_default_off_and_forwarded(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(
