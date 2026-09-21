@@ -6,15 +6,13 @@ cd "${PROJECT_ROOT}"
 
 PYTHON_BIN="${PYTHON:-/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python}"
 SOURCE_RUN="${SOURCE_RUN:-${PROJECT_ROOT}/runs/20260920T044319Z-m1-handoff-lr3e6-formal-u200-20260920_124241}"
+SOURCE_RESOLVED_CONFIG="${SOURCE_RUN}/resolved_config.json"
 RESUME_CHECKPOINT="${SOURCE_RUN}/checkpoints/step-000175"
 PROTECTED_CHECKPOINTS=(
   "${SOURCE_RUN}/checkpoints/step-000175"
   "${SOURCE_RUN}/checkpoints/step-000195"
   "${SOURCE_RUN}/checkpoints/step-000200"
 )
-GROUNDING_DATA="${GROUNDING_DATA:-${PROJECT_ROOT}/artifacts/alfworld-imitation-data-grounding}"
-SKILL_BANK="${SKILL_BANK:-${PROJECT_ROOT}/artifacts/m1-handoff/skill-bank.json}"
-SKILL_BANK_MANIFEST="${SKILL_BANK_MANIFEST:-${PROJECT_ROOT}/artifacts/m1-handoff/skill-bank-manifest.json}"
 STAMP="$(date +%Y%m%d_%H%M%S)"
 RUN_NAME="${RUN_NAME:-m1-handoff-recovery-s175-lr1e6-u445-${STAMP}}"
 
@@ -22,6 +20,38 @@ RUN_NAME="${RUN_NAME:-m1-handoff-recovery-s175-lr1e6-u445-${STAMP}}"
   echo "Python interpreter is unavailable: ${PYTHON_BIN}" >&2
   exit 2
 }
+
+[[ -f "${SOURCE_RESOLVED_CONFIG}" ]] || {
+  echo "Source run has no resolved config: ${SOURCE_RESOLVED_CONFIG}" >&2
+  exit 2
+}
+
+# Resolve identity-bearing data paths from the source run itself. Generic
+# GROUNDING_DATA/SKILL_BANK variables are intentionally ignored here because
+# they are commonly exported by prior experiments and can silently fork the
+# recovery onto different data.
+mapfile -t SOURCE_PATHS < <(
+  "${PYTHON_BIN}" - "${SOURCE_RESOLVED_CONFIG}" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+config = json.load(open(path, encoding="utf-8"))
+paths = config["app_config"]["paths"]
+for key in ("grounding_data", "skill_bank", "skill_bank_manifest"):
+    value = paths.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"source resolved config has no non-empty {key}: {path}")
+    print(value)
+PY
+)
+[[ "${#SOURCE_PATHS[@]}" -eq 3 ]] || {
+  echo "Could not resolve the three source data paths" >&2
+  exit 2
+}
+RECOVERY_GROUNDING_DATA="${SOURCE_PATHS[0]}"
+RECOVERY_SKILL_BANK="${SOURCE_PATHS[1]}"
+RECOVERY_SKILL_BANK_MANIFEST="${SOURCE_PATHS[2]}"
 
 # These three immutable source checkpoints are inputs/evidence. The recovery
 # run owns a separate directory and its retention policy cannot touch them.
@@ -33,9 +63,9 @@ for checkpoint in "${PROTECTED_CHECKPOINTS[@]}"; do
 done
 
 for required in \
-  "${GROUNDING_DATA}/manifest.json" \
-  "${SKILL_BANK}" \
-  "${SKILL_BANK_MANIFEST}"
+  "${RECOVERY_GROUNDING_DATA}/manifest.json" \
+  "${RECOVERY_SKILL_BANK}" \
+  "${RECOVERY_SKILL_BANK_MANIFEST}"
 do
   [[ -f "${required}" ]] || {
     echo "Required recovery artifact is missing: ${required}" >&2
@@ -62,6 +92,9 @@ fi
 
 echo "SOURCE_RUN=${SOURCE_RUN}"
 echo "RESUME=${RESUME_CHECKPOINT}"
+echo "GROUNDING_DATA=${RECOVERY_GROUNDING_DATA}"
+echo "SKILL_BANK=${RECOVERY_SKILL_BANK}"
+echo "SKILL_BANK_MANIFEST=${RECOVERY_SKILL_BANK_MANIFEST}"
 echo "RUN_NAME=${RUN_NAME}"
 echo "Protected source checkpoints: step-000175 step-000195 step-000200"
 
@@ -72,9 +105,9 @@ exec env \
   PROFILE=formal \
   MAX_UPDATES=445 \
   RESUME="${RESUME_CHECKPOINT}" \
-  GROUNDING_DATA="${GROUNDING_DATA}" \
-  SKILL_BANK="${SKILL_BANK}" \
-  SKILL_BANK_MANIFEST="${SKILL_BANK_MANIFEST}" \
+  GROUNDING_DATA="${RECOVERY_GROUNDING_DATA}" \
+  SKILL_BANK="${RECOVERY_SKILL_BANK}" \
+  SKILL_BANK_MANIFEST="${RECOVERY_SKILL_BANK_MANIFEST}" \
   EVAL_BATCH_SIZE=64 \
   PERSISTENT_ROLLOUT_SESSION=1 \
   ENVIRONMENT_BACKEND=native_batch \

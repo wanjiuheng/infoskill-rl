@@ -226,6 +226,12 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("DRIFT_GUARD_PPO_KL_THRESHOLD=0.02", script)
         self.assertIn("DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD=0.05", script)
         self.assertIn("DRIFT_GUARD_CONSECUTIVE_UPDATES=2", script)
+        self.assertIn('SOURCE_RESOLVED_CONFIG="${SOURCE_RUN}/resolved_config.json"', script)
+        self.assertIn('RECOVERY_GROUNDING_DATA="${SOURCE_PATHS[0]}"', script)
+        self.assertIn('RECOVERY_SKILL_BANK="${SOURCE_PATHS[1]}"', script)
+        self.assertIn('RECOVERY_SKILL_BANK_MANIFEST="${SOURCE_PATHS[2]}"', script)
+        self.assertNotIn('GROUNDING_DATA="${GROUNDING_DATA:-', script)
+        self.assertNotIn('SKILL_BANK="${SKILL_BANK:-', script)
         self.assertNotIn("rm ", script)
 
     def test_deep_m1_candidates_are_default_off_and_forwarded(self) -> None:
