@@ -138,16 +138,14 @@ def prepare_demonstration_imitation_data(
         raise ValueError("imitation corpus must contain exactly one environment")
     destination = Path(output_directory)
     destination.mkdir(parents=True, exist_ok=False)
-    ranked = sorted(
-        trajectories,
-        key=lambda item: hashlib.sha256(
-            f"{split_seed}:{item.trajectory_id}".encode("utf-8")
-        ).digest(),
-    )
-    validation_count = max(1, round(len(ranked) * validation_fraction))
-    if validation_count >= len(ranked):
+    validation_count = max(1, round(len(trajectories) * validation_fraction))
+    if validation_count >= len(trajectories):
         raise ValueError("trajectory split produced an empty training set")
-    validation_ids = {item.trajectory_id for item in ranked[:validation_count]}
+    validation_ids, content_components = _content_grouped_split(
+        trajectories,
+        validation_fraction=validation_fraction,
+        split_seed=split_seed,
+    )
     rows: dict[str, list[dict[str, object]]] = {"train": [], "validation": []}
     for trajectory in sorted(trajectories, key=lambda item: item.trajectory_id):
         split = "validation" if trajectory.trajectory_id in validation_ids else "train"
@@ -172,12 +170,139 @@ def prepare_demonstration_imitation_data(
         "validation_sample_count": len(rows["validation"]),
         "validation_fraction": validation_fraction,
         "split_seed": split_seed,
+        "split_method": "deterministic_content_grouped_sha256",
+        "content_component_count": len(content_components),
+        "duplicate_content_component_count": sum(
+            len(component) > 1 for component in content_components
+        ),
+        "requested_validation_trajectory_count": validation_count,
         "trajectory_id_sha256": _trajectory_id_sha256(trajectories),
         "prompt_contract": "environment_online_policy_message_v1",
         "response_contract": "think_action_v1",
     }
     _atomic_write_json(destination / "manifest.json", manifest)
     return manifest
+
+
+def content_grouped_validation_ids(
+    trajectories: tuple[DemonstrationTrajectory, ...],
+    *,
+    validation_fraction: float,
+    split_seed: int,
+) -> frozenset[str]:
+    """Select validation IDs without splitting content-equivalent trajectories."""
+
+    validation_ids, _ = _content_grouped_split(
+        trajectories,
+        validation_fraction=validation_fraction,
+        split_seed=split_seed,
+    )
+    return validation_ids
+
+
+def _content_grouped_split(
+    trajectories: tuple[DemonstrationTrajectory, ...],
+    *,
+    validation_fraction: float,
+    split_seed: int,
+) -> tuple[frozenset[str], tuple[tuple[str, ...], ...]]:
+    if not 0 < validation_fraction < 1:
+        raise ValueError("validation_fraction must be between zero and one")
+    if split_seed < 0:
+        raise ValueError("split_seed must be non-negative")
+    if len(trajectories) < 2:
+        raise ValueError("trajectory split requires at least two trajectories")
+    trajectory_ids = [item.trajectory_id for item in trajectories]
+    if len(trajectory_ids) != len(set(trajectory_ids)):
+        raise ValueError("demonstration trajectory IDs must be unique")
+
+    parents = {trajectory_id: trajectory_id for trajectory_id in trajectory_ids}
+
+    def find(trajectory_id: str) -> str:
+        root = trajectory_id
+        while parents[root] != root:
+            root = parents[root]
+        while parents[trajectory_id] != trajectory_id:
+            parent = parents[trajectory_id]
+            parents[trajectory_id] = root
+            trajectory_id = parent
+        return root
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root == right_root:
+            return
+        lower, higher = sorted((left_root, right_root))
+        parents[higher] = lower
+
+    content_owner: dict[str, str] = {}
+    for trajectory in sorted(trajectories, key=lambda item: item.trajectory_id):
+        for step_index, step in enumerate(trajectory.steps):
+            fingerprint = _demonstration_step_sha256(
+                step_index=step_index,
+                prompt=step.prompt,
+                action=step.action,
+            )
+            owner = content_owner.setdefault(fingerprint, trajectory.trajectory_id)
+            union(owner, trajectory.trajectory_id)
+
+    grouped: dict[str, list[str]] = {}
+    for trajectory_id in sorted(trajectory_ids):
+        grouped.setdefault(find(trajectory_id), []).append(trajectory_id)
+    components = tuple(tuple(items) for items in grouped.values())
+    ranked = sorted(
+        components,
+        key=lambda component: hashlib.sha256(
+            f"{split_seed}:{'|'.join(component)}".encode("utf-8")
+        ).digest(),
+    )
+    target = max(1, round(len(trajectories) * validation_fraction))
+    selected: list[tuple[str, ...]] = []
+    selected_count = 0
+    for component in ranked:
+        if selected_count + len(component) <= target:
+            selected.append(component)
+            selected_count += len(component)
+        if selected_count == target:
+            break
+    if selected_count < target:
+        remaining = [item for item in ranked if item not in selected]
+        component = min(
+            remaining,
+            key=lambda item: (abs(selected_count + len(item) - target), len(item)),
+        )
+        selected.append(component)
+        selected_count += len(component)
+    if selected_count >= len(trajectories):
+        raise ValueError("content-grouped split produced an empty training set")
+    return (
+        frozenset(
+            trajectory_id
+            for component in selected
+            for trajectory_id in component
+        ),
+        tuple(sorted(components)),
+    )
+
+
+def _demonstration_step_sha256(
+    *,
+    step_index: int,
+    prompt: str,
+    action: str,
+) -> str:
+    encoded = json.dumps(
+        {
+            "step_index": step_index,
+            "prompt": prompt,
+            "action": action,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _validate_source_checksums(

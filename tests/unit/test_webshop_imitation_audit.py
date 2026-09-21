@@ -53,6 +53,7 @@ class WebShopImitationAuditTests(unittest.TestCase):
             {
                 "provider": "OfficialWebShopHumanDemonstrationProvider",
                 "source_split": "train",
+                "split_method": "deterministic_content_grouped_sha256",
                 "trajectory_count": REGISTERED_TRAIN_TRAJECTORY_COUNT,
                 "expected_trajectory_count": REGISTERED_TRAIN_TRAJECTORY_COUNT,
                 "source_checksums": {
@@ -150,12 +151,45 @@ class WebShopImitationAuditTests(unittest.TestCase):
         )
 
         self.assertFalse(report["passed"])
-        self.assertIn("duplicate_row_content", report["failure_reasons"])
-        self.assertIn("duplicate_trajectory_content", report["failure_reasons"])
         self.assertIn("cross_split_content_leakage", report["failure_reasons"])
+        self.assertIn("duplicate_row_content", report["warning_reasons"])
+        self.assertIn("duplicate_trajectory_content", report["warning_reasons"])
         self.assertGreater(report["duplicate_row_content_group_count"], 0)
         self.assertGreater(report["duplicate_trajectory_content_group_count"], 0)
         self.assertGreater(report["cross_split_content_group_count"], 0)
+
+    def test_same_split_official_duplicates_are_warnings_not_leakage(self) -> None:
+        original = [
+            _row("train-original", 0, "search[red shoe]", "search[<your query>]"),
+            _row("train-original", 1, "click[ASIN1]", "click[ASIN1]"),
+        ]
+        duplicate = [
+            {**row, "task_id": "train-duplicate"} for row in original
+        ]
+        report = audit_imitation_rows(
+            manifest={
+                "environment": "webshop",
+                "sample_count": 5,
+                "train_sample_count": 4,
+                "validation_sample_count": 1,
+                "train_trajectory_count": 2,
+                "validation_trajectory_count": 1,
+                "trajectory_count": 3,
+            },
+            train_rows=original + duplicate,
+            validation_rows=[
+                _row("valid", 0, "click[Buy Now]", "click[Buy Now]")
+            ],
+            tokenizer=_WordTokenizer(),
+            max_length=64,
+        )
+
+        self.assertTrue(report["passed"])
+        self.assertEqual(report["failure_reasons"], [])
+        self.assertEqual(
+            report["warning_reasons"],
+            ["duplicate_row_content", "duplicate_trajectory_content"],
+        )
 
     @patch("infoskill.imitation.audit._atomic_json")
     @patch(

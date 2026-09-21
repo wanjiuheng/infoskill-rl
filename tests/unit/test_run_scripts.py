@@ -26,6 +26,8 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("build-webshop-skill-bank", script)
         self.assertIn("verify-webshop-audit", script)
         self.assertIn('--audit "${DATA_AUDIT}"', script)
+        self.assertIn("IMITATION_MAX_LENGTH=${IMITATION_MAX_LENGTH:-16384}", script)
+        self.assertIn("IMITATION_BATCH_SIZE=${IMITATION_BATCH_SIZE:-1}", script)
 
     def test_warmstart_handoff_is_forwarded_to_train_and_eval(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")

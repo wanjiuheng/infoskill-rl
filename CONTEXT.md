@@ -220,7 +220,8 @@ _Avoid_: evolving library、dynamic skill bank
 
 **WebShop Imitation Audit**:
 在 GPU warm-start 前用真实策略 tokenizer 对已准备 WebShop SFT 数据执行的 fail-closed 审计；统一检查
-轨迹隔离、步骤连续性、动作可执行性、response 合同、manifest 计数和序列长度。
+轨迹隔离、步骤连续性、动作可执行性、response 合同、manifest 计数和序列长度。不同 ID 但共享
+步骤内容的轨迹必须分到同一 split；同 split 官方重复记 warning，跨 split 内容重复才是硬失败。
 _Avoid_: character-length estimate、sample-only inspection、post-training validation
 
 **WebShop Phased Skill Library**:

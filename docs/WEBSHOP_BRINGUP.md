@@ -124,7 +124,8 @@ bash scripts/run_webshop_imitation.sh prepare
 入口默认要求恰好 1,010 条 train human trajectories；该数量由官方 baseline 的
 `process_goal`、`human_goals.index` 和 `[1500, 12087)` 划分在锁定数据快照上重新审计得到。
 入口还会校验 `human_goals.json` 与 IL JSONL 的注册 SHA-256；数量或源身份不符都会拒绝继续。输出
-`artifacts/webshop-imitation-data/manifest.json` 会记录两个源文件 SHA-256、轨迹 ID
+`/root/autodl-tmp/wjh/data/webshop/processed/imitation-data-content-grouped-v2/manifest.json`
+会记录两个源文件 SHA-256、轨迹 ID
 SHA-256、train/validation 轨迹数和步骤样本数。
 
 准备完成后先运行 CPU 审计和技能库生成；这两步不加载 7B 模型权重，不占用 GPU：
@@ -137,15 +138,21 @@ PYTHON_BIN=/root/autodl-tmp/wjh/my_new_env/infoskill/bin/python \
 bash scripts/run_webshop_imitation.sh build-skill-bank
 ```
 
-审计默认以 Qwen2.5-7B tokenizer 和训练 `max_length=4352` 计算完整 chat-template
+准备阶段按步骤内容连通分组后再确定性切分：共享任一完整 prompt/action 的轨迹必须位于同一
+split。这样保留官方 1,010 条示范，同时避免重复目标或页面跨 train/validation 泄漏。同一 split
+内的官方重复会在审计报告中记录为 warning，不会擅自删除或重复计为泄漏。
+
+审计默认以 Qwen2.5-7B tokenizer 和训练 `max_length=16384` 计算完整 chat-template
 token 长度；轨迹跨 split 泄漏、步骤不连续、response 合同错误、示范动作不在当前动作空间、
-manifest 计数不一致或样本超长都会令 `passed=false` 并返回非零状态。报告默认写入
-`/root/autodl-tmp/wjh/data/webshop/processed/imitation-data-audit.json`。
+manifest 计数不一致或样本超长都会令 `passed=false` 并返回非零状态。16,384 来自注册语料的
+真实上界：首次审计最大完整样本为 16,305 tokens。为控制长序列峰值显存，WebShop warm-start
+默认使用每卡 batch 1、梯度累积 16。报告默认写入
+`/root/autodl-tmp/wjh/data/webshop/processed/imitation-data-content-grouped-v2-audit.json`。
 
 技能库只读取 `train.jsonl`，不读取内部 SFT validation。它固定覆盖 query、结果筛选、商品
 核验、选项选择、回退和购买六个阶段；示范只用于登记动作族数量和来源校验，不把商品名、
 ASIN 或具体选项写进技能文本。技能库与 provenance manifest 默认写入
-`/root/autodl-tmp/wjh/data/webshop/processed/webshop-skill-bank.json` 及同名
+`/root/autodl-tmp/wjh/data/webshop/processed/webshop-skill-bank-content-grouped-v2.json` 及同名
 `.manifest.json`。技能库生成和 GPU warm-start 都会重新核对审计报告的 `passed`、数据目录、
 三份输入 SHA-256；warm-start 还要求 tokenizer 路径与 `max_length` 完全一致。数据或训练配置
 在审计后发生变化时会拒绝启动，必须重新运行 `audit`。训练完成后的 adapter manifest 会记录

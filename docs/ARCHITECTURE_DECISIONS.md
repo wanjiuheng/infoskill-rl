@@ -545,3 +545,17 @@ GPU 训练前必须用实际策略 tokenizer 审计完整 prompt+response 长度
 绑定相同 tokenizer 与 `max_length`。WebShop 阶段化 skill bank 只读取 SFT train rows；示范用于来源证明和动作族统计，
 技能正文固定覆盖 query、结果筛选、商品核验、选项选择、回退和购买，不记录商品名、ASIN 或具体
 选项值，避免把实例答案伪装成可泛化技能。
+
+## D037：WebShop 官方重复按内容分组切分，长样本完整保留
+
+首次完整 CPU 审计确认 1,010 条轨迹和 9,658 个 step 均可解析，但发现 14 组重复 row、2 组
+完整重复轨迹，其中 2 组 row 跨内部 train/validation；根因是原切分只按 trajectory ID 排序，
+无法约束不同 ID 的官方重复内容。准备入口因此改为内容连通分组：两条轨迹只要共享任一相同
+step index、prompt 和 action，就作为不可拆分 component，再按固定 seed 的 SHA-256 排序选择
+validation。跨 split 内容重复继续作为硬失败；同一 split 的官方重复只作 warning，保留完整
+注册语料，不以去重改变示范权重或 1,010 条来源计数。
+
+同次审计还发现 61/9,658 个样本超过原 `max_length=4352`，最大 prompt 为 16,276 tokens，
+包含 response 与 EOS 后最大为 16,305。不得截断 observation、删除整条成功轨迹或让 response
+loss 静默消失；WebShop warm-start 注册上限改为 16,384，并以每卡 batch 1、梯度累积 16 保持
+原有效 batch、降低长序列峰值显存。GPU 训练仍必须绑定使用相同上限通过的新审计报告。

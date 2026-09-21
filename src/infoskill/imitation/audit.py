@@ -74,6 +74,7 @@ def audit_prepared_imitation_data(
             "environment": "webshop",
             "passed": False,
             "failure_reasons": [f"{failure_stage}_failed"],
+            "warning_reasons": [],
             "failure_stage": failure_stage,
             "error_type": type(error).__name__,
             "tokenizer": str(
@@ -98,6 +99,7 @@ def audit_imitation_rows(
     if max_length <= 0:
         raise ValueError("max_length must be positive")
     failures: set[str] = set()
+    warnings: set[str] = set()
     if manifest.get("environment") != "webshop":
         failures.add("environment_not_webshop")
 
@@ -220,9 +222,9 @@ def audit_imitation_rows(
         if len({split for split, _ in locations}) > 1
     ]
     if duplicate_row_groups:
-        failures.add("duplicate_row_content")
+        warnings.add("duplicate_row_content")
     if duplicate_trajectory_groups:
-        failures.add("duplicate_trajectory_content")
+        warnings.add("duplicate_trajectory_content")
     if cross_split_row_content_groups or cross_split_trajectory_content_groups:
         failures.add("cross_split_content_leakage")
     return {
@@ -230,6 +232,7 @@ def audit_imitation_rows(
         "environment": "webshop",
         "passed": not failures,
         "failure_reasons": sorted(failures),
+        "warning_reasons": sorted(warnings),
         "manifest_counts": expected_counts,
         "splits": split_reports,
         "cross_split_trajectory_count": len(overlap),
@@ -269,6 +272,8 @@ def registered_webshop_manifest_failures(
         failures.append("unregistered_demonstration_provider")
     if manifest.get("source_split") != "train":
         failures.append("source_split_not_train")
+    if manifest.get("split_method") != "deterministic_content_grouped_sha256":
+        failures.append("unregistered_split_method")
     if manifest.get("trajectory_count") != REGISTERED_TRAIN_TRAJECTORY_COUNT:
         failures.append("registered_trajectory_count_mismatch")
     if manifest.get("expected_trajectory_count") != REGISTERED_TRAIN_TRAJECTORY_COUNT:

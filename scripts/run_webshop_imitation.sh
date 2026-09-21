@@ -10,15 +10,18 @@ HUMAN_ARCHIVE=${HUMAN_ARCHIVE:-${WEBSHOP_DATA_ROOT}/raw/all_trajs.zip}
 ARCHIVE_AUDIT=${ARCHIVE_AUDIT:-${WEBSHOP_DATA_ROOT}/raw/all_trajs.audit.json}
 DEMONSTRATIONS=${DEMONSTRATIONS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/il_trajs_finalized_images.jsonl}
 HUMAN_GOALS=${HUMAN_GOALS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/human_goals.json}
-PREPARED_DATA=${PREPARED_DATA:-${WEBSHOP_DATA_ROOT}/processed/imitation-data}
-DATA_AUDIT=${DATA_AUDIT:-${WEBSHOP_DATA_ROOT}/processed/imitation-data-audit.json}
-SKILL_BANK=${SKILL_BANK:-${WEBSHOP_DATA_ROOT}/processed/webshop-skill-bank.json}
+PREPARED_DATA=${PREPARED_DATA:-${WEBSHOP_DATA_ROOT}/processed/imitation-data-content-grouped-v2}
+DATA_AUDIT=${DATA_AUDIT:-${WEBSHOP_DATA_ROOT}/processed/imitation-data-content-grouped-v2-audit.json}
+SKILL_BANK=${SKILL_BANK:-${WEBSHOP_DATA_ROOT}/processed/webshop-skill-bank-content-grouped-v2.json}
 SFT_OUTPUT=${SFT_OUTPUT:-${PROJECT_ROOT}/runs/webshop-actor-imitation-warmstart}
 MODEL_PATH=${MODEL_PATH:-/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct}
 BASE_MODEL_ID=${BASE_MODEL_ID:-qwen2.5-7b-instruct}
 EXPECTED_TRAJECTORIES=${EXPECTED_TRAJECTORIES:-1010}
 EXPECTED_DEMONSTRATIONS_SHA256=${EXPECTED_DEMONSTRATIONS_SHA256:-0f3ef1890245a283f8116b7abcabebd4acdf355d773edd99977e8ed6de63ec6c}
 EXPECTED_HUMAN_GOALS_SHA256=${EXPECTED_HUMAN_GOALS_SHA256:-b68746ed66cd31fdc5f70eb3f5831a46b38163563b57a66ddcab8fd60ee0cbdc}
+IMITATION_MAX_LENGTH=${IMITATION_MAX_LENGTH:-16384}
+IMITATION_BATCH_SIZE=${IMITATION_BATCH_SIZE:-1}
+IMITATION_GRADIENT_ACCUMULATION=${IMITATION_GRADIENT_ACCUMULATION:-16}
 
 case "${ACTION}" in
   audit-archive)
@@ -65,7 +68,7 @@ case "${ACTION}" in
       --data "${PREPARED_DATA}" \
       --model "${MODEL_PATH}" \
       --output "${DATA_AUDIT}" \
-      --max-length "${IMITATION_MAX_LENGTH:-4352}"
+      --max-length "${IMITATION_MAX_LENGTH}"
     ;;
   build-skill-bank)
     [[ -f "${PREPARED_DATA}/manifest.json" ]] || {
@@ -96,7 +99,7 @@ case "${ACTION}" in
       --data "${PREPARED_DATA}" \
       --audit "${DATA_AUDIT}" \
       --model "${MODEL_PATH}" \
-      --max-length "${IMITATION_MAX_LENGTH:-4352}"
+      --max-length "${IMITATION_MAX_LENGTH}"
     exec env PYTHONPATH="${PROJECT_ROOT}/src" "${PYTHON_BIN}" \
       -m torch.distributed.run \
       --standalone \
@@ -109,9 +112,9 @@ case "${ACTION}" in
       --output "${SFT_OUTPUT}" \
       --learning-rate "${IMITATION_LEARNING_RATE:-1e-4}" \
       --epochs "${IMITATION_EPOCHS:-2.0}" \
-      --per-device-batch-size "${IMITATION_BATCH_SIZE:-2}" \
-      --gradient-accumulation-steps "${IMITATION_GRADIENT_ACCUMULATION:-8}" \
-      --max-length "${IMITATION_MAX_LENGTH:-4352}"
+      --per-device-batch-size "${IMITATION_BATCH_SIZE}" \
+      --gradient-accumulation-steps "${IMITATION_GRADIENT_ACCUMULATION}" \
+      --max-length "${IMITATION_MAX_LENGTH}"
     ;;
   *)
     echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|prepare|audit|build-skill-bank|train" >&2
