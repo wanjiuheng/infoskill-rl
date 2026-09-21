@@ -121,11 +121,23 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
     app_config = normalized.get("app_config")
     if isinstance(app_config, Mapping):
         normalized_app = dict(app_config)
+        # Checkpoints created before the multi-environment schema are
+        # implicitly ALFWorld.  Treat the later explicit default as the same
+        # configuration so adding WebShop support does not strand them.
+        normalized_app.setdefault("environment", "alfworld")
         paths = normalized_app.get("paths")
         if isinstance(paths, Mapping):
             normalized_paths = dict(paths)
             if normalized_paths.get("grounding_data") is None:
                 normalized_paths.pop("grounding_data", None)
+            for optional_webshop_path in (
+                "webshop_source",
+                "webshop_data",
+                "webshop_human_demonstrations",
+                "webshop_human_goals",
+            ):
+                if normalized_paths.get(optional_webshop_path) is None:
+                    normalized_paths.pop(optional_webshop_path, None)
             normalized_app["paths"] = normalized_paths
         normalized["app_config"] = normalized_app
     runtime_options = normalized.get("runtime_options")

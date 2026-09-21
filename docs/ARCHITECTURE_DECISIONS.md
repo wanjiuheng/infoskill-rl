@@ -573,3 +573,8 @@ invalid action rate 明显上升。恢复线因此只能从不可变 `step-00017
 `pause_reason=training_drift_guard` 正常暂停；门的配置、逐次判定和触发点分别写入 resolved
 config、metrics、`training-drift-guard.json`、training control 与 summary。历史训练默认不启用，
 命名 fork 可新增或调整该安全门，原地 resume 仍要求配置完全一致。
+
+WebShop 接入后配置 schema 新增了显式 `environment=alfworld` 和若干空的 WebShop 路径。旧
+ALFWorld checkpoint 缺失这些字段时，恢复校验只把它们规范化为相同的缺省语义；非空路径、
+模型身份、数据 provenance、训练计划和其余 runtime 参数继续严格比较，避免 schema 演进把
+既有 portable checkpoint 错误判为不兼容。

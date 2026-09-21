@@ -12,6 +12,53 @@ from infoskill.training.run_directory import (
 
 
 class ResumeRunDirectoryTests(unittest.TestCase):
+    def test_legacy_alfworld_checkpoint_accepts_explicit_environment_defaults(
+        self,
+    ) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000175"
+        shared_paths = {
+            "policy_model": "/models/qwen",
+            "semantic_model": "/models/embedding",
+            "skillrl_source": "/source/skillrl",
+            "skill_bank": "/artifacts/skills.json",
+            "output_root": "/runs",
+            "infoskill_checkpoint": None,
+            "skill_bank_manifest": "/artifacts/skills-manifest.json",
+            "grounding_data": "/artifacts/grounding",
+            "alfworld_source": "/source/alfworld",
+            "alfworld_data": "/data/alfworld",
+            "alfworld_config": "/source/alfworld/config.yaml",
+        }
+        previous = {
+            "num_gpus": 3,
+            "app_config": {"paths": shared_paths},
+        }
+        current = {
+            "num_gpus": 3,
+            "app_config": {
+                "environment": "alfworld",
+                "paths": {
+                    **shared_paths,
+                    "webshop_source": None,
+                    "webshop_data": None,
+                    "webshop_human_demonstrations": None,
+                    "webshop_human_goals": None,
+                },
+            },
+        }
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=True,
+                allow_performance_candidate_change=True,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
     def test_named_fork_may_change_monitoring_eval_batch_size(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000050"
         previous = {
