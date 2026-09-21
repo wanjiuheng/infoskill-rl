@@ -234,6 +234,25 @@ class RunScriptTests(unittest.TestCase):
         self.assertNotIn('SKILL_BANK="${SKILL_BANK:-', script)
         self.assertNotIn("rm ", script)
 
+    def test_m1_u191_guard_evaluation_is_eval_only_and_source_pinned(self) -> None:
+        script = Path("scripts/run_m1_u191_guard_evaluation.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("checkpoints/step-000191", script)
+        self.assertIn("valid_seen-000175-summary.json", script)
+        self.assertIn('RECOVERY_RESOLVED_CONFIG="${RECOVERY_RUN}/resolved_config.json"', script)
+        self.assertIn('EVAL_SKILL_BANK="${SOURCE_PATHS[0]}"', script)
+        self.assertIn('EVAL_SKILL_BANK_MANIFEST="${SOURCE_PATHS[1]}"', script)
+        self.assertIn("run_alfworld.sh eval infoskill", script)
+        self.assertNotIn("run_alfworld.sh train", script)
+        self.assertIn("HYBRID_PREFIX_CUDA_GRAPH=1", script)
+        self.assertIn("LORA_SHRINK_SPLIT_K_ONE=1", script)
+        self.assertIn("EVAL_BATCH_SIZE=64", script)
+        self.assertIn('"classification": classification', script)
+        self.assertIn("ARCHIVE=", script)
+        self.assertNotIn("rm ", script)
+
     def test_deep_m1_candidates_are_default_off_and_forwarded(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
         script = (project_root / "scripts" / "run_alfworld.sh").read_text(
