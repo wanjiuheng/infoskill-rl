@@ -115,6 +115,23 @@ Lucene 索引，不修改 SkillRL 源码或复制 5.5 GB 数据。它把运行�
 instruction。通过只证明这条环境/路径链路，尚不证明 warm-start prompt parity 或正式评测。
 上游加载完整商品会占用大量主机内存和共享盘 I/O，但不使用 GPU。
 
+环境 smoke 通过后，可运行只读的首步 prompt parity 门：
+
+```bash
+cd /models/wanjh2/data/wjh/alfworld_eval/infoskill
+PYTHON_BIN=/data/wanjh2/miniconda3/envs/ifs-webshop/bin/python \
+PATH=/data/wanjh2/miniconda3/envs/ifs-webshop/bin:$PATH \
+bash scripts/run_webshop_imitation.sh prompt-parity
+```
+
+它从已准备的 train 示范中选择 3 个不同的官方 goal index，复核来源 SHA-256，
+用真实 `WebAgentTextEnv` 的 `text_rich` reset 逐项比较首步 goal、规范化观察、
+可执行动作和完整策略 prompt。WebShop 会随机产生价格上限，因此只要求去除价格后
+的 goal 相同，并用示范中的完整 task 文本重建在线 prompt；完整 task 文本是否相同单独记录，
+不能作为 prompt 模板错误。报告只保存索引、布尔判定与文本 SHA-256；任一项不一致
+仍写报告并返回非零状态。它不证明后续步骤、policy rollout 或 500 条正式评测。
+和 smoke 一样，它会再次读取完整商品库，消耗较多 CPU 内存与共享盘 I/O，但不使用 GPU。
+
 ## 分阶段取得官方 human trajectories
 
 不要先运行上游 `setup.sh -d all`；它会连续安装依赖、下载全量产品、生成四套中间
