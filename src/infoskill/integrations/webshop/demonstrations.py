@@ -21,6 +21,10 @@ _RICH_TASK_HEADER = re.compile(
     r"^(?:(?:amazon shopping game|webshop)\n)?instruction:\n([^\n]+)\n",
     flags=re.IGNORECASE,
 )
+_EMBEDDED_RICH_TASK_HEADER = re.compile(
+    r"^instruction:\n([^\n]+)\n",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
 
 
 class OfficialWebShopHumanDemonstrationProvider:
@@ -188,13 +192,16 @@ def task_description_from_state(value: object) -> str:
 def observation_from_state(value: object, normalized_goal: str) -> str:
     text = _required_text(value, "state", 0)
     rich_header = _RICH_TASK_HEADER.match(text)
-    if (
-        rich_header is not None
-        and normalize_goal(rich_header.group(1)) == normalized_goal
-    ):
-        observation = text[rich_header.end() :].strip()
-        if observation:
-            return observation
+    if rich_header is None:
+        rich_header = _EMBEDDED_RICH_TASK_HEADER.search(text)
+    if rich_header is not None:
+        instruction = rich_header.group(1)
+        if normalize_goal(instruction) == normalized_goal:
+            observation = (
+                text[: rich_header.start()] + text[rich_header.end() :]
+            ).strip()
+            if observation:
+                return observation
     lowered = text.lower()
     search_marker = lowered.find("\n[button] search [button_]")
     if search_marker >= 0 and normalize_goal(text) == normalized_goal:
