@@ -128,6 +128,15 @@ def _parser() -> argparse.ArgumentParser:
         help="explicit evaluation batch size; omission preserves the YAML default",
     )
     evaluate.add_argument(
+        "--rollout-gpu-memory-utilization",
+        type=float,
+        default=0.45,
+        help=(
+            "fraction of each GPU available to the evaluation vLLM rollout; "
+            "the registered default is 0.45"
+        ),
+    )
+    evaluate.add_argument(
         "--cuda-memory-poll-interval-ms",
         type=int,
         default=0,
@@ -873,6 +882,8 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("checkpoint_step must be non-negative")
     if args.eval_batch_size is not None and args.eval_batch_size <= 0:
         raise ValueError("eval_batch_size must be positive")
+    if not 0 < args.rollout_gpu_memory_utilization <= 1:
+        raise ValueError("rollout_gpu_memory_utilization must be in (0, 1]")
     if args.cuda_memory_poll_interval_ms < 0:
         raise ValueError("cuda_memory_poll_interval_ms must be non-negative")
     if args.diagnostic_task_manifest is not None and mode is not SkillMode.INFO_SKILL:
@@ -1094,6 +1105,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
             else False
         ),
         "eval_batch_size": effective_eval_batch_size,
+        "rollout_gpu_memory_utilization": args.rollout_gpu_memory_utilization,
         "cuda_memory_poll_interval_ms": args.cuda_memory_poll_interval_ms,
         "hybrid_prefix_cuda_graph": args.hybrid_prefix_cuda_graph,
         "hybrid_prefix_cuda_graph_custom_kernels": (
@@ -1199,7 +1211,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     total_training_steps=max(1, evaluation_step),
                     action_minibatch_size=256,
                     policy_max_tokens_per_gpu=DEFAULT_POLICY_MAX_TOKENS_PER_GPU,
-                    gpu_memory_utilization=0.45,
+                    gpu_memory_utilization=args.rollout_gpu_memory_utilization,
                     require_hybrid_prefix=mode is SkillMode.INFO_SKILL,
                     hybrid_prefix_cuda_graph=args.hybrid_prefix_cuda_graph,
                     lora_shrink_split_k_one=args.lora_shrink_split_k_one,

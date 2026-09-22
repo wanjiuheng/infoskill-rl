@@ -155,6 +155,7 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn('RUN_FULL_EVAL_ON_PASS="${RUN_FULL_EVAL_ON_PASS:-1}"', runner)
         self.assertIn("--diagnostic-task-manifest", entrypoint)
         self.assertIn("--eval-batch-size", entrypoint)
+        self.assertIn("--rollout-gpu-memory-utilization", entrypoint)
         self.assertIn("--cuda-memory-poll-interval-ms", entrypoint)
 
     def test_training_forwards_periodic_evaluation_batch_override(self) -> None:

@@ -52,6 +52,8 @@ class TrainingCliTests(unittest.TestCase):
                 "configs/m1_eval_batch_pressure_valid_seen.json",
                 "--eval-batch-size",
                 "12",
+                "--rollout-gpu-memory-utilization",
+                "0.46",
                 "--cuda-memory-poll-interval-ms",
                 "200",
             ]
@@ -59,8 +61,10 @@ class TrainingCliTests(unittest.TestCase):
 
         self.assertIsNone(default.diagnostic_task_manifest)
         self.assertIsNone(default.eval_batch_size)
+        self.assertEqual(default.rollout_gpu_memory_utilization, 0.45)
         self.assertEqual(default.cuda_memory_poll_interval_ms, 0)
         self.assertEqual(diagnostic.eval_batch_size, 12)
+        self.assertEqual(diagnostic.rollout_gpu_memory_utilization, 0.46)
         self.assertEqual(diagnostic.cuda_memory_poll_interval_ms, 200)
 
     def test_infoskill_eval_grouped_conditioning_is_explicitly_opt_in(self) -> None:

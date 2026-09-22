@@ -84,6 +84,9 @@ GROUPED_INFOSKILL_CONDITIONING="${GROUPED_INFOSKILL_CONDITIONING:-0}"
 # EVAL_BATCH_SIZE alone is an explicit full-evaluation candidate override.
 EVAL_TASK_MANIFEST="${EVAL_TASK_MANIFEST:-}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-}"
+# Optional evaluation-only vLLM memory override. Empty preserves the registered
+# 0.45 default; two-GPU recovery on larger per-rank FSDP shards may need more.
+ROLLOUT_GPU_MEMORY_UTILIZATION="${ROLLOUT_GPU_MEMORY_UTILIZATION:-}"
 # Used only by the individual backend; native_batch owns one process per slot.
 ENVIRONMENT_WORKERS="${ENVIRONMENT_WORKERS:-1}"
 # Validated by CPU differential, 64-trajectory A/B and two-update longevity gates.
@@ -398,6 +401,12 @@ case "${ACTION}" in
     fi
     if [[ -n "${EVAL_BATCH_SIZE}" ]]; then
       EVAL_ARGS+=(--eval-batch-size "${EVAL_BATCH_SIZE}")
+    fi
+    if [[ -n "${ROLLOUT_GPU_MEMORY_UTILIZATION}" ]]; then
+      EVAL_ARGS+=(
+        --rollout-gpu-memory-utilization
+        "${ROLLOUT_GPU_MEMORY_UTILIZATION}"
+      )
     fi
     EVAL_ARGS+=(--cuda-memory-poll-interval-ms "${CUDA_MEMORY_POLL_INTERVAL_MS}")
     case "${PERSISTENT_ROLLOUT_SESSION}" in
