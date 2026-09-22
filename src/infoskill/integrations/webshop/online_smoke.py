@@ -103,6 +103,16 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _page_goal_text(instruction: str) -> str:
+    """Remove the upstream HTML heading, keeping the actual shopping goal."""
+    text = instruction.strip()
+    if text.lower().startswith("instruction:"):
+        text = text[len("instruction:") :].strip()
+    if not text:
+        raise RuntimeError("WebShop reset returned an empty goal")
+    return text
+
+
 def run_smoke(source_root: Path, data_root: Path) -> dict[str, object]:
     paths = _required_assets(source_root, data_root)
     official = json.loads(paths["human_goals"].read_text(encoding="utf-8"))
@@ -129,7 +139,7 @@ def run_smoke(source_root: Path, data_root: Path) -> dict[str, object]:
                 raise RuntimeError(f"runtime WebShop goals contain no {split.value} task")
             runtime_position = positions[official_index]
             observation, _ = raw_environment.reset(session=runtime_position)
-            instruction = raw_environment.instruction_text
+            instruction = _page_goal_text(raw_environment.instruction_text)
             if normalize_goal(instruction) != normalize_goal(official[official_index]):
                 raise RuntimeError(f"WebShop {split.value} reset returned a different goal")
             actions = normalize_available_actions(raw_environment.get_available_actions())
