@@ -15,6 +15,7 @@ demonstrations；不能把 ALFWorld planner 接到 WebShop 上。
 - `audit-webshop`：逐样本验证格式、动作可执行性、轨迹切分与真实 tokenizer 长度；
 - `build-webshop-skill-bank`：从 train demonstrations 生成阶段化、无商品实例泄漏的技能库；
 - `webshop_asset_doctor.py`：不加载模型的资产/依赖/索引预检；
+- `build_webshop_search_index.py`：只为完整商品库构建一份外部 Lucene 索引；
 - WebShop skill bank 的固定 SHA-256 provenance；
 - InfoSkill 自有分区合同固定从索引 1500 开始训练，防止 validation 500--1499 泄漏。
 
@@ -61,6 +62,8 @@ data/items_human_ins.json
 baseline_models/data/il_trajs_finalized_images.jsonl
 baseline_models/data/human_goals.json
 search_engine/indexes/<non-empty index>
+search_engine/resources/documents.jsonl
+search_engine/index-manifest.json
 ```
 
 先做只读预检：
@@ -73,7 +76,27 @@ bash scripts/run_webshop_imitation.sh doctor
 
 `formal_ready=false` 时不要启动长训练。doctor 返回 2 是 fail-closed，不会修改数据。
 正式门还要求 Java 11、锁定的 Python 包版本、`en_core_web_sm`、可导入的
-`web_agent_site`、非空 Lucene 索引，以及至少 15 GiB 剩余空间。
+`web_agent_site`、非空 Lucene 索引及其完整构建清单，以及至少 15 GiB 剩余空间。
+
+在 H20 的独立 `ifs-webshop` 环境中构建完整索引（无需 GPU）：
+
+```bash
+cd /models/wanjh2/data/wjh/alfworld_eval/infoskill
+PYTHON_BIN=/data/wanjh2/miniconda3/envs/ifs-webshop/bin/python \
+PATH=/data/wanjh2/miniconda3/envs/ifs-webshop/bin:$PATH \
+WEBSHOP_INDEX_THREADS=4 \
+bash scripts/run_webshop_imitation.sh build-index
+```
+
+该入口明确读取数据目录中的完整 `items_shuffle.json`、`items_ins_v2.json` 与
+`items_human_ins.json`，不采用上游默认的 1,000 件商品小样本，也不生成其他三套
+调试索引。输出仅写入外部 `data/webshop/search_engine`；构建过程中使用隐藏暂存目录，
+完成索引可检索检查后才发布。源数据与 SkillRL 代码树不会被修改。构建前要求数据盘
+至少空余 50 GiB；若中途失败，会保留暂存目录供排查，并拒绝下一次直接覆盖。
+构建可能消耗大量 CPU、内存和共享磁盘 I/O，宜在系统负载允许时后台运行。
+
+`doctor` 变为 `formal_ready=true` 只代表资产和环境预检通过，不表示下文尚未完成的
+正式 WebShop rollout、prompt parity 和效果验收已经通过。
 
 ## 分阶段取得官方 human trajectories
 

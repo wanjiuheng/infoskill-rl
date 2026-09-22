@@ -21,20 +21,26 @@ REQUIRED_FILES = {
 
 REQUIRED_MODULES = (
     "bs4",
+    "cleantext",
+    "faiss",
     "flask",
     "gym",
     "pyserini",
     "rank_bm25",
+    "selenium",
     "spacy",
     "thefuzz",
 )
 
 EXPECTED_VERSIONS = {
     "beautifulsoup4": "4.11.1",
+    "cleantext": "1.1.4",
+    "faiss-cpu": "1.7.4",
     "Flask": "2.1.2",
     "gym": "0.24.0",
     "pyserini": "0.17.0",
     "rank-bm25": "0.2.2",
+    "selenium": "4.2.0",
     "spacy": "3.7.2",
     "thefuzz": "0.19.0",
     "Werkzeug": "2.1.0",
@@ -65,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         if index_root.is_dir()
         else ()
     )
+    index_manifest = _index_manifest_status(data_root / "search_engine/index-manifest.json")
     modules = {
         name: importlib.util.find_spec(name) is not None for name in REQUIRED_MODULES
     }
@@ -88,8 +95,9 @@ def main(argv: list[str] | None = None) -> int:
         "files": files,
         "search_index": {
             "path": str(index_root),
-            "present": bool(index_files),
+            "present": bool(index_files) and index_manifest["complete"],
             "file_count": len(index_files),
+            "manifest": index_manifest,
         },
         "python_modules": modules,
         "python_package_versions": package_versions,
@@ -109,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         and all(version_matches.values())
         and web_agent_site["importable"]
         and java["compatible"]
-        and bool(index_files)
+        and report["search_index"]["present"]
     )
     report["formal_ready"] = (
         report["data_ready"]
@@ -134,6 +142,28 @@ def _file_status(path: Path) -> dict[str, object]:
         "present": present,
         "bytes": path.stat().st_size if present else None,
     }
+
+
+def _index_manifest_status(path: Path) -> dict[str, object]:
+    status: dict[str, object] = {"path": str(path), "complete": False}
+    if not path.is_file():
+        return status
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        status["error"] = str(error)
+        return status
+    status["document_count"] = report.get("document_count")
+    status["complete"] = (
+        report.get("schema_version") == 1
+        and report.get("status") == "complete"
+        and isinstance(report.get("document_count"), int)
+        and report["document_count"] > 100_000
+        and isinstance(report.get("documents_sha256"), str)
+        and report.get("index_file_count", 0) > 0
+        and report.get("probe_hits", 0) > 0
+    )
+    return status
 
 
 def _existing_parent(path: Path) -> Path:

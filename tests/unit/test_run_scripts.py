@@ -29,6 +29,16 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("IMITATION_MAX_LENGTH=${IMITATION_MAX_LENGTH:-16384}", script)
         self.assertIn("IMITATION_BATCH_SIZE=${IMITATION_BATCH_SIZE:-1}", script)
 
+    def test_webshop_full_index_uses_external_data_and_pinned_python(self) -> None:
+        script = Path("scripts/run_webshop_imitation.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("  build-index)", script)
+        self.assertIn("scripts/build_webshop_search_index.py", script)
+        self.assertIn('"${PYTHON_BIN}"', script)
+        self.assertIn('--webshop-data-root "${WEBSHOP_DATA_ROOT}"', script)
+        self.assertIn("WEBSHOP_INDEX_THREADS:-4", script)
+
     def test_warmstart_handoff_is_forwarded_to_train_and_eval(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
         eval_case = script.split("  eval)\n", 1)[1].split("  raw-skill-ab|", 1)[0]
