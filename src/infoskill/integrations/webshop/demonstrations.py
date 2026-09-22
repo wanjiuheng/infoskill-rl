@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from infoskill.imitation.providers import DemonstrationStep, DemonstrationTrajectory
@@ -15,6 +16,10 @@ REGISTERED_HUMAN_DEMONSTRATIONS_SHA256 = (
 )
 REGISTERED_HUMAN_GOALS_SHA256 = (
     "b68746ed66cd31fdc5f70eb3f5831a46b38163563b57a66ddcab8fd60ee0cbdc"
+)
+_RICH_TASK_HEADER = re.compile(
+    r"^(?:(?:amazon shopping game|webshop)\n)?instruction:\n([^\n]+)\n",
+    flags=re.IGNORECASE,
 )
 
 
@@ -182,6 +187,14 @@ def task_description_from_state(value: object) -> str:
 
 def observation_from_state(value: object, normalized_goal: str) -> str:
     text = _required_text(value, "state", 0)
+    rich_header = _RICH_TASK_HEADER.match(text)
+    if (
+        rich_header is not None
+        and normalize_goal(rich_header.group(1)) == normalized_goal
+    ):
+        observation = text[rich_header.end() :].strip()
+        if observation:
+            return observation
     lowered = text.lower()
     search_marker = lowered.find("\n[button] search [button_]")
     if search_marker >= 0 and normalize_goal(text) == normalized_goal:

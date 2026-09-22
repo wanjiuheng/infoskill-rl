@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from infoskill.integrations.webshop.demonstrations import observation_from_state
 from infoskill.integrations.webshop.policy import render_webshop_policy_message
 from infoskill.integrations.webshop.prompt_parity import (
     compare_initial_step,
@@ -75,6 +76,26 @@ class _TwoStepEnvironment:
 
 
 class WebShopPromptParityTests(unittest.TestCase):
+    def test_rich_observation_strips_dynamic_task_header_on_every_page(self) -> None:
+        goal = "find red walking shoes"
+        body = (
+            "[button] Back to Search [button_]\n"
+            "Page 1 (Total results: 50)\n"
+            "[button] B000000001 [button_]\n"
+            "Red Walking Shoe"
+        )
+        historical = (
+            "WebShop\nInstruction:\n"
+            f"{goal}, and price lower than 40.00 dollars\n{body}"
+        )
+        live = (
+            "Instruction:\n"
+            f"{goal}, and price lower than 70.00 dollars\n{body}"
+        )
+
+        self.assertEqual(observation_from_state(historical, goal), body)
+        self.assertEqual(observation_from_state(live, goal), body)
+
     def test_replay_fails_closed_at_configured_step_limit(self) -> None:
         goal, rows, demonstration = _two_step_fixture()
         report = replay_demonstration(
