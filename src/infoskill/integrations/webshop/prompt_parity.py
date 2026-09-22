@@ -17,6 +17,7 @@ from pathlib import Path
 
 from infoskill.imitation.audit import registered_webshop_manifest_failures
 
+from .action_adapter import DemonstrationActionAdapter
 from .demonstrations import (
     REGISTERED_HUMAN_DEMONSTRATIONS_SHA256,
     REGISTERED_HUMAN_GOALS_SHA256,
@@ -301,7 +302,9 @@ def run_prompt_parity(
         prepared_root / "train.jsonl",
         {str(row["task_id"]) for _, _, row in selected},
     )
-    environment = _open_external_text_env(source_root, paths)
+    environment = DemonstrationActionAdapter(
+        _open_external_text_env(source_root, paths)
+    )
     try:
         environment.observation_mode = "text_rich"
         positions, unknown = map_runtime_goals(official_goals, environment.server.goals)
