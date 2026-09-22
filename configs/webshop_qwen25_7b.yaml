@@ -1,22 +1,23 @@
 environment: webshop
 
 paths:
-  policy_model: /root/autodl-tmp/wjh/models/Qwen/Qwen2.5-7B-Instruct
+  policy_model: "@workspace/models/Qwen/Qwen2.5-7B-Instruct"
   policy_adapter: null
-  semantic_model: /root/autodl-tmp/wjh/models/Qwen/Qwen3-Embedding-0.6B
-  skillrl_source: /root/autodl-tmp/wjh/alfworld_eval/SkillRL
-  webshop_source: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/agent_system/environments/env_package/webshop/webshop
-  webshop_data: /root/autodl-tmp/wjh/data/webshop/data
-  webshop_human_demonstrations: /root/autodl-tmp/wjh/data/webshop/baseline_models/data/il_trajs_finalized_images.jsonl
-  webshop_human_goals: /root/autodl-tmp/wjh/data/webshop/baseline_models/data/human_goals.json
-  skill_bank: /root/autodl-tmp/wjh/alfworld_eval/SkillRL/memory_data/webshop/claude_style_skills.json
-  skill_bank_manifest: configs/webshop_skill_bank_manifest.json
-  output_root: /root/autodl-tmp/wjh/alfworld_eval/infoskill/runs
+  semantic_model: "@workspace/models/Qwen/Qwen3-Embedding-0.6B"
+  skillrl_source: "@workspace/alfworld_eval/SkillRL"
+  webshop_source: "@workspace/alfworld_eval/SkillRL/agent_system/environments/env_package/webshop/webshop"
+  webshop_data: "@workspace/data/webshop"
+  webshop_human_demonstrations: "@workspace/data/webshop/baseline_models/data/il_trajs_finalized_images.jsonl"
+  webshop_human_goals: "@workspace/data/webshop/baseline_models/data/human_goals.json"
+  webshop_task_manifest: "@workspace/data/webshop/processed/webshop-paper128-manifest.json"
+  skill_bank: "@workspace/data/webshop/processed/webshop-skill-bank-content-grouped-v4.json"
+  skill_bank_manifest: "@workspace/data/webshop/processed/webshop-skill-bank-content-grouped-v4.manifest.json"
+  output_root: "@workspace/alfworld_eval/infoskill/runs"
   infoskill_checkpoint: null
   grounding_data: null
 
 policy_model_id: qwen2.5-7b-instruct
-max_steps: 30
+max_steps: 15
 history_length: 2
 max_prompt_tokens: 4096
 max_response_tokens: 256
@@ -25,4 +26,4 @@ general_top_k: 6
 task_top_k: 6
 mistake_count: 5
 master_seed: 0
-eval_batch_size: 8
+eval_batch_size: 64

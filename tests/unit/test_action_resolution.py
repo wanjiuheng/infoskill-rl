@@ -93,6 +93,25 @@ class ResolveActionTests(unittest.TestCase):
         self.assertEqual(result.executed_action, "__invalid_action__")
         self.assertFalse(result.is_executable)
 
+    def test_webshop_search_template_accepts_a_concrete_query(self) -> None:
+        result = resolve_action(
+            "<think>Search for the requested item.</think>\n"
+            "<action>search[waterproof hiking boots]</action>",
+            ("search[<your query>]", "click[back to search]"),
+        )
+
+        self.assertEqual(result.resolved_action, "search[waterproof hiking boots]")
+        self.assertEqual(result.executed_action, "search[waterproof hiking boots]")
+        self.assertTrue(result.is_executable)
+
+    def test_webshop_search_template_rejects_an_empty_query(self) -> None:
+        result = resolve_action(
+            "<action>search[]</action>",
+            ("search[<your query>]",),
+        )
+
+        self.assertFalse(result.is_executable)
+
 
 if __name__ == "__main__":
     unittest.main()

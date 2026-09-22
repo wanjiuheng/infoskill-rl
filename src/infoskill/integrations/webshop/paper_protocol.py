@@ -17,6 +17,9 @@ from typing import Any
 
 import numpy as np
 
+from infoskill.config import EvaluationConfig, TaskDenominator
+from infoskill.episode import TaskSpec
+
 
 PAPER128_SCHEMA_VERSION = 1
 PAPER128_TASK_COUNT = 128
@@ -194,6 +197,14 @@ def validate_paper128_manifest(payload: Mapping[str, Any]) -> None:
         raise ValueError("paper-aligned WebShop validation seed offset differs")
     if protocol.get("candidate_session_stop") != PAPER128_POOL_SIZE:
         raise ValueError("paper-aligned WebShop candidate pool differs from 500")
+    if protocol.get("max_steps") != 15:
+        raise ValueError("paper-aligned WebShop evaluation requires max_steps=15")
+    if protocol.get("validation_temperature") != 0.4:
+        raise ValueError(
+            "paper-aligned WebShop evaluation requires validation_temperature=0.4"
+        )
+    if protocol.get("validation_do_sample") is not True:
+        raise ValueError("paper-aligned WebShop evaluation requires sampled decoding")
     source_files = payload.get("source_files")
     if not isinstance(source_files, Mapping):
         raise ValueError("WebShop paper manifest has no source identities")
@@ -275,6 +286,32 @@ def load_paper128_manifest(
             if dict(recorded) != current:
                 raise ValueError(f"WebShop paper manifest source differs: {name}")
     return payload
+
+
+def paper128_tasks(payload: Mapping[str, Any]) -> tuple[TaskSpec, ...]:
+    """Convert one validated frozen manifest into the generic rollout seam."""
+
+    validate_paper128_manifest(payload)
+    return tuple(
+        TaskSpec(
+            task_id=f"webshop-paper128-{int(task['slot']):03d}",
+            split="paper128",
+            task_type="webshop",
+            goal=str(task["goal"]["instruction_text"]).strip(),
+        )
+        for task in payload["tasks"]
+    )
+
+
+def paper128_evaluation_config(payload: Mapping[str, Any]) -> EvaluationConfig:
+    """Build the exact denominator and task-sequence identity for paper128."""
+
+    validate_paper128_manifest(payload)
+    return EvaluationConfig(
+        split="paper128",
+        denominators=(TaskDenominator("webshop", PAPER128_TASK_COUNT),),
+        manifest_sha256=str(payload["task_sequence_sha256"]),
+    )
 
 
 def write_paper128_manifest(path: Path, payload: Mapping[str, Any]) -> None:

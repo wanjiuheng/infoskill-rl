@@ -34,6 +34,24 @@ class StateViewsTests(unittest.TestCase):
         self.assertIn("<think> </think>", views.policy_view)
         self.assertIn("<action> </action>", views.policy_view)
 
+    def test_webshop_state_uses_the_registered_webshop_prompt(self) -> None:
+        state = CanonicalAgentState(
+            task_id="webshop-paper128-000",
+            split="paper128",
+            task_type="webshop",
+            goal="buy blue running shoes under 50 dollars",
+            step_index=1,
+            observation="Search results",
+            history=(AgentHistoryEntry(0, "Search", "search[blue running shoes]"),),
+            admissible_commands=("click[item - blue shoe]",),
+        )
+
+        views = render_state_views(state, history_limit=2)
+
+        self.assertIn("WebShop e‑commerce environment", views.policy_view)
+        self.assertIn("search[blue running shoes]", views.policy_view)
+        self.assertNotIn("ALFRED Embodied Environment", views.policy_view)
+
 
 if __name__ == "__main__":
     unittest.main()

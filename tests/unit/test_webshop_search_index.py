@@ -37,6 +37,14 @@ class WebShopSearchIndexTests(unittest.TestCase):
             "product": product,
         })
 
+    def test_paper1000_layout_uses_the_small_assets_and_separate_index(self) -> None:
+        layout = self.builder._catalog_layout(Path("/data/webshop"), "paper1000")
+
+        self.assertEqual(layout["products"], Path("/data/webshop/data/items_shuffle_1000.json"))
+        self.assertEqual(layout["attributes"], Path("/data/webshop/data/items_ins_v2_1000.json"))
+        self.assertEqual(layout["indexes"], Path("/data/webshop/search_engine/indexes_1k"))
+        self.assertEqual(layout["manifest"], Path("/data/webshop/search_engine/index-1k-manifest.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

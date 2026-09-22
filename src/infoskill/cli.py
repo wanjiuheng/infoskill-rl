@@ -79,7 +79,10 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--config", required=True)
     validate.add_argument("--mode", choices=[mode.value for mode in SkillMode], default="no_skill")
     _add_retrieval_mode_argument(validate)
-    evaluate = subparsers.add_parser("eval", help="run the complete ALFWorld valid_seen evaluation")
+    evaluate = subparsers.add_parser(
+        "eval",
+        help="run the registered ALFWorld or WebShop evaluation protocol",
+    )
     evaluate.add_argument("--config", required=True)
     evaluate.add_argument("--mode", choices=[mode.value for mode in SkillMode], required=True)
     _add_retrieval_mode_argument(evaluate)
@@ -930,7 +933,6 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         write_evaluation_provenance,
         write_evaluation_timing,
     )
-    from infoskill.integrations.alfworld import discover_tasks, task_manifest_sha256
     from infoskill.persistence import (
         MetricLogger,
         ZstdJsonlTraceWriter,
@@ -942,38 +944,75 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     )
 
     task_discovery_started = time.perf_counter()
-    tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
-    task_discovery_seconds = time.perf_counter() - task_discovery_started
-    evaluation_config = EvaluationConfig()
-    if len(tasks) != evaluation_config.total_tasks:
-        raise RuntimeError(
-            f"valid_seen discovery returned {len(tasks)} tasks instead of "
-            f"{evaluation_config.total_tasks}"
-        )
-    full_valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
-    if full_valid_seen_manifest_sha256 != evaluation_config.manifest_sha256:
-        raise RuntimeError(
-            "valid_seen task manifest SHA256 does not match the registered "
-            f"manifest: {full_valid_seen_manifest_sha256}"
-        )
     diagnostic_manifest = None
-    if args.diagnostic_task_manifest is not None:
-        from infoskill.diagnostics import (
-            diagnostic_denominators,
-            load_pressure_task_manifest,
+    paper_manifest = None
+    evaluation_label = "valid_seen"
+    if config.environment == "alfworld":
+        from infoskill.integrations.alfworld import (
+            discover_tasks,
+            task_manifest_sha256,
         )
 
-        tasks, diagnostic_manifest = load_pressure_task_manifest(
-            args.diagnostic_task_manifest,
-            available_tasks=tasks,
-            full_task_manifest_sha256=full_valid_seen_manifest_sha256,
+        tasks = discover_tasks(config.paths.alfworld_data, split="valid_seen")
+        evaluation_config = EvaluationConfig()
+        if len(tasks) != evaluation_config.total_tasks:
+            raise RuntimeError(
+                f"valid_seen discovery returned {len(tasks)} tasks instead of "
+                f"{evaluation_config.total_tasks}"
+            )
+        full_valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
+        if full_valid_seen_manifest_sha256 != evaluation_config.manifest_sha256:
+            raise RuntimeError(
+                "valid_seen task manifest SHA256 does not match the registered "
+                f"manifest: {full_valid_seen_manifest_sha256}"
+            )
+        if args.diagnostic_task_manifest is not None:
+            from infoskill.diagnostics import (
+                diagnostic_denominators,
+                load_pressure_task_manifest,
+            )
+
+            tasks, diagnostic_manifest = load_pressure_task_manifest(
+                args.diagnostic_task_manifest,
+                available_tasks=tasks,
+                full_task_manifest_sha256=full_valid_seen_manifest_sha256,
+            )
+            selected_manifest_sha256 = task_manifest_sha256(tasks)
+            evaluation_config = EvaluationConfig(
+                denominators=diagnostic_denominators(tasks),
+                manifest_sha256=selected_manifest_sha256,
+            )
+        valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
+    elif config.environment == "webshop":
+        from infoskill.integrations.webshop import (
+            load_bound_paper128_manifest,
+            paper128_evaluation_config,
+            paper128_tasks,
         )
-        selected_manifest_sha256 = task_manifest_sha256(tasks)
-        evaluation_config = EvaluationConfig(
-            denominators=diagnostic_denominators(tasks),
-            manifest_sha256=selected_manifest_sha256,
+
+        if args.diagnostic_task_manifest is not None:
+            raise ValueError("diagnostic_task_manifest is ALFWorld-only")
+        if args.environment_backend != "individual":
+            raise ValueError(
+                "paper128 WebShop evaluation requires --environment-backend individual"
+            )
+        if not config.paths.webshop_task_manifest:
+            raise ValueError("WebShop evaluation requires paths.webshop_task_manifest")
+        paper_manifest = load_bound_paper128_manifest(
+            webshop_source=config.paths.webshop_source,
+            webshop_data_root=config.paths.webshop_data,
+            manifest_path=config.paths.webshop_task_manifest,
         )
-    valid_seen_manifest_sha256 = task_manifest_sha256(tasks)
+        tasks = paper128_tasks(paper_manifest)
+        evaluation_config = paper128_evaluation_config(paper_manifest)
+        valid_seen_manifest_sha256 = evaluation_config.manifest_sha256
+        full_valid_seen_manifest_sha256 = valid_seen_manifest_sha256
+        evaluation_label = "webshop_paper128"
+    else:
+        raise ValueError(
+            f"evaluation is not implemented for environment={config.environment}"
+        )
+    task_discovery_seconds = time.perf_counter() - task_discovery_started
     effective_eval_batch_size = args.eval_batch_size or config.eval_batch_size
     checkpoint = (
         resolve_portable_checkpoint(args.policy_checkpoint)
@@ -1126,6 +1165,22 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "task_count": evaluation_config.total_tasks,
         "sha256": valid_seen_manifest_sha256,
     }
+    if paper_manifest is not None:
+        evaluation_manifest.update(
+            {
+                "protocol": "GiGPO-compatible-paper128",
+                "frozen_manifest_sha256": paper_manifest["manifest_sha256"],
+                "task_sequence_sha256": paper_manifest["task_sequence_sha256"],
+                "environment_commit": paper_manifest["environment_commit"],
+                "source_files": paper_manifest["source_files"],
+                "search_index_manifest_sha256": hashlib.sha256(
+                    (
+                        Path(config.paths.webshop_data)
+                        / "search_engine/index-1k-manifest.json"
+                    ).read_bytes()
+                ).hexdigest(),
+            }
+        )
     if diagnostic_manifest is not None:
         evaluation_manifest.update(
             {
@@ -1156,7 +1211,11 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         artifact_kind=(
             "infoskill_eval_batch_pressure_diagnostic"
             if diagnostic_manifest is not None
-            else "valid_seen_evaluation"
+            else (
+                "webshop_paper128_evaluation"
+                if paper_manifest is not None
+                else "valid_seen_evaluation"
+            )
         ),
     )
     checkpoint_path = (
@@ -1186,6 +1245,18 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "runtime_close_seconds": 0.0,
         "trace_write_seconds": 0.0,
     }
+    evaluation_generation_parameters = None
+    if paper_manifest is not None:
+        from infoskill.rollout import GenerationParameters
+
+        evaluation_generation_parameters = GenerationParameters(
+            do_sample=True,
+            temperature=float(
+                paper_manifest["protocol"]["validation_temperature"]
+            ),
+            top_p=1.0,
+            max_new_tokens=config.max_response_tokens,
+        )
 
     runtime = None
     try:
@@ -1312,6 +1383,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                 backend=runtime,
                 conditioner=conditioner,
                 environment_backend=args.environment_backend,
+                generation_parameters=evaluation_generation_parameters,
             )
             timing_seconds["collector_build_seconds"] = (
                 time.perf_counter() - stage_started
@@ -1331,6 +1403,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
                     if skill_setup is not None
                     else None
                 ),
+                generation_parameters=evaluation_generation_parameters,
             )
             timing_seconds["backend_initialize_seconds"] = (
                 time.perf_counter() - stage_started
@@ -1338,7 +1411,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
 
         progress = tqdm(
             total=len(tasks),
-            desc=f"valid_seen/{mode.value}@{evaluation_step}",
+            desc=f"{evaluation_label}/{mode.value}@{evaluation_step}",
             unit="task",
             dynamic_ncols=True,
         )
@@ -1376,7 +1449,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         split=(
             "diagnostic_valid_seen"
             if diagnostic_manifest is not None
-            else "valid_seen"
+            else evaluation_config.split
         ),
     )
     timing_seconds["trace_write_seconds"] = time.perf_counter() - stage_started
@@ -1410,6 +1483,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         "macro_success": summary.macro_success,
         "invalid_action_rate": summary.invalid_action_rate,
         "mean_steps": summary.mean_steps,
+        "mean_reward": summary.mean_reward,
         "incomplete_reasons": ";".join(summary.incomplete_reasons),
         "task_manifest_sha256": valid_seen_manifest_sha256,
     }
@@ -1423,7 +1497,7 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
         phase=(
             "diagnostic_valid_seen"
             if diagnostic_manifest is not None
-            else "valid_seen"
+            else evaluation_label
         ),
         values=values,
     )
@@ -1434,7 +1508,11 @@ def _evaluate(config: AppConfig, args: argparse.Namespace) -> int:
     summary_name = (
         "diagnostic_summary.json"
         if diagnostic_manifest is not None
-        else "valid_seen_summary.json"
+        else (
+            "webshop_paper128_summary.json"
+            if paper_manifest is not None
+            else "valid_seen_summary.json"
+        )
     )
     if diagnostic_manifest is not None:
         summary_payload.update(
@@ -3645,11 +3723,24 @@ def _validate_paths(
 ) -> None:
     required = {
         "policy_model": config.paths.policy_model,
-        "alfworld_source": config.paths.alfworld_source,
-        "alfworld_data": config.paths.alfworld_data,
-        "alfworld_config": config.paths.alfworld_config,
         "output_root": config.paths.output_root,
     }
+    if config.environment == "alfworld":
+        required.update(
+            {
+                "alfworld_source": config.paths.alfworld_source,
+                "alfworld_data": config.paths.alfworld_data,
+                "alfworld_config": config.paths.alfworld_config,
+            }
+        )
+    elif config.environment == "webshop":
+        required.update(
+            {
+                "webshop_source": config.paths.webshop_source,
+                "webshop_data": config.paths.webshop_data,
+                "webshop_task_manifest": config.paths.webshop_task_manifest,
+            }
+        )
     if mode is not SkillMode.NO_SKILL:
         required["skill_bank"] = config.paths.skill_bank
         required["skill_bank_manifest"] = (
@@ -3675,7 +3766,11 @@ def _validate_paths(
         if not config.paths.infoskill_checkpoint:
             raise ValueError("infoskill evaluation requires paths.infoskill_checkpoint")
         required["infoskill_checkpoint"] = config.paths.infoskill_checkpoint
-    missing = [f"{name}={path}" for name, path in required.items() if not Path(path).expanduser().exists()]
+    missing = [
+        f"{name}={path}"
+        for name, path in required.items()
+        if not path or not Path(path).expanduser().exists()
+    ]
     if missing:
         raise FileNotFoundError("configured local paths do not exist: " + ", ".join(missing))
 
@@ -3708,6 +3803,7 @@ def _summary_payload(run: object) -> dict[str, object]:
         "macro_success": summary.macro_success,
         "invalid_action_rate": summary.invalid_action_rate,
         "mean_steps": summary.mean_steps,
+        "mean_reward": summary.mean_reward,
         "per_task_type_success": summary.per_task_type_success,
         "incomplete_reasons": list(summary.incomplete_reasons),
     }

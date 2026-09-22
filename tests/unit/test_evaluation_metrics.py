@@ -19,6 +19,7 @@ class EvaluationMetricsTests(unittest.TestCase):
                         won=index == 0,
                         steps=1,
                         invalid_action_count=1 if index == 0 else 0,
+                        environment_reward=0.5,
                     )
                 )
 
@@ -31,6 +32,7 @@ class EvaluationMetricsTests(unittest.TestCase):
         self.assertAlmostEqual(result.macro_success, expected_macro)
         self.assertAlmostEqual(result.invalid_action_rate, 6 / 140)
         self.assertEqual(result.mean_steps, 1.0)
+        self.assertEqual(result.mean_reward, 0.5)
 
 
 if __name__ == "__main__":

@@ -81,6 +81,9 @@ class EvaluationRunner:
                         won=group.trajectories[0].won,
                         steps=len(group.trajectories[0].steps),
                         invalid_action_count=group.trajectories[0].invalid_action_count,
+                        environment_reward=_final_environment_reward(
+                            group.trajectories[0]
+                        ),
                     )
                     for group in groups
                 ]
@@ -106,6 +109,12 @@ class EvaluationRunner:
             )
             for task in tasks
         ], (), {}
+
+
+def _final_environment_reward(trajectory) -> float:
+    if not trajectory.steps:
+        return 0.0
+    return float(trajectory.steps[-1].transition.raw_reward)
 
 
 _MAXIMUM_PERFORMANCE_METRICS = {

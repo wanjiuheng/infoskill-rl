@@ -14,6 +14,7 @@ class EpisodeEvaluation:
     won: bool
     steps: int
     invalid_action_count: int
+    environment_reward: float = 0.0
     infrastructure_error: str | None = None
     infrastructure_detail: Mapping[str, object] | None = None
 
@@ -32,6 +33,7 @@ class EvaluationSummary:
     macro_success: float | None
     invalid_action_rate: float | None
     mean_steps: float | None
+    mean_reward: float | None
     per_task_type_success: dict[str, float]
     incomplete_reasons: tuple[str, ...] = ()
 
@@ -65,6 +67,7 @@ def aggregate_valid_seen(
             macro_success=None,
             invalid_action_rate=None,
             mean_steps=None,
+            mean_reward=None,
             per_task_type_success={},
             incomplete_reasons=tuple(reasons),
         )
@@ -86,5 +89,6 @@ def aggregate_valid_seen(
         macro_success=macro,
         invalid_action_rate=invalid_action_rate,
         mean_steps=total_steps / len(records),
+        mean_reward=sum(record.environment_reward for record in records) / len(records),
         per_task_type_success=per_type,
     )

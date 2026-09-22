@@ -27,6 +27,7 @@ class RuntimePaths:
     webshop_data: str | None = None
     webshop_human_demonstrations: str | None = None
     webshop_human_goals: str | None = None
+    webshop_task_manifest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

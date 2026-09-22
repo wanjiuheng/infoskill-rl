@@ -44,7 +44,17 @@ def _normalize(command: str) -> str:
 def _match_environment_command(candidate: str, commands: Sequence[str]) -> str | None:
     normalized = _normalize(candidate)
     matches = [command for command in commands if _normalize(command) == normalized]
-    return matches[0] if len(matches) == 1 else None
+    if len(matches) == 1:
+        return matches[0]
+    if "search[<your query>]" not in {_normalize(command) for command in commands}:
+        return None
+    search = re.fullmatch(r"search\[(.+)]", candidate.strip(), flags=re.IGNORECASE)
+    if search is None:
+        return None
+    query = " ".join(search.group(1).strip().split())
+    if not query or query.lower() == "<your query>":
+        return None
+    return f"search[{query}]"
 
 
 def _clean_last_line(line: str) -> str:

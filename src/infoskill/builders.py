@@ -19,6 +19,7 @@ from infoskill.conditioning import (
 )
 from infoskill.config import SkillMode
 from infoskill.integrations.alfworld import AlfworldEnvironmentFactory
+from infoskill.integrations.webshop import WebShopEnvironmentFactory
 from infoskill.rollout import GenerationParameters, TransformersBackend
 from infoskill.skills import (
     EmbeddingRetriever,
@@ -638,6 +639,7 @@ def build_transformers_evaluation(
     mode: SkillMode,
     environment_backend: str = "native_batch",
     conditioner: SkillConditioner | None = None,
+    generation_parameters: GenerationParameters | None = None,
 ):
     if TransformersBackend is None:
         raise RuntimeError("Transformers evaluation requires torch and transformers")
@@ -647,11 +649,9 @@ def build_transformers_evaluation(
         device="cuda:0",
         max_prompt_tokens=config.max_prompt_tokens,
     )
-    factory = AlfworldEnvironmentFactory.from_paths(
-        alfworld_source=config.paths.alfworld_source,
-        config_path=config.paths.alfworld_config,
-        data_root=config.paths.alfworld_data,
-        max_steps=config.max_steps,
+    factory = _build_environment_factory(
+        config,
+        environment_backend=environment_backend,
     )
     if mode is SkillMode.NO_SKILL:
         if conditioner is not None:
@@ -680,11 +680,14 @@ def build_transformers_evaluation(
         max_steps=config.max_steps,
         history_limit=config.history_length,
         invalid_action_penalty=0.01,
-        generation_parameters=GenerationParameters(
-            do_sample=False,
-            temperature=0.0,
-            top_p=1.0,
-            max_new_tokens=config.max_response_tokens,
+        generation_parameters=(
+            generation_parameters
+            or GenerationParameters(
+                do_sample=False,
+                temperature=0.0,
+                top_p=1.0,
+                max_new_tokens=config.max_response_tokens,
+            )
         ),
         environment_workers=1,
         environment_backend=environment_backend,  # type: ignore[arg-type]
@@ -733,11 +736,9 @@ def build_verl_policy_evaluation(
     else:
         raise ValueError(f"unsupported VERL policy evaluation mode: {mode.value}")
 
-    factory = AlfworldEnvironmentFactory.from_paths(
-        alfworld_source=config.paths.alfworld_source,
-        config_path=config.paths.alfworld_config,
-        data_root=config.paths.alfworld_data,
-        max_steps=config.max_steps,
+    factory = _build_environment_factory(
+        config,
+        environment_backend=environment_backend,
     )
     from infoskill.episode import TrajectoryCollector
 
@@ -760,6 +761,34 @@ def build_verl_policy_evaluation(
         environment_workers=1,
         environment_backend=environment_backend,  # type: ignore[arg-type]
     )
+
+
+def _build_environment_factory(
+    config: AppConfig,
+    *,
+    environment_backend: str,
+):
+    if config.environment == "alfworld":
+        return AlfworldEnvironmentFactory.from_paths(
+            alfworld_source=config.paths.alfworld_source,
+            config_path=config.paths.alfworld_config,
+            data_root=config.paths.alfworld_data,
+            max_steps=config.max_steps,
+        )
+    if config.environment == "webshop":
+        if environment_backend != "individual":
+            raise ValueError(
+                "paper128 WebShop evaluation requires environment_backend=individual"
+            )
+        if not config.paths.webshop_task_manifest:
+            raise ValueError("WebShop evaluation requires paths.webshop_task_manifest")
+        return WebShopEnvironmentFactory.from_paths(
+            webshop_source=config.paths.webshop_source,
+            webshop_data_root=config.paths.webshop_data,
+            manifest_path=config.paths.webshop_task_manifest,
+            max_steps=config.max_steps,
+        )
+    raise ValueError(f"evaluation environment is not implemented: {config.environment}")
 
 
 def _build_retriever(config: AppConfig, library: FixedSkillLibrary, encoder: object):

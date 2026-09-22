@@ -109,7 +109,21 @@ def render_state_views(state: CanonicalAgentState, *, history_limit: int = 2) ->
         f"Recent history:\n{history_text}\n"
         f"Current observation: {state.observation}"
     )
-    policy_view = render_policy_message(state, history_limit=history_limit)
+    if state.task_type == "webshop":
+        from infoskill.integrations.webshop.policy import render_webshop_policy_message
+
+        policy_view = render_webshop_policy_message(
+            task_description=state.goal,
+            current_observation=state.observation,
+            available_actions=state.admissible_commands,
+            history=tuple(
+                (entry.observation, entry.executed_action)
+                for entry in state.history
+            ),
+            history_limit=history_limit,
+        )
+    else:
+        policy_view = render_policy_message(state, history_limit=history_limit)
     return StateViews(
         retrieval_view=state.goal,
         compression_view=compression_view,

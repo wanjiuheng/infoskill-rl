@@ -51,6 +51,14 @@ case "${ACTION}" in
       --webshop-data-root "${WEBSHOP_DATA_ROOT}" \
       --threads "${WEBSHOP_INDEX_THREADS:-4}"
     ;;
+  build-paper128-index)
+    exec env PYTHONPATH="${WEBSHOP_SOURCE}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" \
+      "${PROJECT_ROOT}/scripts/build_webshop_search_index.py" \
+      --webshop-root "${WEBSHOP_SOURCE}" \
+      --webshop-data-root "${WEBSHOP_DATA_ROOT}" \
+      --catalog paper1000 \
+      --threads "${WEBSHOP_INDEX_THREADS:-4}"
+    ;;
   smoke-online)
     exec env PYTHONPATH="${PROJECT_ROOT}/src:${WEBSHOP_SOURCE}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" \
       -m infoskill.integrations.webshop.online_smoke \
@@ -167,7 +175,7 @@ case "${ACTION}" in
       --max-length "${IMITATION_MAX_LENGTH}"
     ;;
   *)
-    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|build-index|smoke-online|prompt-parity|paper128-manifest|prepare|audit|build-skill-bank|train" >&2
+    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|build-index|build-paper128-index|smoke-online|prompt-parity|paper128-manifest|prepare|audit|build-skill-bank|train" >&2
     exit 2
     ;;
 esac

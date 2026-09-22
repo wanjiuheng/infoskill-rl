@@ -7,6 +7,8 @@ from unittest.mock import patch
 from infoskill.integrations.webshop.paper_protocol import (
     build_paper128_manifest,
     load_paper128_manifest,
+    paper128_evaluation_config,
+    paper128_tasks,
     validate_paper128_manifest,
     validation_session_indices,
     write_paper128_manifest,
@@ -67,6 +69,15 @@ class WebShopPaperProtocolTests(unittest.TestCase):
         self.assertEqual(first["session_index"], 319)
         self.assertEqual(first["goal"]["asin"], "asin-1000-319")
         validate_paper128_manifest(manifest)
+
+        tasks = paper128_tasks(manifest)
+        evaluation = paper128_evaluation_config(manifest)
+        self.assertEqual(len(tasks), 128)
+        self.assertEqual(tasks[0].task_id, "webshop-paper128-000")
+        self.assertEqual(tasks[0].goal, "goal 1000 319")
+        self.assertEqual(tasks[0].split, "paper128")
+        self.assertEqual(evaluation.total_tasks, 128)
+        self.assertEqual(evaluation.manifest_sha256, manifest["task_sequence_sha256"])
 
     def test_manifest_rejects_tampering_and_overwrite(self) -> None:
         manifest = build_paper128_manifest(
