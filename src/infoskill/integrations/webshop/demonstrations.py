@@ -96,7 +96,9 @@ class OfficialWebShopHumanDemonstrationProvider:
         states = _required_list(payload, "states", line_number)
         available = _required_list(payload, "available_actions", line_number)
         action_indices = _required_list(payload, "action_idxs", line_number)
-        actions = _actions(payload, available, action_indices, line_number)
+        actions = resolve_demonstration_actions(
+            payload, available, action_indices, line_number
+        )
         lengths = {len(states), len(available), len(action_indices), len(actions)}
         if len(lengths) != 1 or not states:
             raise ValueError(
@@ -229,7 +231,7 @@ def normalize_available_actions(
     return tuple(dict.fromkeys(actions))
 
 
-def _actions(
+def resolve_demonstration_actions(
     payload: dict[str, object],
     available: list[object],
     action_indices: list[object],

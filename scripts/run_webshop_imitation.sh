@@ -61,6 +61,7 @@ case "${ACTION}" in
       --webshop-data-root "${WEBSHOP_DATA_ROOT}" \
       --prepared-data "${PREPARED_DATA}" \
       --sample-count "${WEBSHOP_PARITY_SAMPLE_COUNT:-3}" \
+      --max-steps "${WEBSHOP_PARITY_MAX_STEPS:-100}" \
       --output "${WEBSHOP_PARITY_REPORT:-${PROJECT_ROOT}/webshop-prompt-parity.json}"
     ;;
   prepare)
