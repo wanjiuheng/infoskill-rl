@@ -13,6 +13,10 @@ HUMAN_GOALS=${HUMAN_GOALS:-${WEBSHOP_DATA_ROOT}/baseline_models/data/human_goals
 PREPARED_DATA=${PREPARED_DATA:-${WEBSHOP_DATA_ROOT}/processed/imitation-data-content-grouped-v2}
 DATA_AUDIT=${DATA_AUDIT:-${WEBSHOP_DATA_ROOT}/processed/imitation-data-content-grouped-v2-audit.json}
 SKILL_BANK=${SKILL_BANK:-${WEBSHOP_DATA_ROOT}/processed/webshop-skill-bank-content-grouped-v2.json}
+PAPER128_PRODUCTS=${PAPER128_PRODUCTS:-${WEBSHOP_DATA_ROOT}/data/items_shuffle_1000.json}
+PAPER128_ATTRIBUTES=${PAPER128_ATTRIBUTES:-${WEBSHOP_DATA_ROOT}/data/items_ins_v2_1000.json}
+PAPER128_HUMAN_INSTRUCTIONS=${PAPER128_HUMAN_INSTRUCTIONS:-${WEBSHOP_DATA_ROOT}/data/items_human_ins.json}
+PAPER128_MANIFEST=${PAPER128_MANIFEST:-${WEBSHOP_DATA_ROOT}/processed/webshop-paper128-manifest.json}
 SFT_OUTPUT=${SFT_OUTPUT:-${PROJECT_ROOT}/runs/webshop-actor-imitation-warmstart}
 MODEL_PATH=${MODEL_PATH:-${PROJECT_ROOT}/../../models/Qwen/Qwen2.5-7B-Instruct}
 BASE_MODEL_ID=${BASE_MODEL_ID:-qwen2.5-7b-instruct}
@@ -63,6 +67,28 @@ case "${ACTION}" in
       --sample-count "${WEBSHOP_PARITY_SAMPLE_COUNT:-3}" \
       --max-steps "${WEBSHOP_PARITY_MAX_STEPS:-100}" \
       --output "${WEBSHOP_PARITY_REPORT:-${PROJECT_ROOT}/webshop-prompt-parity.json}"
+    ;;
+  paper128-manifest)
+    for REQUIRED in \
+      "${PAPER128_PRODUCTS}" \
+      "${PAPER128_ATTRIBUTES}" \
+      "${PAPER128_HUMAN_INSTRUCTIONS}"
+    do
+      [[ -f "${REQUIRED}" ]] || {
+        echo "missing paper-protocol WebShop source: ${REQUIRED}" >&2
+        exit 2
+      }
+    done
+    ENVIRONMENT_COMMIT=${WEBSHOP_ENVIRONMENT_COMMIT:-$(git -C "${PROJECT_ROOT}/../SkillRL" rev-parse HEAD)}
+    exec env PYTHONPATH="${PROJECT_ROOT}/src:${WEBSHOP_SOURCE}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" \
+      "${PROJECT_ROOT}/scripts/build_webshop_paper128_manifest.py" \
+      --webshop-root "${WEBSHOP_SOURCE}" \
+      --products "${PAPER128_PRODUCTS}" \
+      --attributes "${PAPER128_ATTRIBUTES}" \
+      --human-instructions "${PAPER128_HUMAN_INSTRUCTIONS}" \
+      --environment-commit "${ENVIRONMENT_COMMIT}" \
+      --validation-call-index "${PAPER128_VALIDATION_CALL_INDEX:-0}" \
+      --output "${PAPER128_MANIFEST}"
     ;;
   prepare)
     [[ -f "${DEMONSTRATIONS}" ]] || {
@@ -141,7 +167,7 @@ case "${ACTION}" in
       --max-length "${IMITATION_MAX_LENGTH}"
     ;;
   *)
-    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|build-index|smoke-online|prompt-parity|prepare|audit|build-skill-bank|train" >&2
+    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|build-index|smoke-online|prompt-parity|paper128-manifest|prepare|audit|build-skill-bank|train" >&2
     exit 2
     ;;
 esac
