@@ -47,6 +47,13 @@ case "${ACTION}" in
       --webshop-data-root "${WEBSHOP_DATA_ROOT}" \
       --threads "${WEBSHOP_INDEX_THREADS:-4}"
     ;;
+  smoke-online)
+    exec env PYTHONPATH="${PROJECT_ROOT}/src:${WEBSHOP_SOURCE}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON_BIN}" \
+      -m infoskill.integrations.webshop.online_smoke \
+      --webshop-root "${WEBSHOP_SOURCE}" \
+      --webshop-data-root "${WEBSHOP_DATA_ROOT}" \
+      --output "${WEBSHOP_ONLINE_SMOKE_REPORT:-${PROJECT_ROOT}/webshop-online-smoke.json}"
+    ;;
   prepare)
     [[ -f "${DEMONSTRATIONS}" ]] || {
       echo "missing WebShop demonstrations: ${DEMONSTRATIONS}" >&2
@@ -124,7 +131,7 @@ case "${ACTION}" in
       --max-length "${IMITATION_MAX_LENGTH}"
     ;;
   *)
-    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|build-index|prepare|audit|build-skill-bank|train" >&2
+    echo "usage: bash scripts/run_webshop_imitation.sh audit-archive|doctor|build-index|smoke-online|prepare|audit|build-skill-bank|train" >&2
     exit 2
     ;;
 esac

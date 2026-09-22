@@ -98,6 +98,23 @@ bash scripts/run_webshop_imitation.sh build-index
 `doctor` 变为 `formal_ready=true` 只代表资产和环境预检通过，不表示下文尚未完成的
 正式 WebShop rollout、prompt parity 和效果验收已经通过。
 
+资产通过后，先运行单进程、CPU-only 的真实环境 smoke：
+
+```bash
+cd /models/wanjh2/data/wjh/alfworld_eval/infoskill
+PYTHON_BIN=/data/wanjh2/miniconda3/envs/ifs-webshop/bin/python \
+PATH=/data/wanjh2/miniconda3/envs/ifs-webshop/bin:$PATH \
+bash scripts/run_webshop_imitation.sh smoke-online
+```
+
+入口在本进程初始化上游 `WebAgentTextEnv` 时，显式注入外部商品文件、人类指令文件和
+Lucene 索引，不修改 SkillRL 源码或复制 5.5 GB 数据。它把运行时 goal 映射回官方
+`human_goals.json` 的最早同文索引，从 train/validation/test 各抽一条，检查 reset、
+可用动作、prompt 渲染和真实搜索转移。输出默认是项目根目录下的
+`webshop-online-smoke.json`，只保存 goal 索引、动作数量与文本 SHA-256，不保存原始
+instruction。通过只证明这条环境/路径链路，尚不证明 warm-start prompt parity 或正式评测。
+上游加载完整商品会占用大量主机内存和共享盘 I/O，但不使用 GPU。
+
 ## 分阶段取得官方 human trajectories
 
 不要先运行上游 `setup.sh -d all`；它会连续安装依赖、下载全量产品、生成四套中间

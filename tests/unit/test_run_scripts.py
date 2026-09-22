@@ -38,6 +38,8 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn('"${PYTHON_BIN}"', script)
         self.assertIn('--webshop-data-root "${WEBSHOP_DATA_ROOT}"', script)
         self.assertIn("WEBSHOP_INDEX_THREADS:-4", script)
+        self.assertIn("  smoke-online)", script)
+        self.assertIn("infoskill.integrations.webshop.online_smoke", script)
 
     def test_warmstart_handoff_is_forwarded_to_train_and_eval(self) -> None:
         script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
