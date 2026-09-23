@@ -25,7 +25,13 @@ from infoskill.conditioning.distributed_layout import (
 from infoskill.config import DEFAULT_POLICY_MAX_TOKENS_PER_GPU
 from infoskill.distributed import pad_batch_to_divisor, policy_rank_balanced_order
 from infoskill.episode import TrajectoryGroup
-from infoskill.learning import require_logprob_alignment, summarize_logprob_alignment
+from infoskill.learning import (
+    LogprobAlignmentError,
+    alignment_passes,
+    collect_logprob_alignment_offenders,
+    require_logprob_alignment,
+    summarize_logprob_alignment,
+)
 from infoskill.rollout import GenerationRequest, GenerationResult
 
 from .codec import VerlBatchCodec
@@ -592,13 +598,39 @@ class VerlRuntime:
             )
             response_width = int(real_data.batch["responses"].shape[-1])
             response_mask = real_data.batch["attention_mask"][:, -response_width:].bool()
+            rollout_log_probs = real_data.batch["rollout_log_probs"]
+            recomputed_log_probs = real_old.batch["old_log_probs"]
+            response_token_ids = real_data.batch["responses"]
             alignment = summarize_logprob_alignment(
-                rollout=real_data.batch["rollout_log_probs"].tolist(),
-                recomputed=real_old.batch["old_log_probs"].tolist(),
+                rollout=rollout_log_probs.tolist(),
+                recomputed=recomputed_log_probs.tolist(),
                 mask=response_mask.tolist(),
-                token_ids=real_data.batch["responses"].tolist(),
+                token_ids=response_token_ids.tolist(),
             )
-            require_logprob_alignment(alignment)
+            try:
+                require_logprob_alignment(alignment)
+            except LogprobAlignmentError as error:
+                try:
+                    diagnostics = self._diagnose_logprob_alignment_failure(
+                        real_data=real_data,
+                        real_old=real_old,
+                        response_mask=response_mask,
+                    )
+                except Exception as diagnostic_error:
+                    diagnostics = {
+                        "schema_version": 1,
+                        "optimizer_update_applied": False,
+                        "counterfactual_classification": "diagnostic_failed",
+                        "diagnostic_error": (
+                            f"{type(diagnostic_error).__name__}: {diagnostic_error}"
+                        ),
+                    }
+                raise LogprobAlignmentError(
+                    summary=error.summary,
+                    thresholds=error.thresholds,
+                    failures=error.failures,
+                    diagnostics=diagnostics,
+                ) from error
             alignment_metrics = {
                 f"rollout_recompute/{key}": float(value)
                 for key, value in alignment.items()
@@ -681,6 +713,111 @@ class VerlRuntime:
         self._generation_seconds = 0.0
         self._generation_worker_seconds = 0.0
         return metrics
+
+    def _diagnose_logprob_alignment_failure(
+        self,
+        *,
+        real_data: object,
+        real_old: object,
+        response_mask: object,
+    ) -> dict[str, object]:
+        """Run bounded counterfactuals before preserving a failed update-0 gate."""
+
+        rollout = real_data.batch["rollout_log_probs"]  # type: ignore[attr-defined]
+        recomputed = real_old.batch["old_log_probs"]  # type: ignore[attr-defined]
+        token_ids = real_data.batch["responses"]  # type: ignore[attr-defined]
+        metadata_values = real_data.non_tensor_batch.get(  # type: ignore[attr-defined]
+            "infoskill_replay_metadata"
+        )
+        metadata = (
+            [dict(value) for value in metadata_values.tolist()]
+            if metadata_values is not None
+            else None
+        )
+
+        def decode_token(token_id: int) -> str:
+            return str(
+                self.codec.tokenizer.decode(
+                    [token_id],
+                    skip_special_tokens=False,
+                )
+            )
+
+        offenders = collect_logprob_alignment_offenders(
+            rollout=rollout.tolist(),
+            recomputed=recomputed.tolist(),
+            mask=response_mask.tolist(),  # type: ignore[attr-defined]
+            token_ids=token_ids.tolist(),
+            row_metadata=metadata,
+            decode_token=decode_token,
+            minimum_abs_error=1.0,
+            limit=128,
+        )
+        offender_rows = sorted(
+            {int(item["sample_index"]) for item in offenders}
+        )
+        diagnostics: dict[str, object] = {
+            "schema_version": 1,
+            "optimizer_update_applied": False,
+            "offender_threshold": 1.0,
+            "offender_token_count": len(offenders),
+            "offender_row_count": len(offender_rows),
+            "offender_rows": offender_rows,
+            "offenders": offenders,
+        }
+        if not offender_rows or not self.config.enable_infoskill_modules:
+            diagnostics["counterfactual_classification"] = "not_available"
+            return diagnostics
+
+        selected = real_data[offender_rows]  # type: ignore[index]
+        selected, padding_count = pad_batch_to_divisor(
+            selected,
+            self.worker_group.world_size,
+        )
+        isolated = self.worker_group.compute_infoskill_old_log_prob(selected)
+        exact_prefix = (
+            self.worker_group.compute_infoskill_rollout_prefix_log_prob(selected)
+        )
+        row_count = len(offender_rows)
+        isolated_values = isolated.batch["old_log_probs"][:row_count]
+        exact_prefix_values = exact_prefix.batch["old_log_probs"][:row_count]
+
+        isolated_full = recomputed.clone()
+        isolated_full[offender_rows] = isolated_values
+        exact_prefix_full = recomputed.clone()
+        exact_prefix_full[offender_rows] = exact_prefix_values
+        common = {
+            "rollout": rollout.tolist(),
+            "mask": response_mask.tolist(),  # type: ignore[attr-defined]
+            "token_ids": token_ids.tolist(),
+        }
+        isolated_summary = summarize_logprob_alignment(
+            recomputed=isolated_full.tolist(),
+            **common,
+        )
+        exact_prefix_summary = summarize_logprob_alignment(
+            recomputed=exact_prefix_full.tolist(),
+            **common,
+        )
+        isolated_passed = alignment_passes(isolated_summary)
+        exact_prefix_passed = alignment_passes(exact_prefix_summary)
+        if isolated_passed:
+            classification = "batch_context_sensitive_recompute"
+        elif exact_prefix_passed:
+            classification = "recomputed_prefix_path_mismatch"
+        else:
+            classification = "persistent_actor_vllm_or_replay_mismatch"
+        diagnostics.update(
+            {
+                "counterfactual_classification": classification,
+                "counterfactual_padding_rows": padding_count,
+                "isolated_recompute_passed": isolated_passed,
+                "isolated_recompute_summary": isolated_summary,
+                "exact_rollout_prefix_passed": exact_prefix_passed,
+                "exact_rollout_prefix_summary": exact_prefix_summary,
+            }
+        )
+        return diagnostics
 
     def update_auxiliary(
         self,

@@ -341,6 +341,54 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         return result
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_infoskill_rollout_prefix_log_prob(self, data):
+        """Recompute selected rows with the exact prefix used by rollout."""
+
+        if self._infoskill_worker_conditioner is None:
+            raise RuntimeError(
+                "INFO-SKILL exact-prefix replay requires M1 modules"
+            )
+        if not self._is_actor:
+            raise RuntimeError(
+                "INFO-SKILL exact-prefix replay requires an actor worker"
+            )
+        if self._is_offload_param:
+            raise RuntimeError(
+                "INFO-SKILL exact-prefix replay does not support param offload"
+            )
+        from verl import DataProto
+
+        data = data.to(get_torch_device().current_device())
+        data.meta_info["micro_batch_size"] = (
+            self.config.rollout.log_prob_micro_batch_size_per_gpu
+        )
+        data.meta_info["max_token_len"] = (
+            self.config.rollout.log_prob_max_token_len_per_gpu
+        )
+        data.meta_info["use_dynamic_bsz"] = (
+            self.config.rollout.log_prob_use_dynamic_bsz
+        )
+        data.meta_info["temperature"] = self.config.rollout.temperature
+        with self.ulysses_sharding_manager:
+            data = self.ulysses_sharding_manager.preprocess_data(data)
+            output, _ = self.actor.compute_log_prob_with_rollout_prefix(
+                data=data,
+                calculate_entropy=False,
+            )
+            result = DataProto.from_dict(
+                tensors={"old_log_probs": output},
+                meta_info={"temperature": self.config.rollout.temperature},
+            )
+            result = self.ulysses_sharding_manager.postprocess_data(result)
+        result = result.to("cpu")
+        if (
+            self.world_size > 1
+            and fsdp_version(self.actor.actor_module) == 1
+        ):
+            self.actor.actor_module._handle.reshard(True)
+        return result
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def condition_infoskill(self, data):
         conditioner = self._infoskill_worker_conditioner
         if conditioner is None:

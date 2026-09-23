@@ -5,6 +5,9 @@ import unittest
 
 from infoskill.learning import (
     LogprobAlignmentError,
+    LogprobAlignmentThresholds,
+    alignment_passes,
+    collect_logprob_alignment_offenders,
     require_logprob_alignment,
     summarize_logprob_alignment,
 )
@@ -119,6 +122,53 @@ class LogprobAlignmentTests(unittest.TestCase):
     def test_missing_gate_metric_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "missing required metric"):
             require_logprob_alignment({"ratio_mean": 1.0})
+
+    def test_offenders_are_sorted_and_bound_to_row_metadata(self) -> None:
+        offenders = collect_logprob_alignment_offenders(
+            rollout=((-0.5, -0.5), (-0.5, -0.5)),
+            recomputed=((-0.5, -3.0), (-7.0, -0.5)),
+            mask=((True, True), (True, True)),
+            token_ids=((10, 11), (12, 13)),
+            row_metadata=({"task_id": "a"}, {"task_id": "b"}),
+            decode_token=lambda token_id: f"token-{token_id}",
+            minimum_abs_error=1.0,
+        )
+
+        self.assertEqual([item["sample_index"] for item in offenders], [1, 0])
+        self.assertEqual(offenders[0]["token_text"], "token-12")
+        self.assertEqual(offenders[0]["row"], {"task_id": "b"})
+        self.assertTrue(offenders[0]["at_first_active_token"])
+        self.assertFalse(offenders[0]["at_last_active_token"])
+
+    def test_alignment_passes_reports_gate_result_without_hiding_bad_schema(self) -> None:
+        passing = {
+            "logprob_abs_error_mean": 0.0,
+            "logprob_abs_error_median": 0.0,
+            "logprob_abs_error_p95": 0.0,
+            "logprob_abs_error_p99": 0.0,
+            "logprob_abs_error_gt_1_rate": 0.0,
+            "logprob_abs_error_gt_5_rate": 0.0,
+            "ratio_mean": 1.0,
+        }
+        self.assertTrue(alignment_passes(passing))
+        self.assertFalse(
+            alignment_passes({**passing, "logprob_abs_error_gt_5_rate": 0.1})
+        )
+        with self.assertRaisesRegex(ValueError, "missing required metric"):
+            alignment_passes({"ratio_mean": 1.0})
+
+    def test_alignment_error_persists_counterfactual_diagnostics(self) -> None:
+        error = LogprobAlignmentError(
+            summary={"token_count": 2},
+            thresholds=LogprobAlignmentThresholds(),
+            failures=("failed",),
+            diagnostics={"counterfactual_classification": "prefix"},
+        )
+
+        self.assertEqual(
+            error.as_dict()["diagnostics"]["counterfactual_classification"],
+            "prefix",
+        )
 
 
 if __name__ == "__main__":

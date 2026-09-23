@@ -100,6 +100,26 @@ class InfoSkillPolicyActorTests(unittest.TestCase):
         output = embedding(torch.tensor([[0, 1]]))
         self.assertEqual(tuple(output.shape), (1, 2, 2))
 
+    def test_exact_rollout_prefix_uses_the_same_padding_mask_contract(self) -> None:
+        from infoskill.integrations.verl.policy_actor import (
+            _rollout_prefix_and_hook_mask,
+        )
+
+        source = torch.arange(8, dtype=torch.float32).reshape(2, 2, 2)
+        prefix, mask = _rollout_prefix_and_hook_mask(
+            rollout_prefixes=source,
+            prefix_mask=torch.tensor(
+                [[False, True, True, False], [True, True, False, False]]
+            ),
+            attention_mask=torch.tensor(
+                [[False, True, True, True], [True, True, True, False]]
+            ),
+            remove_padding=True,
+        )
+
+        self.assertTrue(torch.equal(prefix, source))
+        self.assertEqual(mask.tolist(), [[True, True, False, True, True, False]])
+
 
 if torch is not None:
 

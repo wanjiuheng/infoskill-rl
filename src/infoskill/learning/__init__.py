@@ -5,6 +5,8 @@ from .alignment import (
     DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS,
     LogprobAlignmentError,
     LogprobAlignmentThresholds,
+    alignment_passes,
+    collect_logprob_alignment_offenders,
     require_logprob_alignment,
     summarize_logprob_alignment,
 )
@@ -49,6 +51,8 @@ __all__ = [
     "DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS",
     "LogprobAlignmentError",
     "LogprobAlignmentThresholds",
+    "alignment_passes",
+    "collect_logprob_alignment_offenders",
     "OfflineGroundingBatch",
     "OnlineAuxiliaryBatch",
     "GroupAdvantageSignals",

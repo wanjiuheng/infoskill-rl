@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -151,22 +152,51 @@ class VerlBatchCodec:
         from verl import DataProto
 
         examples: list[PolicyReplayExample] = []
-        for group, group_advantages in zip(groups, advantages):
-            for trajectory, advantage in zip(group.trajectories, group_advantages):
-                for step in trajectory.steps:
+        row_metadata: list[dict[str, object]] = []
+        for group_index, (group, group_advantages) in enumerate(
+            zip(groups, advantages)
+        ):
+            for trajectory_index, (trajectory, advantage) in enumerate(
+                zip(group.trajectories, group_advantages)
+            ):
+                for step_index, step in enumerate(trajectory.steps):
                     trace = step.conditioned_input.conditioning_trace
                     latent = getattr(trace, "latent", None)
+                    prompt = step.conditioned_input.user_message
                     examples.append(
                         PolicyReplayExample(
-                            prompt_ids=self._prompt_ids(
-                                step.conditioned_input.user_message
-                            ),
+                            prompt_ids=self._prompt_ids(prompt),
                             response_ids=step.generation.token_ids,
                             response_logprobs=step.generation.token_logprobs,
                             advantage=float(advantage),
                             latent=latent,
                             rollout_prefix=step.conditioned_input.soft_prefix,
                         )
+                    )
+                    row_metadata.append(
+                        {
+                            "original_sample_index": len(examples) - 1,
+                            "group_index": group_index,
+                            "trajectory_index": trajectory_index,
+                            "step_index": step_index,
+                            "task_id": trajectory.task.task_id,
+                            "task_type": trajectory.task.task_type,
+                            "environment_path": trajectory.task.environment_path,
+                            "rollout_id": trajectory.rollout_id,
+                            "generation_request_id": step.generation.request_id,
+                            "prompt_sha256": hashlib.sha256(
+                                prompt.encode("utf-8")
+                            ).hexdigest(),
+                            "prompt": prompt,
+                            "prompt_token_count": step.generation.prompt_token_count,
+                            "generated_text": step.generation.text,
+                            "response_token_count": len(step.generation.token_ids),
+                            "executed_action": step.action.executed_action,
+                            "resolved_action": step.action.resolved_action,
+                            "candidate_skill_ids": list(
+                                step.conditioned_input.candidate_skill_ids
+                            ),
+                        }
                     )
         tensors = build_policy_replay_tensors(
             examples,
@@ -175,6 +205,9 @@ class VerlBatchCodec:
         global_token_num = tensors["attention_mask"].sum(dim=-1).tolist()
         return DataProto.from_dict(
             tensors=tensors,
+            non_tensors={
+                "infoskill_replay_metadata": object_array(row_metadata),
+            },
             meta_info={
                 "temperature": 1.0,
                 "global_token_num": global_token_num,

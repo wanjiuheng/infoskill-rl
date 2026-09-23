@@ -127,6 +127,7 @@ def build_infoskill_policy_actor_class():
             calculate_entropy=False,
             *,
             detach_projector_output: bool = False,
+            use_rollout_prefix: bool = False,
         ):
             if "infoskill_prefix_mask" not in micro_batch:
                 raise RuntimeError(
@@ -136,14 +137,26 @@ def build_infoskill_policy_actor_class():
                 raise RuntimeError(
                     "INFO-SKILL policy replay does not support Ulysses sequence parallelism"
                 )
-            prefix, hook_mask = _current_prefix_and_hook_mask(
-                projector=self.infoskill_projector,
-                replay_latents=micro_batch["infoskill_replay_latents"],
-                prefix_mask=micro_batch["infoskill_prefix_mask"],
-                attention_mask=micro_batch["attention_mask"],
-                remove_padding=self.use_remove_padding,
-                detach_projector_output=detach_projector_output,
-            )
+            if use_rollout_prefix:
+                if "infoskill_rollout_prefixes" not in micro_batch:
+                    raise RuntimeError(
+                        "INFO-SKILL exact-prefix replay is missing rollout prefixes"
+                    )
+                prefix, hook_mask = _rollout_prefix_and_hook_mask(
+                    rollout_prefixes=micro_batch["infoskill_rollout_prefixes"],
+                    prefix_mask=micro_batch["infoskill_prefix_mask"],
+                    attention_mask=micro_batch["attention_mask"],
+                    remove_padding=self.use_remove_padding,
+                )
+            else:
+                prefix, hook_mask = _current_prefix_and_hook_mask(
+                    projector=self.infoskill_projector,
+                    replay_latents=micro_batch["infoskill_replay_latents"],
+                    prefix_mask=micro_batch["infoskill_prefix_mask"],
+                    attention_mask=micro_batch["attention_mask"],
+                    remove_padding=self.use_remove_padding,
+                    detach_projector_output=detach_projector_output,
+                )
             with self._infoskill_injector.inject(
                 prefix=prefix,
                 prefix_mask=hook_mask,
@@ -155,6 +168,30 @@ def build_infoskill_policy_actor_class():
                 )
 
         def compute_log_prob(self, data: Any, calculate_entropy=False):
+            return self._compute_infoskill_log_prob(
+                data,
+                calculate_entropy=calculate_entropy,
+                use_rollout_prefix=False,
+            )
+
+        def compute_log_prob_with_rollout_prefix(
+            self,
+            data: Any,
+            calculate_entropy: bool = False,
+        ):
+            return self._compute_infoskill_log_prob(
+                data,
+                calculate_entropy=calculate_entropy,
+                use_rollout_prefix=True,
+            )
+
+        def _compute_infoskill_log_prob(
+            self,
+            data: Any,
+            *,
+            calculate_entropy: bool,
+            use_rollout_prefix: bool,
+        ):
             if "infoskill_prefix_mask" not in data.batch:
                 raise RuntimeError("INFO-SKILL actor received token-only replay")
             self.actor_module.eval()
@@ -163,6 +200,8 @@ def build_infoskill_policy_actor_class():
             temperature = data.meta_info["temperature"]
             use_dynamic_bsz = data.meta_info["use_dynamic_bsz"]
             keys = _infoskill_forward_keys()
+            if use_rollout_prefix:
+                keys.append("infoskill_rollout_prefixes")
             batch = data.select(batch_keys=keys).batch
             if use_dynamic_bsz:
                 maximum = (
@@ -185,6 +224,7 @@ def build_infoskill_policy_actor_class():
                         micro_batch,
                         temperature=temperature,
                         calculate_entropy=calculate_entropy,
+                        use_rollout_prefix=use_rollout_prefix,
                     )
                 log_probs.append(log_prob)
                 if calculate_entropy:
@@ -533,6 +573,41 @@ def _current_prefix_and_hook_mask(
         torch.full_like(row_slots, int(prefix.shape[1])),
     ) or int(prefix_mask.bool().sum().item()) != expected_slots:
         raise ValueError("INFO-SKILL prefix geometry does not match placeholder slots")
+    hook_mask = (
+        prefix_mask.bool()[attention_mask.bool()].unsqueeze(0)
+        if remove_padding
+        else prefix_mask.bool()
+    )
+    return prefix, hook_mask
+
+
+def _rollout_prefix_and_hook_mask(
+    *,
+    rollout_prefixes: Tensor,
+    prefix_mask: Tensor,
+    attention_mask: Tensor,
+    remove_padding: bool,
+) -> tuple[Tensor, Tensor]:
+    if rollout_prefixes.ndim != 3:
+        raise ValueError(
+            "INFO-SKILL rollout prefixes must be [batch, prefix, hidden]"
+        )
+    if prefix_mask.shape != attention_mask.shape:
+        raise ValueError("INFO-SKILL prefix and attention masks must match")
+    if rollout_prefixes.shape[0] != prefix_mask.shape[0]:
+        raise ValueError("INFO-SKILL rollout-prefix rows must match mask rows")
+    if (prefix_mask.bool() & ~attention_mask.bool()).any():
+        raise ValueError("every INFO-SKILL prefix slot must be attended")
+    prefix_length = int(rollout_prefixes.shape[1])
+    row_slots = prefix_mask.bool().sum(dim=-1)
+    if not torch.equal(
+        row_slots,
+        torch.full_like(row_slots, prefix_length),
+    ):
+        raise ValueError(
+            "INFO-SKILL rollout-prefix geometry does not match placeholder slots"
+        )
+    prefix = rollout_prefixes.detach().to(device=attention_mask.device)
     hook_mask = (
         prefix_mask.bool()[attention_mask.bool()].unsqueeze(0)
         if remove_padding
