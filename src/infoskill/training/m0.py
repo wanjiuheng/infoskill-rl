@@ -107,6 +107,7 @@ def run_m0_training(
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
     actor_learning_rate: float = 1e-6,
+    logprob_alignment_profile: str = "strict",
     segment_end_update: int | None = None,
 ) -> int:
     """Backward-compatible entry point for the token-only M0 baseline."""
@@ -135,6 +136,7 @@ def run_m0_training(
         checkpoint_keep_recent=checkpoint_keep_recent,
         checkpoint_keep_best_valid=checkpoint_keep_best_valid,
         actor_learning_rate=actor_learning_rate,
+        logprob_alignment_profile=logprob_alignment_profile,
     )
 
 
@@ -163,6 +165,7 @@ def run_policy_training(
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
     actor_learning_rate: float = 1e-6,
+    logprob_alignment_profile: str = "strict",
     invalid_action_penalty: float = 0.01,
     freeze_infoskill_conditioning: bool = False,
     drift_guard_ppo_kl_threshold: float | None = None,
@@ -187,6 +190,21 @@ def run_policy_training(
         raise ValueError("checkpoint_keep_recent must be positive")
     if not math.isfinite(actor_learning_rate) or actor_learning_rate <= 0:
         raise ValueError("actor_learning_rate must be finite and positive")
+    if (
+        logprob_alignment_profile == "qwen25_3b_calibrated"
+        and config.policy_model_id != "qwen2.5-3b-instruct"
+    ):
+        raise ValueError(
+            "qwen25_3b_calibrated alignment is registered only for "
+            "policy_model_id=qwen2.5-3b-instruct"
+        )
+    if logprob_alignment_profile not in {
+        "strict",
+        "qwen25_3b_calibrated",
+    }:
+        raise ValueError(
+            f"unsupported logprob alignment profile: {logprob_alignment_profile}"
+        )
     if not math.isfinite(invalid_action_penalty) or invalid_action_penalty < 0:
         raise ValueError("invalid_action_penalty must be finite and non-negative")
     if freeze_infoskill_conditioning and mode is not SkillMode.INFO_SKILL:
@@ -481,6 +499,7 @@ def run_policy_training(
             "checkpoint_keep_recent": checkpoint_keep_recent,
             "checkpoint_keep_best_valid": checkpoint_keep_best_valid,
             "actor_learning_rate": actor_learning_rate,
+            "logprob_alignment_profile": logprob_alignment_profile,
             "invalid_action_penalty": invalid_action_penalty,
             "freeze_infoskill_conditioning": freeze_infoskill_conditioning,
             "training_drift_guard": drift_guard_config,
@@ -573,6 +592,7 @@ def run_policy_training(
             "segment_start_update": initial_global_update,
             "segment_end_update": segment_end_update,
             "actor_learning_rate": actor_learning_rate,
+            "logprob_alignment_profile": logprob_alignment_profile,
             "invalid_action_penalty": invalid_action_penalty,
             "freeze_infoskill_conditioning": freeze_infoskill_conditioning,
             "training_drift_guard": drift_guard_config,
@@ -686,6 +706,7 @@ def run_policy_training(
             max_response_tokens=config.max_response_tokens,
             total_training_steps=plan.max_updates,
             actor_learning_rate=actor_learning_rate,
+            logprob_alignment_profile=logprob_alignment_profile,
             action_minibatch_size=plan.action_minibatch_size,
             policy_max_tokens_per_gpu=policy_max_tokens_per_gpu,
             rollout_max_batched_tokens=rollout_max_batched_tokens,

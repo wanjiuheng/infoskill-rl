@@ -232,6 +232,7 @@ def _with_runtime_defaults(config: Mapping[str, object]) -> dict[str, object]:
         normalized_options.setdefault("checkpoint_keep_recent", 2)
         normalized_options.setdefault("checkpoint_keep_best_valid", False)
         normalized_options.setdefault("actor_learning_rate", 1e-6)
+        normalized_options.setdefault("logprob_alignment_profile", "strict")
         normalized_options.setdefault("invalid_action_penalty", 0.01)
         normalized_options.setdefault("freeze_infoskill_conditioning", False)
         normalized_options.setdefault("training_drift_guard", None)
@@ -275,6 +276,7 @@ def _without_performance_candidates(
     # learning rate.  The checkpoint loader reapplies it after restoring the
     # optimizer/scheduler state; in-place resumes remain strict.
     normalized_options.pop("actor_learning_rate", None)
+    normalized_options.pop("logprob_alignment_profile", None)
     normalized_options.pop("invalid_action_penalty", None)
     normalized_options.pop("freeze_infoskill_conditioning", None)
     normalized_options.pop("infoskill_auxiliary_enabled", None)

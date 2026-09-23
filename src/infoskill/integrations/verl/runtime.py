@@ -30,6 +30,7 @@ from infoskill.learning import (
     alignment_passes,
     classify_logprob_boundary_matrix,
     collect_logprob_alignment_offenders,
+    logprob_alignment_thresholds_for_profile,
     require_logprob_alignment,
     summarize_logprob_alignment,
     summarize_shifted_logprob_alignment,
@@ -100,8 +101,10 @@ class VerlRuntimeConfig:
     infoskill_grounding_weight: float = 0.1
     infoskill_auxiliary_max_grad_norm: float = 1.0
     actor_warmstart_directory: str | None = None
+    logprob_alignment_profile: str = "strict"
 
     def __post_init__(self) -> None:
+        logprob_alignment_thresholds_for_profile(self.logprob_alignment_profile)
         if not math.isfinite(self.actor_learning_rate) or self.actor_learning_rate <= 0:
             raise ValueError("actor learning rate must be finite and positive")
         minimum_batched_tokens = self.max_prompt_tokens + self.max_response_tokens
@@ -610,7 +613,12 @@ class VerlRuntime:
                 token_ids=response_token_ids.tolist(),
             )
             try:
-                require_logprob_alignment(alignment)
+                require_logprob_alignment(
+                    alignment,
+                    logprob_alignment_thresholds_for_profile(
+                        self.config.logprob_alignment_profile
+                    ),
+                )
             except LogprobAlignmentError as error:
                 try:
                     diagnostics = self._diagnose_logprob_alignment_failure(

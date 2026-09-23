@@ -1043,6 +1043,19 @@ class RunScriptTests(unittest.TestCase):
             diagnostic.index("with self.rollout_session()"),
         )
 
+    def test_qwen25_3b_calibrated_recovery_is_a_bounded_production_fork(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_qwen25_3b_calibrated_recovery.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('RESUME="${RESUME_CHECKPOINT}"', script)
+        self.assertIn("WARMSTART_HANDOFF=", script)
+        self.assertIn("LOGPROB_ALIGNMENT_PROFILE=qwen25_3b_calibrated", script)
+        self.assertIn('SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE}"', script)
+        self.assertIn("DRIFT_GUARD_PPO_KL_THRESHOLD=0.02", script)
+        self.assertNotIn("INFOSKILL_VLLM_LAYER_AUDIT", script)
+
 
 if __name__ == "__main__":
     unittest.main()

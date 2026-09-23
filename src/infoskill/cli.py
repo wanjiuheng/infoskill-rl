@@ -21,6 +21,7 @@ from infoskill.config import (
     EvaluationConfig,
     SkillMode,
 )
+from infoskill.learning import LOGPROB_ALIGNMENT_PROFILES
 from infoskill.training import TrainingProfile, resolve_training_plan
 
 
@@ -459,6 +460,15 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--logprob-alignment-profile",
+        choices=LOGPROB_ALIGNMENT_PROFILES,
+        default="strict",
+        help=(
+            "pre-update rollout/recompute safety gate; calibrated profiles "
+            "are model-specific and leave the strict default unchanged"
+        ),
+    )
+    train.add_argument(
         "--invalid-action-penalty",
         type=float,
         default=0.01,
@@ -659,6 +669,14 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
     if not math.isfinite(args.actor_learning_rate) or args.actor_learning_rate <= 0:
         raise ValueError("actor_learning_rate must be finite and positive")
     if (
+        args.logprob_alignment_profile == "qwen25_3b_calibrated"
+        and config.policy_model_id != "qwen2.5-3b-instruct"
+    ):
+        raise ValueError(
+            "qwen25_3b_calibrated alignment is registered only for "
+            "policy_model_id=qwen2.5-3b-instruct"
+        )
+    if (
         not math.isfinite(args.invalid_action_penalty)
         or args.invalid_action_penalty < 0
     ):
@@ -810,6 +828,9 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                     "segment_end_update": args.segment_end_update,
                     "checkpoint_keep_recent": args.checkpoint_keep_recent,
                     "actor_learning_rate": args.actor_learning_rate,
+                    "logprob_alignment_profile": (
+                        args.logprob_alignment_profile
+                    ),
                     "drift_guard_ppo_kl_threshold": (
                         args.drift_guard_ppo_kl_threshold
                     ),
@@ -862,6 +883,7 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         checkpoint_keep_recent=args.checkpoint_keep_recent,
         checkpoint_keep_best_valid=args.checkpoint_keep_best_valid,
         actor_learning_rate=args.actor_learning_rate,
+        logprob_alignment_profile=args.logprob_alignment_profile,
         invalid_action_penalty=args.invalid_action_penalty,
         freeze_infoskill_conditioning=args.freeze_infoskill_conditioning,
         drift_guard_ppo_kl_threshold=(

@@ -35,6 +35,7 @@ SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"
 CHECKPOINT_KEEP_RECENT="${CHECKPOINT_KEEP_RECENT:-2}"
 CHECKPOINT_KEEP_BEST_VALID="${CHECKPOINT_KEEP_BEST_VALID:-0}"
 ACTOR_LEARNING_RATE="${ACTOR_LEARNING_RATE:-1e-6}"
+LOGPROB_ALIGNMENT_PROFILE="${LOGPROB_ALIGNMENT_PROFILE:-strict}"
 INVALID_ACTION_PENALTY="${INVALID_ACTION_PENALTY:-0.01}"
 FREEZE_INFOSKILL_CONDITIONING="${FREEZE_INFOSKILL_CONDITIONING:-0}"
 DRIFT_GUARD_PPO_KL_THRESHOLD="${DRIFT_GUARD_PPO_KL_THRESHOLD:-}"
@@ -192,6 +193,11 @@ raise SystemExit(0 if math.isfinite(value) and value > 0 else 1)
 PY
 then
   echo "ACTOR_LEARNING_RATE must be finite and positive" >&2
+  exit 2
+fi
+if [[ "${LOGPROB_ALIGNMENT_PROFILE}" != "strict" \
+      && "${LOGPROB_ALIGNMENT_PROFILE}" != "qwen25_3b_calibrated" ]]; then
+  echo "LOGPROB_ALIGNMENT_PROFILE must be strict or qwen25_3b_calibrated" >&2
   exit 2
 fi
 if ! "${PYTHON_BIN}" - "${INVALID_ACTION_PENALTY}" <<'PY'
@@ -796,6 +802,7 @@ case "${ACTION}" in
       --rollout-max-batched-tokens "${ROLLOUT_MAX_BATCHED_TOKENS}"
       --checkpoint-keep-recent "${CHECKPOINT_KEEP_RECENT}"
       --actor-learning-rate "${ACTOR_LEARNING_RATE}"
+      --logprob-alignment-profile "${LOGPROB_ALIGNMENT_PROFILE}"
       --invalid-action-penalty "${INVALID_ACTION_PENALTY}"
       --policy-gradient-clip-mode "${POLICY_GRADIENT_CLIP_MODE}"
     )

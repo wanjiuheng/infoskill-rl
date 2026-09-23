@@ -6,6 +6,7 @@ import unittest
 from infoskill.learning import (
     LogprobAlignmentError,
     LogprobAlignmentThresholds,
+    logprob_alignment_thresholds_for_profile,
     alignment_passes,
     classify_logprob_boundary_matrix,
     collect_logprob_alignment_offenders,
@@ -90,6 +91,51 @@ class LogprobAlignmentTests(unittest.TestCase):
                 "ratio_mean": 0.9997580686460814,
             }
         )
+
+    def test_qwen25_3b_sparse_tail_requires_explicit_calibrated_profile(self) -> None:
+        observed = {
+            "logprob_abs_error_mean": 0.010521583988110447,
+            "logprob_abs_error_median": 5.960462772236497e-07,
+            "logprob_abs_error_p95": 0.01829425692558266,
+            "logprob_abs_error_p99": 0.22326143741607676,
+            "logprob_abs_error_gt_1_rate": 0.0012012148134717374,
+            "logprob_abs_error_gt_5_rate": 0.00018131544354290378,
+            "ratio_mean": 1.0001934797006726,
+        }
+
+        with self.assertRaises(LogprobAlignmentError):
+            require_logprob_alignment(observed)
+        require_logprob_alignment(
+            observed,
+            logprob_alignment_thresholds_for_profile(
+                "qwen25_3b_calibrated"
+            ),
+        )
+
+    def test_qwen25_3b_profile_keeps_aggregate_and_tail_guards(self) -> None:
+        thresholds = logprob_alignment_thresholds_for_profile(
+            "qwen25_3b_calibrated"
+        )
+        passing = {
+            "logprob_abs_error_mean": 0.01,
+            "logprob_abs_error_median": 0.0,
+            "logprob_abs_error_p95": 0.01,
+            "logprob_abs_error_p99": 0.20,
+            "logprob_abs_error_gt_1_rate": 0.0014,
+            "logprob_abs_error_gt_5_rate": 0.0002,
+            "ratio_mean": 1.0,
+        }
+        require_logprob_alignment(passing, thresholds)
+        with self.assertRaises(LogprobAlignmentError):
+            require_logprob_alignment(
+                {**passing, "logprob_abs_error_gt_5_rate": 0.0003},
+                thresholds,
+            )
+        with self.assertRaises(LogprobAlignmentError):
+            require_logprob_alignment(
+                {**passing, "logprob_abs_error_p99": 0.31},
+                thresholds,
+            )
 
     def test_prefixed_padding_failure_is_blocked_before_update(self) -> None:
         with self.assertRaisesRegex(

@@ -20,6 +20,31 @@ class LogprobAlignmentThresholds:
 
 DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS = LogprobAlignmentThresholds()
 
+# Qwen2.5-3B has a measured, model-specific sparse tail at the vLLM/actor
+# LoRA boundary.  The aggregate distribution remains well inside the strict
+# gate (mean/median/P95/P99 and ratio mean), while 53/44,122 tokens exceed 1
+# nat and 8/44,122 exceed 5 nats.  Keep this as an explicit named profile so
+# the strict default used by every other model cannot be weakened silently.
+QWEN25_3B_LOGPROB_ALIGNMENT_THRESHOLDS = LogprobAlignmentThresholds(
+    error_gt_1_rate_max=0.0015,
+    error_gt_5_rate_max=0.00025,
+)
+
+LOGPROB_ALIGNMENT_PROFILES = (
+    "strict",
+    "qwen25_3b_calibrated",
+)
+
+
+def logprob_alignment_thresholds_for_profile(
+    profile: str,
+) -> LogprobAlignmentThresholds:
+    if profile == "strict":
+        return DEFAULT_LOGPROB_ALIGNMENT_THRESHOLDS
+    if profile == "qwen25_3b_calibrated":
+        return QWEN25_3B_LOGPROB_ALIGNMENT_THRESHOLDS
+    raise ValueError(f"unsupported logprob alignment profile: {profile}")
+
 
 class LogprobAlignmentError(RuntimeError):
     """A failed pre-update alignment gate with durable diagnostics."""

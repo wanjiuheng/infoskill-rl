@@ -202,6 +202,33 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(payload["actor_learning_rate"], 3e-6)
 
+    def test_qwen25_3b_alignment_profile_is_explicit_and_model_scoped(self) -> None:
+        arguments = self._arguments()
+        arguments[arguments.index("configs/alfworld_qwen25_7b.yaml")] = (
+            "configs/alfworld_qwen25_3b.yaml"
+        )
+        arguments.extend(
+            ["--logprob-alignment-profile", "qwen25_3b_calibrated"]
+        )
+        output = io.StringIO()
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            json.loads(output.getvalue())["logprob_alignment_profile"],
+            "qwen25_3b_calibrated",
+        )
+
+        wrong_model = self._arguments() + [
+            "--logprob-alignment-profile",
+            "qwen25_3b_calibrated",
+        ]
+        with patch("pathlib.Path.exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "registered only"):
+                main(wrong_model)
+
     def test_infoskill_recovery_controls_are_explicit_and_auditable(self) -> None:
         arguments = self._arguments()
         arguments[arguments.index("no_skill")] = "infoskill"
