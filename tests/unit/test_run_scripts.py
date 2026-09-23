@@ -1029,6 +1029,8 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("WARMSTART_HANDOFF=", script)
         self.assertIn("export INFOSKILL_VLLM_LAYER_AUDIT=1", script)
         self.assertIn("teacher-forced, reference-full, LoRA-disabled", script)
+        self.assertIn("CUDA_MEMORY_POLL_INTERVAL_MS=0", script)
+        self.assertNotIn("CUDA_MEMORY_POLL_INTERVAL_MS=1000", script)
         self.assertNotIn('WARMSTART_HANDOFF="${HANDOFF}"', script)
 
 
