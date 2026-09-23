@@ -1019,6 +1019,16 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn('trap archive_diagnostics EXIT', script)
         self.assertIn('scripts/compare_m1_precapture_clip_ab.py', script)
 
+    def test_qwen25_3b_alignment_diagnostic_resumes_without_warmstart(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_qwen25_3b_alignment_diagnostic.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('RESUME="${RESUME_CHECKPOINT}"', script)
+        self.assertIn("WARMSTART_HANDOFF=", script)
+        self.assertNotIn('WARMSTART_HANDOFF="${HANDOFF}"', script)
+
 
 if __name__ == "__main__":
     unittest.main()
