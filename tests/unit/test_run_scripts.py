@@ -246,6 +246,58 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("CHECKPOINT_KEEP_RECENT=5", script)
         self.assertIn("CHECKPOINT_KEEP_BEST_VALID=1", script)
 
+    def test_qwen3_recovery_continuation_runs_step100_to150(self) -> None:
+        script = Path("scripts/run_qwen3_1p7b_step100_to150.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("checkpoints/step-000100", script)
+        self.assertIn("EXPECTED_SOURCE_UPDATE=100", script)
+        self.assertIn(
+            "20260923T112809Z-m1-qwen3-1p7b-recovery-s75-actoronly-lr1e6-u100-20260923_192737",
+            script,
+        )
+        self.assertNotIn('SOURCE_RUN="${SOURCE_RUN:-', script)
+        self.assertIn(
+            "ba7e1a45164cde480f71b6d9b6c7db646195df1c0a02058ab405a92448b349f5",
+            script,
+        )
+        self.assertIn(
+            "aba69a2f98aa169e81e839c4c06573763476d0e1de28cd92f4c68db900af6b02",
+            script,
+        )
+        self.assertIn(
+            "c9dc5192cd646b0fc00eabe1b5233edb3a7750ef9a8b23169b184574f463c6be",
+            script,
+        )
+        self.assertIn(
+            "53422f4d7ad1b802e73006bfd5a81a9537b4cb61d01faa1904244c36465af5c3",
+            script,
+        )
+        self.assertIn(
+            "7d25eccdb6b9a3e1958a0c4b92096784dd3e429d3fa8251c98a2b96e3a748678",
+            script,
+        )
+        self.assertIn("sha256sum -c -", script)
+        self.assertIn('SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-150}"', script)
+        self.assertIn("MAX_UPDATES=445", script)
+        self.assertIn("ACTOR_LEARNING_RATE=1e-6", script)
+        self.assertIn("INVALID_ACTION_PENALTY=0.1", script)
+        self.assertIn("FREEZE_INFOSKILL_CONDITIONING=1", script)
+        self.assertIn("DRIFT_GUARD_PPO_KL_THRESHOLD=0.02", script)
+        self.assertIn("DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD=0.05", script)
+        self.assertIn("DRIFT_GUARD_CONSECUTIVE_UPDATES=2", script)
+        self.assertIn("CHECKPOINT_KEEP_RECENT=5", script)
+        self.assertIn("CHECKPOINT_KEEP_BEST_VALID=1", script)
+        self.assertIn(
+            'source_summary.get("pause_reason") != "segment_end_update"',
+            script,
+        )
+        self.assertIn('source_summary.get("task_cursor") != expected_cursor', script)
+        self.assertIn('checkpoint.get("portable") is not True', script)
+        self.assertNotIn("checkpoints/step-000075", script)
+        self.assertNotIn("rm ", script)
+
     def test_m1_u175_recovery_recipe_is_fail_closed_and_preserves_source(self) -> None:
         script = Path("scripts/run_m1_u175_recovery.sh").read_text(
             encoding="utf-8"

@@ -28,6 +28,10 @@ _Avoid_: mixed FSDP versions across controls、unvalidated FSDP2 migration
 把 FSDP LoRA 与 DDP projector 的两个物理 AdamW 组织成一个原子策略更新：共享 update 计数与调度语义，合并计算全局梯度范数，并保证一起 step 或一起跳过。
 _Avoid_: cross-wrapper optimizer state、partial policy step、separate clipping semantics
 
+**Actor-Only Recovery Fork**:
+仅用于已命名、有限区间的恢复实验：从权威可移植 checkpoint 恢复完整 LoRA、INFO-SKILL 模块、optimizer、scheduler、RNG 与任务游标，但冻结 conditioning/projector，只让 LoRA actor 继续更新。该分叉必须固定源 checkpoint 内容身份、学习率、停止 update、评测协议与 drift guard，并写入新的 run；它不属于正式 M1 的默认联合更新语义，也不得用来改写 `Policy Update Coordinator` 的原子 step 约束。
+_Avoid_: unnamed actor-only continuation、reset optimizer/RNG/cursor、in-place source mutation、treating recovery results as default M1 semantics
+
 **Authoritative Portable Checkpoint**:
 不复制冻结基座、由 rank 0 保存完整 LoRA、可重分片 LoRA optimizer、小模块及训练游标的权威恢复格式；VERL 原生 world-size 分片仅可作为非权威缓存。
 _Avoid_: frozen-base duplication、world-size-bound source of truth、silent optimizer reset
