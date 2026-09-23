@@ -792,6 +792,16 @@ class VerlRuntime:
             "old_log_probs"
         ][:row_count]
 
+        policy_memory_before_boundary = None
+        if self.config.cuda_memory_poll_interval_ms > 0:
+            # update_policy starts a physical-memory sampler before old-logprob
+            # recomputation.  A diagnostic rollout session owns the same
+            # worker-local sampler, so close and preserve the policy window
+            # before opening that session.  This path always re-raises the
+            # alignment gate and therefore never returns to an optimizer step.
+            policy_memory_before_boundary = tuple(
+                self.worker_group.infoskill_cuda_memory_snapshot()
+            )
         with self.rollout_session():
             vllm_lora_snapshot = self.vllm_lora_snapshot()
             vllm_base_fingerprint = self.vllm_base_fingerprint()
@@ -912,6 +922,7 @@ class VerlRuntime:
                     "vllm_lora": vllm_lora_snapshot,
                     "vllm_base": vllm_base_fingerprint,
                 },
+                "policy_memory_before_boundary": policy_memory_before_boundary,
             }
         )
         return diagnostics

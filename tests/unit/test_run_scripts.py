@@ -1029,9 +1029,19 @@ class RunScriptTests(unittest.TestCase):
         self.assertIn("WARMSTART_HANDOFF=", script)
         self.assertIn("export INFOSKILL_VLLM_LAYER_AUDIT=1", script)
         self.assertIn("teacher-forced, reference-full, LoRA-disabled", script)
-        self.assertIn("CUDA_MEMORY_POLL_INTERVAL_MS=0", script)
-        self.assertNotIn("CUDA_MEMORY_POLL_INTERVAL_MS=1000", script)
+        self.assertIn("CUDA_MEMORY_POLL_INTERVAL_MS=1000", script)
         self.assertNotIn('WARMSTART_HANDOFF="${HANDOFF}"', script)
+
+        runtime = (
+            project_root / "src" / "infoskill" / "integrations" / "verl" / "runtime.py"
+        ).read_text(encoding="utf-8")
+        diagnostic = runtime.split(
+            "def _diagnose_logprob_alignment_failure", 1
+        )[1].split("def update_auxiliary", 1)[0]
+        self.assertLess(
+            diagnostic.index("infoskill_cuda_memory_snapshot"),
+            diagnostic.index("with self.rollout_session()"),
+        )
 
 
 if __name__ == "__main__":
