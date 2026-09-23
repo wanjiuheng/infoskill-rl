@@ -7,8 +7,10 @@ from infoskill.learning import (
     LogprobAlignmentError,
     LogprobAlignmentThresholds,
     alignment_passes,
+    classify_logprob_boundary_matrix,
     collect_logprob_alignment_offenders,
     require_logprob_alignment,
+    summarize_shifted_logprob_alignment,
     summarize_logprob_alignment,
 )
 
@@ -168,6 +170,67 @@ class LogprobAlignmentTests(unittest.TestCase):
         self.assertEqual(
             error.as_dict()["diagnostics"]["counterfactual_classification"],
             "prefix",
+        )
+
+    def test_shifted_alignment_compares_only_overlapping_active_tokens(self) -> None:
+        summary = summarize_shifted_logprob_alignment(
+            rollout=((-9.0, -1.0, -2.0, -3.0),),
+            candidate=((-1.0, -2.0, -3.0, -8.0),),
+            mask=((False, True, True, True),),
+            candidate_shift=-1,
+        )
+
+        self.assertEqual(summary["candidate_shift"], -1)
+        self.assertEqual(summary["token_count"], 2)
+        self.assertAlmostEqual(summary["logprob_abs_error_max"], 0.0)
+
+    def test_boundary_matrix_localizes_vllm_lora_kernel(self) -> None:
+        passing = {
+            "logprob_abs_error_mean": 0.0,
+            "logprob_abs_error_median": 0.0,
+            "logprob_abs_error_p95": 0.0,
+            "logprob_abs_error_p99": 0.0,
+            "logprob_abs_error_gt_1_rate": 0.0,
+            "logprob_abs_error_gt_5_rate": 0.0,
+            "ratio_mean": 1.0,
+        }
+        failing = {**passing, "logprob_abs_error_gt_5_rate": 0.1}
+
+        classification = classify_logprob_boundary_matrix(
+            {
+                "sampled_vs_vllm_teacher_forced_native": passing,
+                "vllm_teacher_forced_native_vs_actor_exact_prefix": failing,
+                "vllm_teacher_forced_reference_full_vs_actor_exact_prefix": passing,
+                "vllm_teacher_forced_lora_disabled_vs_actor_lora_disabled": passing,
+            }
+        )
+
+        self.assertEqual(classification, "vllm_lora_kernel_mismatch")
+
+    def test_boundary_matrix_prioritizes_sampled_decode_path(self) -> None:
+        passing = {
+            "logprob_abs_error_mean": 0.0,
+            "logprob_abs_error_median": 0.0,
+            "logprob_abs_error_p95": 0.0,
+            "logprob_abs_error_p99": 0.0,
+            "logprob_abs_error_gt_1_rate": 0.0,
+            "logprob_abs_error_gt_5_rate": 0.0,
+            "ratio_mean": 1.0,
+        }
+        failing = {**passing, "logprob_abs_error_gt_1_rate": 0.1}
+
+        classification = classify_logprob_boundary_matrix(
+            {
+                "sampled_vs_vllm_teacher_forced_native": failing,
+                "vllm_teacher_forced_native_vs_actor_exact_prefix": passing,
+                "vllm_teacher_forced_reference_full_vs_actor_exact_prefix": passing,
+                "vllm_teacher_forced_lora_disabled_vs_actor_lora_disabled": passing,
+            }
+        )
+
+        self.assertEqual(
+            classification,
+            "vllm_decode_or_sampled_logprob_path_mismatch",
         )
 
 

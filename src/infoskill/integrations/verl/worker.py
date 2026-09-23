@@ -389,6 +389,107 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         return result
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_infoskill_rollout_prefix_reference_log_prob(self, data):
+        """Recompute exact-prefix rows with the PEFT adapter disabled."""
+
+        if self._infoskill_worker_conditioner is None or not self._is_actor:
+            raise RuntimeError(
+                "INFO-SKILL reference replay requires an M1 actor worker"
+            )
+        if self._is_offload_param:
+            raise RuntimeError(
+                "INFO-SKILL reference replay does not support param offload"
+            )
+        from verl import DataProto
+
+        data = data.to(get_torch_device().current_device())
+        data.meta_info["micro_batch_size"] = (
+            self.config.rollout.log_prob_micro_batch_size_per_gpu
+        )
+        data.meta_info["max_token_len"] = (
+            self.config.rollout.log_prob_max_token_len_per_gpu
+        )
+        data.meta_info["use_dynamic_bsz"] = (
+            self.config.rollout.log_prob_use_dynamic_bsz
+        )
+        data.meta_info["temperature"] = self.config.rollout.temperature
+        with self.ulysses_sharding_manager:
+            data = self.ulysses_sharding_manager.preprocess_data(data)
+            output, _ = (
+                self.actor.compute_log_prob_with_rollout_prefix_and_adapter_disabled(
+                    data=data,
+                    calculate_entropy=False,
+                )
+            )
+            result = DataProto.from_dict(
+                tensors={"old_log_probs": output},
+                meta_info={"temperature": self.config.rollout.temperature},
+            )
+            result = self.ulysses_sharding_manager.postprocess_data(result)
+        result = result.to("cpu")
+        if (
+            self.world_size > 1
+            and fsdp_version(self.actor.actor_module) == 1
+        ):
+            self.actor.actor_module._handle.reshard(True)
+        return result
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_infoskill_vllm_teacher_forced_log_prob(self, data):
+        """Teacher-force selected replay rows through the active vLLM engine."""
+
+        if not self._infoskill_rollout_session_active:
+            raise RuntimeError(
+                "vLLM teacher forcing requires an active rollout session"
+            )
+        if not self._is_rollout:
+            raise RuntimeError("worker has no rollout engine")
+        if "infoskill_rollout_prefixes" not in data.batch:
+            raise RuntimeError("vLLM teacher forcing requires rollout prefixes")
+        from verl import DataProto
+
+        input_ids = data.batch["input_ids"].to("cpu")
+        attention = data.batch["attention_mask"].bool().to("cpu")
+        prefix_mask = data.batch["infoskill_prefix_mask"].bool().to("cpu")
+        prefixes = data.batch["infoskill_rollout_prefixes"].to("cpu")
+        response_width = int(data.batch["responses"].shape[-1])
+        response_attention = attention[:, -response_width:]
+        token_rows: list[tuple[int, ...]] = []
+        prefix_masks: list[tuple[bool, ...]] = []
+        response_lengths: list[int] = []
+        prefix_rows: list[torch.Tensor] = []
+        for row in range(int(input_ids.shape[0])):
+            active = attention[row]
+            tokens = tuple(int(value) for value in input_ids[row][active].tolist())
+            mask = tuple(
+                bool(value) for value in prefix_mask[row][active].tolist()
+            )
+            prefix = prefixes[row].detach().to("cpu").contiguous()
+            if sum(mask) != int(prefix.shape[0]):
+                raise RuntimeError(
+                    "vLLM teacher-forced prefix geometry differs from replay"
+                )
+            token_rows.append(tokens)
+            prefix_masks.append(mask)
+            response_lengths.append(
+                int(response_attention[row].sum().item())
+            )
+            prefix_rows.append(prefix)
+        values = self.rollout.compute_infoskill_teacher_forced_log_probs(
+            prompt_token_ids=tuple(token_rows),
+            response_lengths=tuple(response_lengths),
+            response_width=response_width,
+            prefix_embeds=tuple(prefix_rows),
+            prefix_masks=tuple(prefix_masks),
+        )
+        return DataProto.from_dict(
+            tensors={
+                "old_log_probs": torch.tensor(values, dtype=torch.float32)
+            },
+            meta_info={"temperature": 1.0},
+        )
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def condition_infoskill(self, data):
         conditioner = self._infoskill_worker_conditioner
         if conditioner is None:

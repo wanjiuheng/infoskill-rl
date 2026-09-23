@@ -160,7 +160,127 @@ def hybrid_vllm_rollout_class():
             finally:
                 self.inference_engine = engine
 
+        def compute_infoskill_teacher_forced_log_probs(
+            self,
+            *,
+            prompt_token_ids: tuple[tuple[int, ...], ...],
+            response_lengths: tuple[int, ...],
+            response_width: int,
+            prefix_embeds: tuple[object, ...],
+            prefix_masks: tuple[tuple[bool, ...], ...],
+        ) -> list[list[float]]:
+            """Score complete rollout rows through vLLM prefill.
+
+            The generated token is discarded.  Prompt logprobs over the
+            appended response are the teacher-forced boundary needed to
+            distinguish sampled/decode output from backend model execution.
+            """
+
+            from vllm import SamplingParams
+            from vllm.lora.request import LoRARequest
+
+            batch_size = len(prompt_token_ids)
+            if not (
+                len(response_lengths)
+                == len(prefix_embeds)
+                == len(prefix_masks)
+                == batch_size
+            ):
+                raise ValueError("teacher-forced vLLM batch metadata differs")
+            prompts: list[dict[str, Any]] = []
+            for token_row, prefix, mask in zip(
+                prompt_token_ids,
+                prefix_embeds,
+                prefix_masks,
+            ):
+                transported = prefix.detach().to("cpu").contiguous()  # type: ignore[attr-defined]
+                prompts.append(
+                    {
+                        "prompt_token_ids": list(token_row),
+                        "infoskill_prefix_embeds": transported,
+                        "infoskill_prefix_mask": list(mask),
+                    }
+                )
+            sampling_params = SamplingParams(
+                n=1,
+                max_tokens=1,
+                temperature=1.0,
+                top_p=1.0,
+                top_k=-1,
+                prompt_logprobs=0,
+                logprobs=0,
+                detokenize=False,
+                ignore_eos=True,
+            )
+            lora_requests = None
+            if self.lora_kwargs:
+                active = list(self.inference_engine.llm_engine.list_loras())
+                if active:
+                    lora_id = int(active[0])
+                    request = LoRARequest(
+                        lora_name=str(lora_id),
+                        lora_int_id=lora_id,
+                        lora_path="/simon-stub-path",
+                    )
+                    lora_requests = [request] * batch_size
+            outputs = self.inference_engine.generate(
+                prompts=prompts,
+                sampling_params=sampling_params,
+                lora_request=lora_requests,
+                use_tqdm=False,
+            )
+            return _extract_teacher_forced_response_logprobs(
+                outputs=tuple(outputs),
+                prompt_token_ids=prompt_token_ids,
+                response_lengths=response_lengths,
+                response_width=response_width,
+            )
+
     return HybridPrefixVLLMRollout
+
+
+def _extract_teacher_forced_response_logprobs(
+    *,
+    outputs: tuple[object, ...],
+    prompt_token_ids: tuple[tuple[int, ...], ...],
+    response_lengths: tuple[int, ...],
+    response_width: int,
+) -> list[list[float]]:
+    """Extract target-token prompt logprobs from vLLM request outputs."""
+
+    if response_width <= 0:
+        raise ValueError("teacher-forced response width must be positive")
+    if not (
+        len(outputs) == len(prompt_token_ids) == len(response_lengths)
+    ):
+        raise ValueError("teacher-forced output batch size differs")
+    rows: list[list[float]] = []
+    for output, token_row, response_length in zip(
+        outputs,
+        prompt_token_ids,
+        response_lengths,
+    ):
+        if response_length < 0 or response_length > response_width:
+            raise ValueError("teacher-forced response length is invalid")
+        prompt_logprobs = getattr(output, "prompt_logprobs", None)
+        if prompt_logprobs is None or len(prompt_logprobs) != len(token_row):
+            raise RuntimeError(
+                "vLLM teacher forcing returned invalid prompt logprobs"
+            )
+        start = len(token_row) - response_length
+        values: list[float] = []
+        for position in range(start, len(token_row)):
+            token_id = int(token_row[position])
+            candidates = prompt_logprobs[position]
+            if candidates is None or token_id not in candidates:
+                raise RuntimeError(
+                    "vLLM prompt logprobs omitted the target token"
+                )
+            record = candidates[token_id]
+            values.append(float(getattr(record, "logprob", record)))
+        values.extend(0.0 for _ in range(response_width - response_length))
+        rows.append(values)
+    return rows
 
 
 @contextmanager

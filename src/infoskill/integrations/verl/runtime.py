@@ -28,9 +28,11 @@ from infoskill.episode import TrajectoryGroup
 from infoskill.learning import (
     LogprobAlignmentError,
     alignment_passes,
+    classify_logprob_boundary_matrix,
     collect_logprob_alignment_offenders,
     require_logprob_alignment,
     summarize_logprob_alignment,
+    summarize_shifted_logprob_alignment,
 )
 from infoskill.rollout import GenerationRequest, GenerationResult
 
@@ -757,7 +759,7 @@ class VerlRuntime:
             {int(item["sample_index"]) for item in offenders}
         )
         diagnostics: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "optimizer_update_applied": False,
             "offender_threshold": 1.0,
             "offender_token_count": len(offenders),
@@ -778,9 +780,52 @@ class VerlRuntime:
         exact_prefix = (
             self.worker_group.compute_infoskill_rollout_prefix_log_prob(selected)
         )
+        actor_lora_disabled = (
+            self.worker_group.compute_infoskill_rollout_prefix_reference_log_prob(
+                selected
+            )
+        )
         row_count = len(offender_rows)
         isolated_values = isolated.batch["old_log_probs"][:row_count]
         exact_prefix_values = exact_prefix.batch["old_log_probs"][:row_count]
+        actor_lora_disabled_values = actor_lora_disabled.batch[
+            "old_log_probs"
+        ][:row_count]
+
+        with self.rollout_session():
+            vllm_lora_snapshot = self.vllm_lora_snapshot()
+            vllm_base_fingerprint = self.vllm_base_fingerprint()
+            vllm_native = (
+                self.worker_group.compute_infoskill_vllm_teacher_forced_log_prob(
+                    selected
+                )
+            )
+            self.begin_vllm_lora_kernel_intervention("reference_full")
+            try:
+                vllm_reference_full = (
+                    self.worker_group.compute_infoskill_vllm_teacher_forced_log_prob(
+                        selected
+                    )
+                )
+            finally:
+                self.end_vllm_lora_kernel_intervention()
+            self.set_vllm_lora_request_enabled(False)
+            try:
+                vllm_lora_disabled = (
+                    self.worker_group.compute_infoskill_vllm_teacher_forced_log_prob(
+                        selected
+                    )
+                )
+            finally:
+                self.set_vllm_lora_request_enabled(True)
+
+        vllm_native_values = vllm_native.batch["old_log_probs"][:row_count]
+        vllm_reference_full_values = vllm_reference_full.batch[
+            "old_log_probs"
+        ][:row_count]
+        vllm_lora_disabled_values = vllm_lora_disabled.batch[
+            "old_log_probs"
+        ][:row_count]
 
         isolated_full = recomputed.clone()
         isolated_full[offender_rows] = isolated_values
@@ -807,14 +852,66 @@ class VerlRuntime:
             classification = "recomputed_prefix_path_mismatch"
         else:
             classification = "persistent_actor_vllm_or_replay_mismatch"
+        selected_rollout = rollout[offender_rows]
+        selected_mask = response_mask[offender_rows]  # type: ignore[index]
+        selected_tokens = token_ids[offender_rows]
+
+        def compare(left: object, right: object) -> dict[str, float | int]:
+            return summarize_logprob_alignment(
+                rollout=left.tolist(),  # type: ignore[attr-defined]
+                recomputed=right.tolist(),  # type: ignore[attr-defined]
+                mask=selected_mask.tolist(),  # type: ignore[attr-defined]
+                token_ids=selected_tokens.tolist(),  # type: ignore[attr-defined]
+            )
+
+        comparisons = {
+            "sampled_vs_vllm_teacher_forced_native": compare(
+                selected_rollout,
+                vllm_native_values,
+            ),
+            "vllm_teacher_forced_native_vs_actor_exact_prefix": compare(
+                vllm_native_values,
+                exact_prefix_values,
+            ),
+            "vllm_teacher_forced_reference_full_vs_actor_exact_prefix": compare(
+                vllm_reference_full_values,
+                exact_prefix_values,
+            ),
+            "vllm_teacher_forced_lora_disabled_vs_actor_lora_disabled": compare(
+                vllm_lora_disabled_values,
+                actor_lora_disabled_values,
+            ),
+        }
+        shifted: dict[str, object] = {}
+        for shift in (-1, 0, 1):
+            try:
+                shifted[str(shift)] = summarize_shifted_logprob_alignment(
+                    rollout=selected_rollout.tolist(),
+                    candidate=vllm_native_values.tolist(),
+                    mask=selected_mask.tolist(),  # type: ignore[attr-defined]
+                    candidate_shift=shift,
+                )
+            except ValueError as error:
+                shifted[str(shift)] = {"unavailable": str(error)}
+        boundary_classification = classify_logprob_boundary_matrix(
+            comparisons
+        )
         diagnostics.update(
             {
                 "counterfactual_classification": classification,
+                "boundary_matrix_classification": boundary_classification,
                 "counterfactual_padding_rows": padding_count,
                 "isolated_recompute_passed": isolated_passed,
                 "isolated_recompute_summary": isolated_summary,
                 "exact_rollout_prefix_passed": exact_prefix_passed,
                 "exact_rollout_prefix_summary": exact_prefix_summary,
+                "boundary_matrix": comparisons,
+                "sampled_vs_vllm_teacher_forced_offsets": shifted,
+                "fingerprints": {
+                    "actor_infoskill_modules": self.infoskill_module_snapshot(),
+                    "vllm_lora": vllm_lora_snapshot,
+                    "vllm_base": vllm_base_fingerprint,
+                },
             }
         )
         return diagnostics

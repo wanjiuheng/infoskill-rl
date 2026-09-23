@@ -1027,6 +1027,8 @@ class RunScriptTests(unittest.TestCase):
 
         self.assertIn('RESUME="${RESUME_CHECKPOINT}"', script)
         self.assertIn("WARMSTART_HANDOFF=", script)
+        self.assertIn("export INFOSKILL_VLLM_LAYER_AUDIT=1", script)
+        self.assertIn("teacher-forced, reference-full, LoRA-disabled", script)
         self.assertNotIn('WARMSTART_HANDOFF="${HANDOFF}"', script)
 
 

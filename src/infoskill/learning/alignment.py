@@ -225,6 +225,96 @@ def collect_logprob_alignment_offenders(
     return results
 
 
+def summarize_shifted_logprob_alignment(
+    *,
+    rollout: Sequence[Sequence[float]],
+    candidate: Sequence[Sequence[float]],
+    mask: Sequence[Sequence[bool]],
+    candidate_shift: int,
+) -> dict[str, float | int]:
+    """Compare a candidate at a neighboring response-token offset.
+
+    ``candidate_shift=-1`` compares rollout position ``p`` with candidate
+    position ``p - 1``.  Both source and shifted positions must be active, so
+    padding cannot manufacture an apparent offset match.
+    """
+
+    if not (len(rollout) == len(candidate) == len(mask)):
+        raise ValueError("shifted logprob alignment batch sizes differ")
+    rollout_values: list[float] = []
+    candidate_values: list[float] = []
+    for rollout_row, candidate_row, mask_row in zip(rollout, candidate, mask):
+        if not (
+            len(rollout_row) == len(candidate_row) == len(mask_row)
+        ):
+            raise ValueError("shifted logprob alignment row widths differ")
+        for position, active in enumerate(mask_row):
+            shifted = position + candidate_shift
+            if (
+                not active
+                or shifted < 0
+                or shifted >= len(candidate_row)
+                or not mask_row[shifted]
+            ):
+                continue
+            rollout_values.append(float(rollout_row[position]))
+            candidate_values.append(float(candidate_row[shifted]))
+    if not rollout_values:
+        raise ValueError("shifted logprob alignment has no overlapping tokens")
+    summary = summarize_logprob_alignment(
+        rollout=(tuple(rollout_values),),
+        recomputed=(tuple(candidate_values),),
+        mask=(tuple(True for _ in rollout_values),),
+    )
+    summary["candidate_shift"] = candidate_shift
+    return summary
+
+
+def classify_logprob_boundary_matrix(
+    comparisons: Mapping[str, dict[str, float | int]],
+) -> str:
+    """Classify a pre-update mismatch from backend/LoRA counterfactuals."""
+
+    required = (
+        "sampled_vs_vllm_teacher_forced_native",
+        "vllm_teacher_forced_native_vs_actor_exact_prefix",
+        "vllm_teacher_forced_reference_full_vs_actor_exact_prefix",
+        "vllm_teacher_forced_lora_disabled_vs_actor_lora_disabled",
+    )
+    missing = [name for name in required if name not in comparisons]
+    if missing:
+        raise ValueError(
+            "logprob boundary matrix is missing comparisons: "
+            + ", ".join(missing)
+        )
+    passed = {
+        name: alignment_passes(comparisons[name]) for name in required
+    }
+    if not passed["sampled_vs_vllm_teacher_forced_native"]:
+        return "vllm_decode_or_sampled_logprob_path_mismatch"
+    if (
+        not passed["vllm_teacher_forced_native_vs_actor_exact_prefix"]
+        and passed[
+            "vllm_teacher_forced_reference_full_vs_actor_exact_prefix"
+        ]
+    ):
+        return "vllm_lora_kernel_mismatch"
+    if (
+        not passed["vllm_teacher_forced_native_vs_actor_exact_prefix"]
+        and passed[
+            "vllm_teacher_forced_lora_disabled_vs_actor_lora_disabled"
+        ]
+    ):
+        return "vllm_lora_execution_or_mapping_mismatch"
+    if not passed[
+        "vllm_teacher_forced_lora_disabled_vs_actor_lora_disabled"
+    ]:
+        return "base_or_hybrid_prefix_backend_mismatch"
+    if passed["vllm_teacher_forced_native_vs_actor_exact_prefix"]:
+        return "actor_vllm_boundary_aligned"
+    return "persistent_unlocalized_actor_vllm_mismatch"
+
+
 def _alignment_observations(
     *,
     rollout: Sequence[Sequence[float]],

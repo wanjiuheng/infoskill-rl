@@ -43,10 +43,12 @@ fi
 
 export PYTHON
 export PATH="$(dirname -- "${PYTHON}"):${PATH}"
+export INFOSKILL_VLLM_LAYER_AUDIT=1
 
 echo "RESUME_CHECKPOINT=${RESUME_CHECKPOINT}"
 echo "RUN_NAME=${RUN_NAME}"
 echo "The optimizer remains behind the update-0 alignment gate."
+echo "Boundary matrix: sampled, teacher-forced, reference-full, LoRA-disabled."
 
 GPUS="${GPUS}" \
 PROFILE=formal \

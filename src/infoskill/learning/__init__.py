@@ -6,8 +6,10 @@ from .alignment import (
     LogprobAlignmentError,
     LogprobAlignmentThresholds,
     alignment_passes,
+    classify_logprob_boundary_matrix,
     collect_logprob_alignment_offenders,
     require_logprob_alignment,
+    summarize_shifted_logprob_alignment,
     summarize_logprob_alignment,
 )
 from .signals import (
@@ -52,6 +54,7 @@ __all__ = [
     "LogprobAlignmentError",
     "LogprobAlignmentThresholds",
     "alignment_passes",
+    "classify_logprob_boundary_matrix",
     "collect_logprob_alignment_offenders",
     "OfflineGroundingBatch",
     "OnlineAuxiliaryBatch",
@@ -61,6 +64,7 @@ __all__ = [
     "group_relative_advantages",
     "build_group_advantage_signals",
     "require_logprob_alignment",
+    "summarize_shifted_logprob_alignment",
     "summarize_logprob_alignment",
     "PolicyUpdateCoordinator",
     "summarize_grpo_signals",

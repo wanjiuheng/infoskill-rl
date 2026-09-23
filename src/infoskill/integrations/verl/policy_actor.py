@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from typing import Any, Literal
 
 import torch
@@ -185,12 +185,27 @@ def build_infoskill_policy_actor_class():
                 use_rollout_prefix=True,
             )
 
+        def compute_log_prob_with_rollout_prefix_and_adapter_disabled(
+            self,
+            data: Any,
+            calculate_entropy: bool = False,
+        ):
+            """Reference actor boundary with the exact rollout prefix."""
+
+            return self._compute_infoskill_log_prob(
+                data,
+                calculate_entropy=calculate_entropy,
+                use_rollout_prefix=True,
+                adapter_enabled=False,
+            )
+
         def _compute_infoskill_log_prob(
             self,
             data: Any,
             *,
             calculate_entropy: bool,
             use_rollout_prefix: bool,
+            adapter_enabled: bool = True,
         ):
             if "infoskill_prefix_mask" not in data.batch:
                 raise RuntimeError("INFO-SKILL actor received token-only replay")
@@ -219,7 +234,12 @@ def build_infoskill_policy_actor_class():
             log_probs = []
             entropies = []
             for micro_batch in micro_batches:
-                with torch.no_grad():
+                adapter_context = (
+                    nullcontext()
+                    if adapter_enabled
+                    else self.infoskill_adapter_module.disable_adapter()
+                )
+                with torch.no_grad(), adapter_context:
                     entropy, log_prob = self._forward_micro_batch(
                         micro_batch,
                         temperature=temperature,

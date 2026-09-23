@@ -5,6 +5,7 @@ import os
 import sys
 import types
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from infoskill.integrations.verl.hybrid_prefix import (
@@ -15,6 +16,7 @@ from infoskill.integrations.verl.hybrid_prefix import (
 )
 from infoskill.integrations.verl.hybrid_rollout import (
     _HybridInferenceEngine,
+    _extract_teacher_forced_response_logprobs,
     _hybrid_cuda_graph_environment,
     vllm_action_stop_settings,
 )
@@ -81,6 +83,38 @@ class _Engine:
 
 
 class HybridPrefixTransportTests(unittest.TestCase):
+    def test_teacher_forced_extraction_selects_response_prompt_logprobs(self) -> None:
+        token_ids = (101, 102, 201, 202)
+        output = SimpleNamespace(
+            prompt_logprobs=[
+                None,
+                {102: SimpleNamespace(logprob=-0.2)},
+                {201: SimpleNamespace(logprob=-1.1)},
+                {202: SimpleNamespace(logprob=-2.2)},
+            ]
+        )
+
+        values = _extract_teacher_forced_response_logprobs(
+            outputs=(output,),
+            prompt_token_ids=(token_ids,),
+            response_lengths=(2,),
+            response_width=3,
+        )
+
+        self.assertEqual(values, [[-1.1, -2.2, 0.0]])
+
+    def test_teacher_forced_extraction_rejects_missing_target_token(self) -> None:
+        output = SimpleNamespace(
+            prompt_logprobs=[None, {102: SimpleNamespace(logprob=-0.2)}]
+        )
+        with self.assertRaisesRegex(RuntimeError, "target token"):
+            _extract_teacher_forced_response_logprobs(
+                outputs=(output,),
+                prompt_token_ids=((101, 999),),
+                response_lengths=(1,),
+                response_width=1,
+            )
+
     def test_cuda_graph_restores_custom_kernels_after_vllm_defaults(self) -> None:
         class FakeVllmConfig:
             def __init__(self) -> None:
