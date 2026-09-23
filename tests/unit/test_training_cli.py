@@ -202,6 +202,52 @@ class TrainingCliTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(payload["actor_learning_rate"], 3e-6)
 
+    def test_infoskill_recovery_controls_are_explicit_and_auditable(self) -> None:
+        arguments = self._arguments()
+        arguments[arguments.index("no_skill")] = "infoskill"
+        arguments.extend(
+            [
+                "--grounding-data",
+                "/runs/formal-grounding",
+                "--freeze-infoskill-conditioning",
+                "--invalid-action-penalty",
+                "0.1",
+            ]
+        )
+
+        output = io.StringIO()
+        with patch("pathlib.Path.exists", return_value=True):
+            with redirect_stdout(output):
+                result = main(arguments)
+
+        payload = json.loads(output.getvalue())
+        self.assertEqual(result, 0)
+        self.assertTrue(payload["freeze_infoskill_conditioning"])
+        self.assertFalse(payload["infoskill_auxiliary_enabled"])
+        self.assertEqual(payload["invalid_action_penalty"], 0.1)
+
+        arguments.remove("--dry-run")
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "infoskill.training.m0.run_policy_training",
+                return_value=0,
+            ) as train,
+        ):
+            result = main(arguments)
+
+        self.assertEqual(result, 0)
+        self.assertTrue(train.call_args.kwargs["freeze_infoskill_conditioning"])
+        self.assertEqual(train.call_args.kwargs["invalid_action_penalty"], 0.1)
+
+    def test_non_infoskill_rejects_conditioning_freeze(self) -> None:
+        with patch("pathlib.Path.exists", return_value=True):
+            with self.assertRaisesRegex(ValueError, "only for infoskill"):
+                main(
+                    self._arguments()
+                    + ["--freeze-infoskill-conditioning"]
+                )
+
     def test_checkpoint_best_valid_retention_is_explicitly_opt_in(self) -> None:
         default = _parser().parse_args(self._arguments())
         bounded = _parser().parse_args(

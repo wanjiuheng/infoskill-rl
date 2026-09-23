@@ -42,7 +42,8 @@ class _CoordinatedPolicySchedulers:
     def step(self) -> None:
         if self._actor.infoskill_update_applied:
             self._actor.infoskill_actor_scheduler.step()
-            self._actor.infoskill_projector_scheduler.step()
+            if self._actor.infoskill_projector_updates_enabled:
+                self._actor.infoskill_projector_scheduler.step()
 
 
 class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
@@ -275,6 +276,9 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             projector_optimizer=distributed.projector_optimizer,
             projector_scheduler=distributed.projector_scheduler,
             gradient_clip_mode=policy_gradient_clip_mode(self.config.model),
+            update_projector=not bool(
+                self.config.model.get("infoskill_freeze_conditioning", False)
+            ),
         )
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)

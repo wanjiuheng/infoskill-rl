@@ -70,6 +70,7 @@ class VerlRuntimeConfig:
     skip_unused_old_logprob_entropy: bool = False
     fuse_kl_ppo_forward: bool = False
     enable_infoskill_modules: bool = False
+    freeze_infoskill_conditioning: bool = False
     semantic_model_path: str | None = None
     skill_bank_path: str | None = None
     infoskill_latent_dim: int = 32
@@ -144,6 +145,14 @@ class VerlRuntimeConfig:
         if self.enable_infoskill_auxiliary and not self.enable_infoskill_modules:
             raise ValueError(
                 "INFO-SKILL auxiliary training requires INFO-SKILL modules"
+            )
+        if self.freeze_infoskill_conditioning and not self.enable_infoskill_modules:
+            raise ValueError(
+                "conditioning freeze is registered only for INFO-SKILL"
+            )
+        if self.freeze_infoskill_conditioning and self.enable_infoskill_auxiliary:
+            raise ValueError(
+                "conditioning freeze requires INFO-SKILL auxiliary updates disabled"
             )
         if not self.enable_infoskill_modules:
             return
@@ -893,6 +902,9 @@ def _actor_config(settings: VerlRuntimeConfig):
         actor_ref.model.infoskill_skill_bank_path = settings.skill_bank_path
         actor_ref.model.infoskill_latent_dim = settings.infoskill_latent_dim
         actor_ref.model.infoskill_prefix_length = settings.soft_prefix_length
+        actor_ref.model.infoskill_freeze_conditioning = (
+            settings.freeze_infoskill_conditioning
+        )
         actor_ref.model.infoskill_initialization_seed = (
             settings.infoskill_initialization_seed
         )

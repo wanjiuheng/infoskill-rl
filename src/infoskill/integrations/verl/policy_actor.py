@@ -91,6 +91,7 @@ def build_infoskill_policy_actor_class():
             actor_scheduler: object,
             projector_scheduler: object,
             gradient_clip_mode: Literal["joint", "separate"],
+            update_projector: bool = True,
         ) -> None:
             super().__init__(
                 config=config,
@@ -112,7 +113,9 @@ def build_infoskill_policy_actor_class():
                 projector_optimizer=projector_optimizer,
                 max_grad_norm=float(self.config.grad_clip),
                 gradient_clip_mode=gradient_clip_mode,
+                update_projector=update_projector,
             )
+            self.infoskill_projector_updates_enabled = bool(update_projector)
             self.infoskill_actor_scheduler = actor_scheduler
             self.infoskill_projector_scheduler = projector_scheduler
             self.infoskill_update_applied = False
@@ -320,6 +323,9 @@ def build_infoskill_policy_actor_class():
                             micro_batch,
                             temperature=temperature,
                             calculate_entropy=calculate_entropy,
+                            detach_projector_output=(
+                                not self.infoskill_projector_updates_enabled
+                            ),
                         )
                         loss_mode = self.config.policy_loss.get(
                             "loss_mode", "vanilla"

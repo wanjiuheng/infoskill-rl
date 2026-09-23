@@ -278,6 +278,68 @@ class ResumeRunDirectoryTests(unittest.TestCase):
 
         self.assertEqual(source_gpus, 3)
 
+    def test_named_fork_may_enable_bounded_infoskill_recovery_controls(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000075"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "freeze_infoskill_conditioning": False,
+                "invalid_action_penalty": 0.01,
+                "infoskill_auxiliary_enabled": True,
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "freeze_infoskill_conditioning": True,
+                "invalid_action_penalty": 0.1,
+                "infoskill_auxiliary_enabled": False,
+            },
+        }
+
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            source_gpus = validate_resume_config(
+                checkpoint,
+                current,
+                allow_gpu_change=True,
+                allow_performance_candidate_change=True,
+            )
+
+        self.assertEqual(source_gpus, 3)
+
+    def test_in_place_resume_rejects_infoskill_recovery_control_changes(self) -> None:
+        checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000075"
+        previous = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "freeze_infoskill_conditioning": False,
+                "invalid_action_penalty": 0.01,
+                "infoskill_auxiliary_enabled": True,
+            },
+        }
+        current = {
+            "num_gpus": 3,
+            "runtime_options": {
+                "freeze_infoskill_conditioning": True,
+                "invalid_action_penalty": 0.1,
+                "infoskill_auxiliary_enabled": False,
+            },
+        }
+
+        with (
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", return_value=json.dumps(previous)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "differs"):
+                validate_resume_config(
+                    checkpoint,
+                    current,
+                    allow_gpu_change=False,
+                )
+
     def test_named_checkpoint_fork_may_replace_handoff_with_drift_guard(self) -> None:
         checkpoint = Path.cwd() / "source" / "checkpoints" / "step-000175"
         previous = {

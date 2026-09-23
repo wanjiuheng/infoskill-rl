@@ -147,6 +147,37 @@ class PolicyUpdateCoordinatorTests(unittest.TestCase):
 
         self.assertEqual(coordinator.actor_parameters, (actor,))
 
+    def test_frozen_projector_does_not_clip_actor_or_step_projector(self) -> None:
+        from infoskill.learning import PolicyUpdateCoordinator
+
+        actor = torch.nn.Parameter(torch.tensor([10.0]))
+        projector = torch.nn.Parameter(torch.tensor([20.0]))
+        actor.grad = torch.tensor([0.5])
+        projector.grad = torch.tensor([100.0])
+        actor_optimizer = torch.optim.SGD([actor], lr=1.0)
+        projector_optimizer = torch.optim.SGD([projector], lr=1.0)
+        projector_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            projector_optimizer, lambda _: 1.0
+        )
+        coordinator = PolicyUpdateCoordinator(
+            actor_parameters=(actor,),
+            projector_parameters=(projector,),
+            actor_optimizer=actor_optimizer,
+            projector_optimizer=projector_optimizer,
+            projector_scheduler=projector_scheduler,
+            max_grad_norm=1.0,
+            update_projector=False,
+        )
+
+        metrics = coordinator.step(actor_global_grad_norm=torch.tensor(0.5))
+
+        self.assertAlmostEqual(actor.item(), 9.5, places=6)
+        self.assertEqual(projector.item(), 20.0)
+        self.assertEqual(metrics["policy/projector_update_enabled"], 0.0)
+        self.assertEqual(metrics["policy/projector_grad_norm_before_clip"], 0.0)
+        self.assertEqual(metrics["policy/actor_clip_coefficient"], 1.0)
+        self.assertEqual(projector_scheduler.last_epoch, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

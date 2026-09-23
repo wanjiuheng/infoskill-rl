@@ -22,6 +22,7 @@ class PolicyUpdateCoordinator:
         projector_scheduler: object | None = None,
         max_grad_norm: float = 1.0,
         gradient_clip_mode: Literal["joint", "separate"] = "joint",
+        update_projector: bool = True,
     ) -> None:
         if max_grad_norm <= 0:
             raise ValueError("max_grad_norm must be positive")
@@ -45,6 +46,7 @@ class PolicyUpdateCoordinator:
         self.projector_scheduler = projector_scheduler
         self.max_grad_norm = float(max_grad_norm)
         self.gradient_clip_mode = gradient_clip_mode
+        self.update_projector = bool(update_projector)
 
     def zero_grad(self) -> None:
         self.actor_optimizer.zero_grad(set_to_none=True)
@@ -63,7 +65,13 @@ class PolicyUpdateCoordinator:
             or actor_global_grad_norm.numel() != 1
         ):
             raise TypeError("actor_global_grad_norm must be a scalar tensor")
-        projector_norm = _gradient_norm(self.projector_parameters)
+        projector_norm = (
+            _gradient_norm(self.projector_parameters)
+            if self.update_projector
+            else torch.zeros(
+                (), device=actor_global_grad_norm.device, dtype=torch.float32
+            )
+        )
         actor_norm = actor_global_grad_norm.detach().float().reshape(())
         combined = torch.sqrt(actor_norm.square() + projector_norm.square())
         finite = bool(torch.isfinite(combined).item())
@@ -83,6 +91,7 @@ class PolicyUpdateCoordinator:
                 "policy/separate_gradient_clipping": float(
                     self.gradient_clip_mode == "separate"
                 ),
+                "policy/projector_update_enabled": float(self.update_projector),
                 "policy/optimizer_step_applied": 0.0,
                 "policy/optimizer_skip_nonfinite": 1.0,
             }
@@ -103,12 +112,14 @@ class PolicyUpdateCoordinator:
             projector_coefficient = joint_coefficient
         if actor_coefficient < 1.0:
             _scale_gradients(self.actor_parameters, actor_coefficient)
-        if projector_coefficient < 1.0:
+        if self.update_projector and projector_coefficient < 1.0:
             _scale_gradients(self.projector_parameters, projector_coefficient)
         self.actor_optimizer.step()
-        self.projector_optimizer.step()
+        if self.update_projector:
+            self.projector_optimizer.step()
         _step_scheduler(self.actor_scheduler)
-        _step_scheduler(self.projector_scheduler)
+        if self.update_projector:
+            _step_scheduler(self.projector_scheduler)
         self.zero_grad()
         return {
             "policy/actor_grad_norm_before_clip": float(actor_norm.item()),
@@ -136,6 +147,7 @@ class PolicyUpdateCoordinator:
             "policy/separate_gradient_clipping": float(
                 self.gradient_clip_mode == "separate"
             ),
+            "policy/projector_update_enabled": float(self.update_projector),
             "policy/optimizer_step_applied": 1.0,
             "policy/optimizer_skip_nonfinite": 0.0,
         }

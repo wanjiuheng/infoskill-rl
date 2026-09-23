@@ -54,6 +54,25 @@ class VerlRuntimeConfigTests(unittest.TestCase):
         self.assertFalse(settings.hybrid_prefix_cuda_graph)
         self.assertFalse(settings.lora_shrink_split_k_one)
         self.assertFalse(settings.fuse_kl_ppo_forward)
+        self.assertFalse(settings.freeze_infoskill_conditioning)
+
+        frozen = VerlRuntimeConfig(
+            **common,
+            require_hybrid_prefix=True,
+            semantic_model_path="/semantic",
+            skill_bank_path="/skills.json",
+            freeze_infoskill_conditioning=True,
+        )
+        self.assertTrue(frozen.freeze_infoskill_conditioning)
+        self.assertFalse(frozen.enable_infoskill_auxiliary)
+
+        with self.assertRaisesRegex(ValueError, "only for INFO-SKILL"):
+            VerlRuntimeConfig(
+                skillrl_source="/skillrl",
+                model_path="/policy",
+                num_gpus=4,
+                freeze_infoskill_conditioning=True,
+            )
 
         with self.assertRaisesRegex(ValueError, "maximum-length sequence"):
             VerlRuntimeConfig(

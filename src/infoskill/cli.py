@@ -459,6 +459,21 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument(
+        "--invalid-action-penalty",
+        type=float,
+        default=0.01,
+        help="trajectory reward penalty applied for each invalid environment action",
+    )
+    train.add_argument(
+        "--freeze-infoskill-conditioning",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "M1 recovery control: keep the restored projector and auxiliary "
+            "conditioning modules fixed while continuing LoRA actor updates"
+        ),
+    )
+    train.add_argument(
         "--drift-guard-ppo-kl-threshold",
         type=float,
         help=(
@@ -643,6 +658,15 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         raise ValueError("checkpoint_keep_recent must be positive")
     if not math.isfinite(args.actor_learning_rate) or args.actor_learning_rate <= 0:
         raise ValueError("actor_learning_rate must be finite and positive")
+    if (
+        not math.isfinite(args.invalid_action_penalty)
+        or args.invalid_action_penalty < 0
+    ):
+        raise ValueError("invalid_action_penalty must be finite and non-negative")
+    if args.freeze_infoskill_conditioning and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "freeze_infoskill_conditioning is registered only for infoskill"
+        )
     drift_guard_thresholds = (
         args.drift_guard_ppo_kl_threshold,
         args.drift_guard_invalid_action_rate_threshold,
@@ -719,7 +743,14 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
                         if mode is SkillMode.RAW_SKILL_PROMPT
                         else None
                     ),
-                    "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
+                    "infoskill_auxiliary_enabled": (
+                        mode is SkillMode.INFO_SKILL
+                        and not args.freeze_infoskill_conditioning
+                    ),
+                    "freeze_infoskill_conditioning": (
+                        args.freeze_infoskill_conditioning
+                    ),
+                    "invalid_action_penalty": args.invalid_action_penalty,
                     "infoskill_latent_mode": (
                         "sample" if mode is SkillMode.INFO_SKILL else None
                     ),
@@ -831,6 +862,8 @@ def _train(config: AppConfig, args: argparse.Namespace) -> int:
         checkpoint_keep_recent=args.checkpoint_keep_recent,
         checkpoint_keep_best_valid=args.checkpoint_keep_best_valid,
         actor_learning_rate=args.actor_learning_rate,
+        invalid_action_penalty=args.invalid_action_penalty,
+        freeze_infoskill_conditioning=args.freeze_infoskill_conditioning,
         drift_guard_ppo_kl_threshold=(
             args.drift_guard_ppo_kl_threshold
         ),

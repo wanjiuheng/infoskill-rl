@@ -212,6 +212,40 @@ class RunScriptTests(unittest.TestCase):
             train_case,
         )
 
+    def test_training_forwards_infoskill_recovery_controls(self) -> None:
+        script = Path("scripts/run_alfworld.sh").read_text(encoding="utf-8")
+        train_case = script.split("  train)\n", 1)[1].split("  *)\n", 1)[0]
+
+        self.assertIn(
+            'INVALID_ACTION_PENALTY="${INVALID_ACTION_PENALTY:-0.01}"',
+            script,
+        )
+        self.assertIn(
+            'FREEZE_INFOSKILL_CONDITIONING="${FREEZE_INFOSKILL_CONDITIONING:-0}"',
+            script,
+        )
+        self.assertIn(
+            '--invalid-action-penalty "${INVALID_ACTION_PENALTY}"',
+            train_case,
+        )
+        self.assertIn("--freeze-infoskill-conditioning", train_case)
+
+    def test_qwen3_step75_recovery_recipe_is_bounded_and_fail_closed(self) -> None:
+        script = Path("scripts/run_qwen3_1p7b_step75_recovery.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("checkpoints/step-000075", script)
+        self.assertIn("MAX_UPDATES=445", script)
+        self.assertIn('SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-100}"', script)
+        self.assertIn("ACTOR_LEARNING_RATE=1e-6", script)
+        self.assertIn("INVALID_ACTION_PENALTY=0.1", script)
+        self.assertIn("FREEZE_INFOSKILL_CONDITIONING=1", script)
+        self.assertIn("DRIFT_GUARD_PPO_KL_THRESHOLD=0.02", script)
+        self.assertIn("DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD=0.05", script)
+        self.assertIn("CHECKPOINT_KEEP_RECENT=5", script)
+        self.assertIn("CHECKPOINT_KEEP_BEST_VALID=1", script)
+
     def test_m1_u175_recovery_recipe_is_fail_closed_and_preserves_source(self) -> None:
         script = Path("scripts/run_m1_u175_recovery.sh").read_text(
             encoding="utf-8"

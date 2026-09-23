@@ -35,6 +35,8 @@ SEGMENT_END_UPDATE="${SEGMENT_END_UPDATE:-}"
 CHECKPOINT_KEEP_RECENT="${CHECKPOINT_KEEP_RECENT:-2}"
 CHECKPOINT_KEEP_BEST_VALID="${CHECKPOINT_KEEP_BEST_VALID:-0}"
 ACTOR_LEARNING_RATE="${ACTOR_LEARNING_RATE:-1e-6}"
+INVALID_ACTION_PENALTY="${INVALID_ACTION_PENALTY:-0.01}"
+FREEZE_INFOSKILL_CONDITIONING="${FREEZE_INFOSKILL_CONDITIONING:-0}"
 DRIFT_GUARD_PPO_KL_THRESHOLD="${DRIFT_GUARD_PPO_KL_THRESHOLD:-}"
 DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD="${DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD:-}"
 DRIFT_GUARD_CONSECUTIVE_UPDATES="${DRIFT_GUARD_CONSECUTIVE_UPDATES:-2}"
@@ -190,6 +192,24 @@ raise SystemExit(0 if math.isfinite(value) and value > 0 else 1)
 PY
 then
   echo "ACTOR_LEARNING_RATE must be finite and positive" >&2
+  exit 2
+fi
+if ! "${PYTHON_BIN}" - "${INVALID_ACTION_PENALTY}" <<'PY'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    raise SystemExit(1)
+raise SystemExit(0 if math.isfinite(value) and value >= 0 else 1)
+PY
+then
+  echo "INVALID_ACTION_PENALTY must be finite and non-negative" >&2
+  exit 2
+fi
+if [[ "${FREEZE_INFOSKILL_CONDITIONING}" != "0" \
+      && "${FREEZE_INFOSKILL_CONDITIONING}" != "1" ]]; then
+  echo "FREEZE_INFOSKILL_CONDITIONING must be 0 or 1" >&2
   exit 2
 fi
 if [[ "${CHECKPOINT_KEEP_BEST_VALID}" != "0" && "${CHECKPOINT_KEEP_BEST_VALID}" != "1" ]]; then
@@ -776,6 +796,7 @@ case "${ACTION}" in
       --rollout-max-batched-tokens "${ROLLOUT_MAX_BATCHED_TOKENS}"
       --checkpoint-keep-recent "${CHECKPOINT_KEEP_RECENT}"
       --actor-learning-rate "${ACTOR_LEARNING_RATE}"
+      --invalid-action-penalty "${INVALID_ACTION_PENALTY}"
       --policy-gradient-clip-mode "${POLICY_GRADIENT_CLIP_MODE}"
     )
     if [[ -n "${MAX_UPDATES}" ]]; then
@@ -838,6 +859,10 @@ case "${ACTION}" in
     case "${CHECKPOINT_KEEP_BEST_VALID}" in
       0) TRAIN_ARGS+=(--no-checkpoint-keep-best-valid) ;;
       1) TRAIN_ARGS+=(--checkpoint-keep-best-valid) ;;
+    esac
+    case "${FREEZE_INFOSKILL_CONDITIONING}" in
+      0) TRAIN_ARGS+=(--no-freeze-infoskill-conditioning) ;;
+      1) TRAIN_ARGS+=(--freeze-infoskill-conditioning) ;;
     esac
     case "${PERSISTENT_ROLLOUT_SESSION}" in
       1) TRAIN_ARGS+=(--persistent-rollout-session) ;;

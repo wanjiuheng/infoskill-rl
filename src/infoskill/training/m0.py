@@ -163,6 +163,8 @@ def run_policy_training(
     checkpoint_keep_recent: int = 2,
     checkpoint_keep_best_valid: bool = False,
     actor_learning_rate: float = 1e-6,
+    invalid_action_penalty: float = 0.01,
+    freeze_infoskill_conditioning: bool = False,
     drift_guard_ppo_kl_threshold: float | None = None,
     drift_guard_invalid_action_rate_threshold: float | None = None,
     drift_guard_consecutive_updates: int = 2,
@@ -185,6 +187,12 @@ def run_policy_training(
         raise ValueError("checkpoint_keep_recent must be positive")
     if not math.isfinite(actor_learning_rate) or actor_learning_rate <= 0:
         raise ValueError("actor_learning_rate must be finite and positive")
+    if not math.isfinite(invalid_action_penalty) or invalid_action_penalty < 0:
+        raise ValueError("invalid_action_penalty must be finite and non-negative")
+    if freeze_infoskill_conditioning and mode is not SkillMode.INFO_SKILL:
+        raise ValueError(
+            "freeze_infoskill_conditioning is registered only for infoskill"
+        )
     drift_guard_thresholds = (
         drift_guard_ppo_kl_threshold,
         drift_guard_invalid_action_rate_threshold,
@@ -473,9 +481,13 @@ def run_policy_training(
             "checkpoint_keep_recent": checkpoint_keep_recent,
             "checkpoint_keep_best_valid": checkpoint_keep_best_valid,
             "actor_learning_rate": actor_learning_rate,
+            "invalid_action_penalty": invalid_action_penalty,
+            "freeze_infoskill_conditioning": freeze_infoskill_conditioning,
             "training_drift_guard": drift_guard_config,
             "warmstart_handoff": handoff_directory,
-            "infoskill_auxiliary_enabled": mode is SkillMode.INFO_SKILL,
+            "infoskill_auxiliary_enabled": (
+                mode is SkillMode.INFO_SKILL and not freeze_infoskill_conditioning
+            ),
             "infoskill_auxiliary_micro_batch_size": (
                 8 if mode is SkillMode.INFO_SKILL else None
             ),
@@ -561,6 +573,8 @@ def run_policy_training(
             "segment_start_update": initial_global_update,
             "segment_end_update": segment_end_update,
             "actor_learning_rate": actor_learning_rate,
+            "invalid_action_penalty": invalid_action_penalty,
+            "freeze_infoskill_conditioning": freeze_infoskill_conditioning,
             "training_drift_guard": drift_guard_config,
         },
         "checkpoint_retention": {
@@ -693,6 +707,7 @@ def run_policy_training(
             verbose_runtime_logs=verbose_runtime_logs,
             cuda_memory_poll_interval_ms=cuda_memory_poll_interval_ms,
             enable_infoskill_modules=mode is SkillMode.INFO_SKILL,
+            freeze_infoskill_conditioning=freeze_infoskill_conditioning,
             semantic_model_path=(
                 config.paths.semantic_model
                 if mode is SkillMode.INFO_SKILL
@@ -703,7 +718,9 @@ def run_policy_training(
                 if mode is SkillMode.INFO_SKILL
                 else None
             ),
-            enable_infoskill_auxiliary=mode is SkillMode.INFO_SKILL,
+            enable_infoskill_auxiliary=(
+                mode is SkillMode.INFO_SKILL and not freeze_infoskill_conditioning
+            ),
             actor_warmstart_directory=handoff_directory,
             grounding_data_path=(
                 config.paths.grounding_data
@@ -825,6 +842,7 @@ def run_policy_training(
             training=True,
             environment_workers=environment_workers,
             environment_backend=environment_backend,
+            invalid_action_penalty=invalid_action_penalty,
         )
         evaluation_collector = _collector(
             config,
@@ -834,6 +852,7 @@ def run_policy_training(
             training=False,
             environment_workers=environment_workers,
             environment_backend=environment_backend,
+            invalid_action_penalty=invalid_action_penalty,
         )
         if checkpoint_to_load is not None:
             runtime.load_portable_state(checkpoint_to_load / "runtime")
@@ -1007,7 +1026,9 @@ def run_policy_training(
             task_groups_per_update=plan.task_groups_per_update,
             rollouts_per_task=plan.rollouts_per_task,
             master_seed=config.master_seed,
-            auxiliary_enabled=mode is SkillMode.INFO_SKILL,
+            auxiliary_enabled=(
+                mode is SkillMode.INFO_SKILL and not freeze_infoskill_conditioning
+            ),
             on_update=update_callback,
             on_evaluate=evaluate,
             on_checkpoint=checkpoint,
@@ -1111,6 +1132,7 @@ def _collector(
     training: bool,
     environment_workers: int,
     environment_backend: str,
+    invalid_action_penalty: float,
 ) -> TrajectoryCollector:
     parameters = GenerationParameters(
         do_sample=training,
@@ -1124,7 +1146,7 @@ def _collector(
         rollout_backend=runtime,  # type: ignore[arg-type]
         max_steps=config.max_steps,
         history_limit=config.history_length,
-        invalid_action_penalty=0.01,
+        invalid_action_penalty=invalid_action_penalty,
         generation_parameters=parameters,
         environment_workers=environment_workers,
         environment_backend=environment_backend,  # type: ignore[arg-type]
