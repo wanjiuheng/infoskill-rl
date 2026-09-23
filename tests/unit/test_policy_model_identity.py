@@ -126,6 +126,21 @@ class PolicyModelIdentityTests(unittest.TestCase):
             "9b0a7e2fff78e5746a5564de06f43386d277891b672be818fa45c10855716c5b",
         )
 
+    def test_qwen25_3b_config_pins_the_registered_base_model(self) -> None:
+        config = AppConfig.load("configs/alfworld_qwen25_3b.yaml")
+        pinned = model_identity.get_pinned_policy_model(config.policy_model_id)
+
+        self.assertEqual(config.policy_model_id, "qwen2.5-3b-instruct")
+        self.assertEqual(
+            config.paths.policy_model,
+            "/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-3B-Instruct",
+        )
+        self.assertEqual(pinned.revision, "Qwen/Qwen2.5-3B-Instruct")
+        self.assertEqual(
+            pinned.sha256,
+            "5f6ee7b323a9f72d5ef274aa4288ab2e10bd3e5efaf5a21b6aef162572b830c1",
+        )
+
     def test_sft_comparison_config_remains_registered(self) -> None:
         config = AppConfig.load("configs/alfworld_qwen25_7b_sft.yaml")
 

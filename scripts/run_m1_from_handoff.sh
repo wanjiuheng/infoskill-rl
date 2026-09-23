@@ -5,6 +5,7 @@ PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_ROOT}"
 HANDOFF="${HANDOFF:?HANDOFF is required}"
 GROUNDING_DATA="${GROUNDING_DATA:?GROUNDING_DATA is required}"
+CONFIG="${CONFIG:-configs/alfworld_qwen25_7b.yaml}"
 SKILL_BANK="${SKILL_BANK:-${HANDOFF}/skill-bank.json}"
 SKILL_BANK_MANIFEST="${SKILL_BANK_MANIFEST:-${HANDOFF}/skill-bank-manifest.json}"
 TARGET_UPDATES="${TARGET_UPDATES:-200}"
@@ -33,4 +34,4 @@ POLICY_GRADIENT_CLIP_MODE=joint \
 CHECKPOINT_KEEP_RECENT=5 \
 CHECKPOINT_KEEP_BEST_VALID=1 \
 RUN_NAME="${RUN_NAME:-m1-handoff-formal-u${TARGET_UPDATES}}" \
-bash scripts/run_alfworld.sh train infoskill
+bash scripts/run_alfworld.sh train infoskill "${CONFIG}"

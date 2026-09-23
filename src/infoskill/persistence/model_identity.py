@@ -42,6 +42,11 @@ _PINNED_POLICY_MODELS = {
         revision="Qwen/Qwen2.5-7B-Instruct",
         sha256="8305dee0a659a8f9e0650129eaaf584006338a42f237d071ef5cdbaed91fc14a",
     ),
+    "qwen2.5-3b-instruct": PinnedPolicyModel(
+        model_id="qwen2.5-3b-instruct",
+        revision="Qwen/Qwen2.5-3B-Instruct",
+        sha256="5f6ee7b323a9f72d5ef274aa4288ab2e10bd3e5efaf5a21b6aef162572b830c1",
+    ),
     "qwen3-1.7b": PinnedPolicyModel(
         model_id="qwen3-1.7b",
         revision="Qwen/Qwen3-1.7B",

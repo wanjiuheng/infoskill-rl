@@ -79,7 +79,7 @@ class RunScriptTests(unittest.TestCase):
         )
         self.assertIn('summary.get("evaluated") == 140', script)
         self.assertIn('loaded.get("status") == "loaded"', script)
-        self.assertIn("len(reports) == 3", script)
+        self.assertIn("len(reports) == int(sys.argv[2])", script)
         self.assertIn('report.get("lora_state_loaded") is True', script)
         self.assertIn("require_free_disk", script)
         self.assertIn("wait_for_idle_gpus", script)
@@ -613,6 +613,64 @@ class RunScriptTests(unittest.TestCase):
             '--actor-learning-rate "${ACTOR_LEARNING_RATE}"',
             script,
         )
+
+    def test_qwen25_3b_pipeline_preserves_protocol_and_uses_memory_headroom(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        script = (
+            project_root / "scripts" / "run_qwen25_3b_warmstart_m1_pipeline.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'MODEL="${MODEL:-/root/autodl-tmp/wjh/models/Qwen/Qwen2.5-3B-Instruct}"',
+            script,
+        )
+        self.assertIn(
+            'BASE_MODEL_ID="${BASE_MODEL_ID:-qwen2.5-3b-instruct}"',
+            script,
+        )
+        self.assertIn(
+            'IMITATION_BATCH_SIZE="${IMITATION_BATCH_SIZE:-4}"',
+            script,
+        )
+        self.assertIn(
+            'IMITATION_GRAD_ACCUM="${IMITATION_GRAD_ACCUM:-4}"',
+            script,
+        )
+        self.assertIn(
+            'EXPECTED_EFFECTIVE_BATCH_SIZE="${EXPECTED_EFFECTIVE_BATCH_SIZE:-48}"',
+            script,
+        )
+        self.assertIn(
+            'POLICY_MAX_TOKENS_PER_GPU="${POLICY_MAX_TOKENS_PER_GPU:-16384}"',
+            script,
+        )
+        self.assertIn(
+            'ROLLOUT_MAX_BATCHED_TOKENS="${ROLLOUT_MAX_BATCHED_TOKENS:-24576}"',
+            script,
+        )
+        self.assertIn(
+            'ACTOR_LEARNING_RATE="${ACTOR_LEARNING_RATE:-3e-6}"',
+            script,
+        )
+        self.assertIn('EVAL_BATCH_SIZE=64', script)
+        self.assertIn('DRIFT_GUARD_PPO_KL_THRESHOLD=0.02', script)
+        self.assertIn('DRIFT_GUARD_INVALID_ACTION_RATE_THRESHOLD=0.05', script)
+
+    def test_handoff_launchers_forward_explicit_model_config(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        evaluation = (
+            project_root / "scripts" / "run_m1_handoff_update0_eval.sh"
+        ).read_text(encoding="utf-8")
+        training = (
+            project_root / "scripts" / "run_m1_from_handoff.sh"
+        ).read_text(encoding="utf-8")
+
+        for script in (evaluation, training):
+            self.assertIn(
+                'CONFIG="${CONFIG:-configs/alfworld_qwen25_7b.yaml}"',
+                script,
+            )
+            self.assertIn('"${CONFIG}"', script)
 
     def test_m0_lora_lr_sweep_is_one_resumable_paired_job(self) -> None:
         project_root = Path(__file__).resolve().parents[2]

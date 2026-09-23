@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${PROJECT_ROOT}"
 HANDOFF="${HANDOFF:?HANDOFF is required}"
+CONFIG="${CONFIG:-configs/alfworld_qwen25_7b.yaml}"
 SKILL_BANK="${SKILL_BANK:-${HANDOFF}/skill-bank.json}"
 SKILL_BANK_MANIFEST="${SKILL_BANK_MANIFEST:-${HANDOFF}/skill-bank-manifest.json}"
 
@@ -19,4 +20,4 @@ ENVIRONMENT_BACKEND=native_batch \
 HYBRID_PREFIX_CUDA_GRAPH=1 \
 LORA_SHRINK_SPLIT_K_ONE=1 \
 RUN_NAME="${RUN_NAME:-m1-handoff-valid-seen-update0}" \
-bash scripts/run_alfworld.sh eval infoskill
+bash scripts/run_alfworld.sh eval infoskill "${CONFIG}"
