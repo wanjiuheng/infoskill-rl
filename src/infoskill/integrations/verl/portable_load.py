@@ -5,6 +5,35 @@ from collections.abc import Mapping
 from pathlib import Path
 
 
+def rescale_scheduler_learning_rates(
+    *,
+    previous_base_lrs: list[float] | tuple[float, ...],
+    previous_last_lrs: list[float] | tuple[float, ...],
+    new_base_lr: float,
+) -> tuple[float, ...]:
+    """Retarget a scheduler without changing its saved schedule phase."""
+
+    target = float(new_base_lr)
+    if not math.isfinite(target) or target <= 0:
+        raise RuntimeError("actor learning-rate override must be finite and positive")
+    if not previous_base_lrs or len(previous_base_lrs) != len(previous_last_lrs):
+        raise RuntimeError("actor scheduler learning-rate state is inconsistent")
+
+    rescaled: list[float] = []
+    for base_lr, last_lr in zip(previous_base_lrs, previous_last_lrs, strict=True):
+        base = float(base_lr)
+        current = float(last_lr)
+        if (
+            not math.isfinite(base)
+            or base <= 0
+            or not math.isfinite(current)
+            or current < 0
+        ):
+            raise RuntimeError("actor scheduler learning-rate state is invalid")
+        rescaled.append(target * (current / base))
+    return tuple(rescaled)
+
+
 def load_portable_state_after_base_sync(
     *,
     worker_group: object,
@@ -36,7 +65,12 @@ def load_portable_state_after_base_sync(
         expected = float(actor_learning_rate_override)
         if any(
             not math.isclose(
-                float(report.get("actor_learning_rate", float("nan"))),
+                float(
+                    report.get(
+                        "actor_base_learning_rate",
+                        report.get("actor_learning_rate", float("nan")),
+                    )
+                ),
                 expected,
                 rel_tol=1e-9,
             )
