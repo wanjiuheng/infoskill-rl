@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from infoskill.integrations.verl.portable_load import (
+    rescale_scheduler_learning_rates,
     load_actor_warmstart_after_base_sync,
     load_portable_state_after_base_sync,
 )
@@ -35,6 +36,24 @@ class _WorkerGroup:
 
 
 class VerlPortableLoadTests(unittest.TestCase):
+    def test_learning_rate_fork_preserves_saved_scheduler_phase(self) -> None:
+        self.assertEqual(
+            rescale_scheduler_learning_rates(
+                previous_base_lrs=[3e-6],
+                previous_last_lrs=[0.0],
+                new_base_lr=1e-6,
+            ),
+            (0.0,),
+        )
+        self.assertAlmostEqual(
+            rescale_scheduler_learning_rates(
+                previous_base_lrs=[3e-6],
+                previous_last_lrs=[3e-6 / 13.0],
+                new_base_lr=1e-6,
+            )[0],
+            1e-6 / 13.0,
+        )
+
     def test_warmstart_loads_only_lora_after_base_sync(self) -> None:
         workers = _WorkerGroup(
             [{"rank": 0, "base_sync_done_after": True}],
@@ -73,13 +92,15 @@ class VerlPortableLoadTests(unittest.TestCase):
                     "rank": 0,
                     "global_step": 7,
                     "infoskill_state_loaded": True,
-                    "actor_learning_rate": 3e-6,
+                    "actor_learning_rate": 0.0,
+                    "actor_base_learning_rate": 3e-6,
                 },
                 {
                     "rank": 1,
                     "global_step": 7,
                     "infoskill_state_loaded": True,
-                    "actor_learning_rate": 3e-6,
+                    "actor_learning_rate": 0.0,
+                    "actor_base_learning_rate": 3e-6,
                 },
             ],
         )

@@ -27,6 +27,9 @@ from infoskill.checkpoint_effect import (
     summarize_named_tensors,
 )
 from infoskill.integrations.verl.memory_metrics import PhysicalMemorySampler
+from infoskill.integrations.verl.portable_load import (
+    rescale_scheduler_learning_rates,
+)
 from infoskill.integrations.verl.worker_options import policy_gradient_clip_mode
 
 
@@ -1156,19 +1159,22 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
         self.actor_lr_scheduler.load_state_dict(scheduler_state)
         if actor_learning_rate_override is not None:
             learning_rate = float(actor_learning_rate_override)
-            if not math.isfinite(learning_rate) or learning_rate <= 0:
-                raise RuntimeError(
-                    "actor learning-rate override must be finite and positive"
-                )
-            for group in self.actor_optimizer.param_groups:
-                group["lr"] = learning_rate
+            current_learning_rates = rescale_scheduler_learning_rates(
+                previous_base_lrs=self.actor_lr_scheduler.base_lrs,
+                previous_last_lrs=self.actor_lr_scheduler.get_last_lr(),
+                new_base_lr=learning_rate,
+            )
+            for group, current_learning_rate in zip(
+                self.actor_optimizer.param_groups,
+                current_learning_rates,
+                strict=True,
+            ):
+                group["lr"] = current_learning_rate
                 group["initial_lr"] = learning_rate
             self.actor_lr_scheduler.base_lrs = [
                 learning_rate for _ in self.actor_optimizer.param_groups
             ]
-            self.actor_lr_scheduler._last_lr = [
-                learning_rate for _ in self.actor_optimizer.param_groups
-            ]
+            self.actor_lr_scheduler._last_lr = list(current_learning_rates)
         infoskill_state_loaded = False
         if self._infoskill_worker_conditioner is not None:
             from infoskill.persistence.infoskill_state import load_infoskill_state
@@ -1189,6 +1195,9 @@ class PortableActorRolloutRefWorker(ActorRolloutRefWorker):
             "infoskill_state_loaded": infoskill_state_loaded,
             "actor_learning_rate": float(
                 self.actor_optimizer.param_groups[0]["lr"]
+            ),
+            "actor_base_learning_rate": float(
+                self.actor_lr_scheduler.base_lrs[0]
             ),
         }
 
